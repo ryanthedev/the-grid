@@ -1,0 +1,28 @@
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+
+# Xcode
+xcuserdata/
+*.xcodeproj
+*.xcworkspace
+
+# macOS
+.DS_Store
+
+# Build artifacts
+*.o
+*.swiftmodule
+*.swiftdoc
+
+# Unix domain socket files
+*.sock
+
+# VSCode
+.vscode/*
+!.vscode/launch.json
+!.vscode/tasks.json
+
+# Debug artifacts
+*.dSYM/

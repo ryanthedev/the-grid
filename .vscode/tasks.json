@@ -1,0 +1,68 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "swift-build-debug",
+            "type": "shell",
+            "command": "swift",
+            "args": [
+                "build",
+                "-c",
+                "debug"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "swift-build-release",
+            "type": "shell",
+            "command": "swift",
+            "args": [
+                "build",
+                "-c",
+                "release"
+            ],
+            "group": "build",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "swift-test",
+            "type": "shell",
+            "command": "swift",
+            "args": [
+                "test"
+            ],
+            "group": "test",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "swift-clean",
+            "type": "shell",
+            "command": "swift",
+            "args": [
+                "package",
+                "clean"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            },
+            "problemMatcher": []
+        }
+    ]
+}

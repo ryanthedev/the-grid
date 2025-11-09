@@ -1,0 +1,42 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug GridServer",
+            "program": "${workspaceFolder}/.build/debug/grid-server",
+            "args": [
+                "--debug",
+                "--heartbeat",
+                "--socket-path",
+                "/tmp/grid-server.sock"
+            ],
+            "cwd": "${workspaceFolder}",
+            "preLaunchTask": "swift-build-debug",
+            "terminal": "integrated"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Run GridServer (No Debug)",
+            "program": "${workspaceFolder}/.build/debug/grid-server",
+            "args": [
+                "--verbose",
+                "--heartbeat",
+                "--socket-path",
+                "/tmp/grid-server.sock"
+            ],
+            "cwd": "${workspaceFolder}",
+            "preLaunchTask": "swift-build-debug",
+            "terminal": "integrated"
+        },
+        {
+            "type": "lldb",
+            "request": "attach",
+            "name": "Attach to GridServer",
+            "program": "${workspaceFolder}/.build/debug/grid-server",
+            "waitFor": true
+        }
+    ]
+}
