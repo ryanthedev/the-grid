@@ -37,6 +37,26 @@
             "name": "Attach to GridServer",
             "program": "${workspaceFolder}/.build/debug/grid-server",
             "waitFor": true
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:theGrid}",
+            "name": "Debug grid-server",
+            "target": "grid-server",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug grid-server"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:theGrid}",
+            "name": "Release grid-server",
+            "target": "grid-server",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release grid-server"
         }
     ]
 }

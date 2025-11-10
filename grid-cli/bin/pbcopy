@@ -1,0 +1,230 @@
+{
+  "applications": {
+    "2349": {
+      "activationPolicy": "regular",
+      "bundleIdentifier": "com.microsoft.VSCode",
+      "bundleURL": "/Applications/Visual Studio Code.app",
+      "executableArchitecture": "arm64",
+      "executableURL": "/Applications/Visual Studio Code.app/Contents/MacOS/Electron",
+      "isActive": true,
+      "isFinishedLaunching": true,
+      "isHidden": false,
+      "launchDate": "2025-11-09T08:30:52Z",
+      "localizedName": "Code",
+      "metadata": {},
+      "pid": 2349,
+      "windows": [
+        624,
+        6712
+      ]
+    },
+    "56401": {
+      "activationPolicy": "regular",
+      "bundleIdentifier": "com.mitchellh.ghostty",
+      "bundleURL": "/Applications/Ghostty.app",
+      "executableArchitecture": "arm64",
+      "executableURL": "/Applications/Ghostty.app/Contents/MacOS/ghostty",
+      "isActive": false,
+      "isFinishedLaunching": true,
+      "isHidden": false,
+      "launchDate": "2025-11-10T08:48:14Z",
+      "localizedName": "Ghostty",
+      "metadata": {},
+      "pid": 56401,
+      "windows": [
+        6791
+      ]
+    },
+    "581": {
+      "activationPolicy": "regular",
+      "bundleIdentifier": "com.apple.finder",
+      "bundleURL": "/System/Library/CoreServices/Finder.app",
+      "executableArchitecture": "arm64",
+      "executableURL": "/System/Library/CoreServices/Finder.app/Contents/MacOS/Finder",
+      "isActive": false,
+      "isFinishedLaunching": true,
+      "isHidden": false,
+      "localizedName": "Finder",
+      "metadata": {},
+      "pid": 581,
+      "windows": []
+    }
+  },
+  "displays": [
+    {
+      "currentSpaceID": true,
+      "spaces": [
+        true
+      ],
+      "uuid": "FCEC43D7-E221-4C92-92E9-7DA8EFE7B554"
+    },
+    {
+      "currentSpaceID": 5,
+      "spaces": [
+        5
+      ],
+      "uuid": "89ED320F-4A30-4704-9B0E-8340A6763F11"
+    }
+  ],
+  "metadata": {
+    "activeDisplayUUID": "FCEC43D7-E221-4C92-92E9-7DA8EFE7B554",
+    "connectionID": 1180003,
+    "focusedWindowID": 6712,
+    "lastUpdate": "2025-11-10T08:49:16Z",
+    "version": "1.0.0"
+  },
+  "spaces": {
+    "1": {
+      "displayUUID": "FCEC43D7-E221-4C92-92E9-7DA8EFE7B554",
+      "id": true,
+      "isActive": true,
+      "metadata": {},
+      "type": "user",
+      "uuid": "",
+      "windows": [
+        6714,
+        6712
+      ]
+    },
+    "5": {
+      "displayUUID": "89ED320F-4A30-4704-9B0E-8340A6763F11",
+      "id": 5,
+      "isActive": true,
+      "metadata": {},
+      "type": "user",
+      "uuid": "B06177A3-8095-4A38-B072-1326D042D03A",
+      "windows": [
+        624,
+        625
+      ]
+    }
+  },
+  "windows": {
+    "624": {
+      "alpha": true,
+      "appName": "Code",
+      "frame": [
+        [
+          532,
+          -999
+        ],
+        [
+          2801,
+          899
+        ]
+      ],
+      "hasTransform": false,
+      "id": 624,
+      "isMinimized": false,
+      "isOrderedIn": true,
+      "level": false,
+      "metadata": {},
+      "pid": 2349,
+      "spaces": [
+        5
+      ],
+      "subLevel": false,
+      "title": "Code"
+    },
+    "625": {
+      "alpha": true,
+      "frame": [
+        [
+          1497,
+          -987
+        ],
+        [
+          1499,
+          931
+        ]
+      ],
+      "hasTransform": false,
+      "id": 625,
+      "isMinimized": false,
+      "isOrderedIn": true,
+      "level": false,
+      "metadata": {},
+      "pid": 1253,
+      "spaces": [
+        5
+      ],
+      "subLevel": false,
+      "title": "borders"
+    },
+    "6712": {
+      "alpha": true,
+      "appName": "Code",
+      "frame": [
+        [
+          1048,
+          123
+        ],
+        [
+          2100,
+          900
+        ]
+      ],
+      "hasTransform": false,
+      "id": 6712,
+      "isMinimized": false,
+      "isOrderedIn": true,
+      "level": false,
+      "metadata": {},
+      "pid": 2349,
+      "spaces": [
+        true
+      ],
+      "subLevel": false,
+      "title": "tmux — .config"
+    },
+    "6714": {
+      "alpha": true,
+      "frame": [
+        [
+          1184,
+          74
+        ],
+        [
+          1472,
+          932
+        ]
+      ],
+      "hasTransform": false,
+      "id": 6714,
+      "isMinimized": false,
+      "isOrderedIn": true,
+      "level": false,
+      "metadata": {},
+      "pid": 1253,
+      "spaces": [
+        true
+      ],
+      "subLevel": false,
+      "title": "borders"
+    },
+    "6791": {
+      "alpha": true,
+      "appName": "Ghostty",
+      "frame": [
+        [
+          10,
+          327
+        ],
+        [
+          800,
+          753
+        ]
+      ],
+      "hasTransform": false,
+      "id": 6791,
+      "isMinimized": false,
+      "isOrderedIn": true,
+      "level": false,
+      "metadata": {},
+      "pid": 56401,
+      "spaces": [],
+      "subLevel": false,
+      "title": "r@Mac:~"
+    }
+  }
+}

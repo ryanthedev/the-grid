@@ -113,9 +113,10 @@ class MessageHandler {
                 "version": "0.1.0",
                 "platform": "macOS",
                 "capabilities": [
-                    "spaces": false,  // Not yet implemented
-                    "windows": false,  // Not yet implemented
-                    "events": true
+                    "spaces": true,
+                    "windows": true,
+                    "events": true,
+                    "stateTracking": true
                 ]
             ]
 
@@ -124,6 +125,163 @@ class MessageHandler {
                 result: AnyCodable(info)
             )
             completion(response)
+        }
+
+        // Dump - returns complete window manager state
+        register(method: "dump") { [weak self] request, completion in
+            self?.logger.info("dump called - returning complete state")
+
+            do {
+                // Get state from StateManager (Codable type preserves all type information)
+                let state = try StateManager.shared.getStateDictionary()
+
+                let response = Response(
+                    id: request.id,
+                    result: AnyCodable(state)
+                )
+                completion(response)
+            } catch {
+                self?.logger.error("Failed to get state: \(error)")
+                let response = Response(
+                    id: request.id,
+                    error: ErrorInfo(
+                        code: -32603,
+                        message: "Internal error: \(error.localizedDescription)"
+                    )
+                )
+                completion(response)
+            }
+        }
+
+        // UpdateWindow - manipulate window position, size, space, or display
+        register(method: "updateWindow") { [weak self] request, completion in
+            guard let self = self else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32603, message: "Handler not available")))
+                return
+            }
+
+            self.logger.info("updateWindow called", metadata: ["params": "\(request.params ?? [:])"])
+
+            // Extract parameters
+            guard let params = request.params,
+                  let windowIdWrapper = params["windowId"],
+                  let windowId = windowIdWrapper.value as? Int else {
+                let response = Response(
+                    id: request.id,
+                    error: ErrorInfo(code: -32602, message: "Invalid params: windowId is required")
+                )
+                completion(response)
+                return
+            }
+
+            let windowID = UInt32(windowId)
+
+            // Optional parameters
+            let x = (params["x"]?.value as? NSNumber)?.doubleValue
+            let y = (params["y"]?.value as? NSNumber)?.doubleValue
+            let width = (params["width"]?.value as? NSNumber)?.doubleValue
+            let height = (params["height"]?.value as? NSNumber)?.doubleValue
+            let spaceId = params["spaceId"]?.value as? String
+            let displayUuid = params["displayUuid"]?.value as? String
+
+            // Get window state
+            let state = StateManager.shared.getState()
+            guard let windowState = state.windows[String(windowID)] else {
+                let response = Response(
+                    id: request.id,
+                    error: ErrorInfo(code: -32001, message: "Window not found: \(windowID)")
+                )
+                completion(response)
+                return
+            }
+
+            // Create WindowManipulator
+            let manipulator = WindowManipulator(
+                connectionID: state.metadata.connectionID,
+                logger: self.logger
+            )
+
+            var updatesApplied: [String] = []
+            var errors: [String] = []
+
+            // Handle display move first (if specified)
+            if let displayUuid = displayUuid {
+                let position = (x != nil && y != nil) ? CGPoint(x: x!, y: y!) : nil
+                if manipulator.moveWindowToDisplay(
+                    windowID: windowID,
+                    displayUUID: displayUuid,
+                    position: position,
+                    stateManager: StateManager.shared
+                ) {
+                    updatesApplied.append("display")
+                    if position != nil {
+                        updatesApplied.append("position")
+                    }
+                } else {
+                    errors.append("Failed to move window to display")
+                }
+            }
+            // Handle space move (if no display specified)
+            else if let spaceIdStr = spaceId, let spaceID = UInt64(spaceIdStr) {
+                if manipulator.moveWindowToSpace(windowID: windowID, spaceID: spaceID) {
+                    updatesApplied.append("space")
+                } else {
+                    errors.append("Failed to move window to space")
+                }
+            }
+
+            // Handle frame updates (if display wasn't moved, or if only size is being updated)
+            if displayUuid == nil || (width != nil || height != nil) {
+                // Get AX element
+                guard let element = manipulator.getAXElement(pid: windowState.pid, windowID: windowID) else {
+                    let response = Response(
+                        id: request.id,
+                        error: ErrorInfo(code: -32002, message: "Failed to get AX element for window")
+                    )
+                    completion(response)
+                    return
+                }
+
+                // Update position (if specified and display wasn't moved)
+                if let x = x, let y = y, displayUuid == nil {
+                    if manipulator.setWindowPosition(element: element, point: CGPoint(x: x, y: y)) {
+                        updatesApplied.append("position")
+                    } else {
+                        errors.append("Failed to set window position")
+                    }
+                }
+
+                // Update size (if specified)
+                if let width = width, let height = height {
+                    if manipulator.setWindowSize(element: element, size: CGSize(width: width, height: height)) {
+                        updatesApplied.append("size")
+                    } else {
+                        errors.append("Failed to set window size")
+                    }
+                }
+            }
+
+            // Build response
+            if errors.isEmpty {
+                let response = Response(
+                    id: request.id,
+                    result: AnyCodable([
+                        "success": true,
+                        "windowId": windowId,
+                        "updatesApplied": updatesApplied
+                    ])
+                )
+                completion(response)
+            } else {
+                let response = Response(
+                    id: request.id,
+                    error: ErrorInfo(
+                        code: -32003,
+                        message: "Window update partially failed: \(errors.joined(separator: ", "))"
+                    )
+                )
+                completion(response)
+            }
         }
     }
 }

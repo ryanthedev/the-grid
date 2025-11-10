@@ -94,6 +94,19 @@ struct Event: Codable {
     }
 }
 
+/// Helper type to type-erase Encodable values
+private struct AnyEncodable: Encodable {
+    private let _encode: (Encoder) throws -> Void
+
+    init<T: Encodable>(_ value: T) {
+        _encode = value.encode(to:)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        try _encode(encoder)
+    }
+}
+
 /// Helper type to encode/decode arbitrary JSON values
 struct AnyCodable: Codable {
     let value: Any
@@ -132,6 +145,12 @@ struct AnyCodable: Codable {
             try container.encode(bool)
         case let int as Int:
             try container.encode(int)
+        case let uint as UInt:
+            try container.encode(uint)
+        case let uint32 as UInt32:
+            try container.encode(uint32)
+        case let uint64 as UInt64:
+            try container.encode(uint64)
         case let double as Double:
             try container.encode(double)
         case let string as String:
@@ -140,12 +159,38 @@ struct AnyCodable: Codable {
             try container.encode(array.map { AnyCodable($0) })
         case let dict as [String: Any]:
             try container.encode(dict.mapValues { AnyCodable($0) })
-        case is Optional<Any>:
+        case _ where value is NSNull:
             try container.encodeNil()
         default:
+            // Try to encode complex Codable types by round-tripping through JSON
+            // This converts complex structs into AnyCodable's internal tree of simple types
+            if let encodable = value as? any Encodable {
+                do {
+                    // Encode to JSON Data
+                    let jsonEncoder = JSONEncoder()
+                    jsonEncoder.dateEncodingStrategy = .iso8601
+                    let jsonData = try jsonEncoder.encode(AnyEncodable(encodable))
+
+                    // Decode back to AnyCodable tree (converts complex struct to simple types)
+                    let jsonDecoder = JSONDecoder()
+                    jsonDecoder.dateDecodingStrategy = .iso8601
+                    let anyCodable = try jsonDecoder.decode(AnyCodable.self, from: jsonData)
+
+                    // Encode the simple AnyCodable tree
+                    try anyCodable.encode(to: encoder)
+                    return
+                } catch {
+                    // If round-trip fails, throw with context
+                    throw EncodingError.invalidValue(value, EncodingError.Context(
+                        codingPath: container.codingPath,
+                        debugDescription: "Failed to encode complex type via round-trip: \(error.localizedDescription)"
+                    ))
+                }
+            }
+
             throw EncodingError.invalidValue(value, EncodingError.Context(
                 codingPath: container.codingPath,
-                debugDescription: "Unsupported value type"
+                debugDescription: "Unsupported value type: \(type(of: value))"
             ))
         }
     }

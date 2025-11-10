@@ -1,5 +1,6 @@
 import ArgumentParser
 import Foundation
+import AppKit
 import Logging
 
 /// GridServer - Unix domain socket server for macOS Spaces and Windows API
@@ -48,6 +49,13 @@ struct GridServerCommand: ParsableCommand {
             "socketPath": "\(socketPath)"
         ])
 
+        // Check for Accessibility permission
+        if !PermissionChecker.checkAccessibilityPermission() {
+            logger.warning("Running without Accessibility permission - window queries may not work")
+            logger.notice("Requesting permission (dialog may appear)...")
+            PermissionChecker.requestAccessibilityPermission()
+        }
+
         // Create components
         let messageHandler = MessageHandler(logger: logger)
         let eventBroadcaster = EventBroadcaster(logger: logger)
@@ -85,6 +93,17 @@ struct GridServerCommand: ParsableCommand {
         // Start server
         do {
             try socketServer.start()
+
+            // Initialize NSApplication for NSWorkspace notifications
+            // This is required for space change notifications to fire
+            _ = NSApplication.shared
+            NSApplication.shared.setActivationPolicy(.prohibited)
+            logger.info("✓ NSApplication initialized for workspace notifications")
+
+            // Initialize StateManager
+            logger.info("Initializing StateManager...")
+            StateManager.shared.start()
+            logger.notice("StateManager initialization started")
 
             // Start heartbeat if requested
             if heartbeat {
