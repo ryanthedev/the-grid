@@ -119,3 +119,17 @@ func (c *Client) UpdateWindow(ctx context.Context, windowID int, updates map[str
 
 	return resp.Result, nil
 }
+
+// CallMethod sends a generic RPC request with the given method and parameters
+func (c *Client) CallMethod(ctx context.Context, method string, params map[string]interface{}) (map[string]interface{}, error) {
+	resp, err := c.request(ctx, method, params)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.IsError() {
+		return nil, fmt.Errorf("server error: %s", resp.GetError())
+	}
+
+	return resp.Result, nil
+}

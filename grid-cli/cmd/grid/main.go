@@ -695,6 +695,449 @@ var windowCenterCmd = &cobra.Command{
 	},
 }
 
+// MARK: - MSS Window Commands (Opacity, Layer, Sticky, Minimize)
+
+var opacityValue float64
+var opacityDuration float64
+var layerValue string
+var stickyValue bool
+
+// windowSetOpacityCmd sets window opacity
+var windowSetOpacityCmd = &cobra.Command{
+	Use:   "set-opacity <window-id> <opacity>",
+	Short: "Set window opacity (requires MSS)",
+	Long:  `Sets the opacity of a window instantly. Opacity range: 0.0 (transparent) to 1.0 (opaque). Requires MSS to be installed and loaded.`,
+	Args:  cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		opacity, err := strconv.ParseFloat(args[1], 32)
+		if err != nil || opacity < 0 || opacity > 1 {
+			return fmt.Errorf("invalid opacity value: must be between 0.0 and 1.0")
+		}
+
+		params := map[string]interface{}{
+			"windowId": args[0],
+			"opacity":  float32(opacity),
+		}
+
+		c := client.NewClient(socketPath, timeout)
+		defer c.Close()
+
+		result, err := c.CallMethod(context.Background(), "window.setOpacity", params)
+		if err != nil {
+			printError(fmt.Sprintf("Failed to set window opacity: %v", err))
+			return err
+		}
+
+		if jsonOutput {
+			return printJSON(result)
+		}
+
+		successColor.Printf("✓ Window %s opacity set to %.2f\n", args[0], opacity)
+		return nil
+	},
+}
+
+// windowFadeOpacityCmd fades window opacity over time
+var windowFadeOpacityCmd = &cobra.Command{
+	Use:   "fade-opacity <window-id> <opacity> <duration>",
+	Short: "Fade window opacity over time (requires MSS)",
+	Long:  `Fades window opacity to target value over the specified duration in seconds. Requires MSS.`,
+	Args:  cobra.ExactArgs(3),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		opacity, err := strconv.ParseFloat(args[1], 32)
+		if err != nil || opacity < 0 || opacity > 1 {
+			return fmt.Errorf("invalid opacity value: must be between 0.0 and 1.0")
+		}
+
+		duration, err := strconv.ParseFloat(args[2], 32)
+		if err != nil || duration <= 0 {
+			return fmt.Errorf("invalid duration: must be positive number in seconds")
+		}
+
+		params := map[string]interface{}{
+			"windowId": args[0],
+			"opacity":  float32(opacity),
+			"duration": float32(duration),
+		}
+
+		c := client.NewClient(socketPath, timeout)
+		defer c.Close()
+
+		result, err := c.CallMethod(context.Background(), "window.fadeOpacity", params)
+		if err != nil {
+			printError(fmt.Sprintf("Failed to fade window opacity: %v", err))
+			return err
+		}
+
+		if jsonOutput {
+			return printJSON(result)
+		}
+
+		successColor.Printf("✓ Window %s fading to opacity %.2f over %.2f seconds\n", args[0], opacity, duration)
+		return nil
+	},
+}
+
+// windowGetOpacityCmd gets window opacity
+var windowGetOpacityCmd = &cobra.Command{
+	Use:   "get-opacity <window-id>",
+	Short: "Get window opacity (requires MSS)",
+	Long:  `Retrieves the current opacity value of a window. Requires MSS.`,
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		params := map[string]interface{}{
+			"windowId": args[0],
+		}
+
+		c := client.NewClient(socketPath, timeout)
+		defer c.Close()
+
+		result, err := c.CallMethod(context.Background(), "window.getOpacity", params)
+		if err != nil {
+			printError(fmt.Sprintf("Failed to get window opacity: %v", err))
+			return err
+		}
+
+		if jsonOutput {
+			return printJSON(result)
+		}
+
+		if opacity, ok := result["opacity"].(float64); ok {
+			fmt.Printf("Window %s opacity: %.2f\n", args[0], opacity)
+		}
+		return nil
+	},
+}
+
+// windowSetLayerCmd sets window layer (above/normal/below)
+var windowSetLayerCmd = &cobra.Command{
+	Use:   "set-layer <window-id> <layer>",
+	Short: "Set window layer: above, normal, or below (requires MSS)",
+	Long:  `Sets the window stacking layer. Values: 'above' (always on top), 'normal' (default), 'below' (always behind). Requires MSS.`,
+	Args:  cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		layer := strings.ToLower(args[1])
+		if layer != "above" && layer != "normal" && layer != "below" {
+			return fmt.Errorf("invalid layer: must be 'above', 'normal', or 'below'")
+		}
+
+		params := map[string]interface{}{
+			"windowId": args[0],
+			"layer":    layer,
+		}
+
+		c := client.NewClient(socketPath, timeout)
+		defer c.Close()
+
+		result, err := c.CallMethod(context.Background(), "window.setLayer", params)
+		if err != nil {
+			printError(fmt.Sprintf("Failed to set window layer: %v", err))
+			return err
+		}
+
+		if jsonOutput {
+			return printJSON(result)
+		}
+
+		successColor.Printf("✓ Window %s layer set to '%s'\n", args[0], layer)
+		return nil
+	},
+}
+
+// windowGetLayerCmd gets window layer
+var windowGetLayerCmd = &cobra.Command{
+	Use:   "get-layer <window-id>",
+	Short: "Get window layer (requires MSS)",
+	Long:  `Retrieves the current stacking layer of a window. Requires MSS.`,
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		params := map[string]interface{}{
+			"windowId": args[0],
+		}
+
+		c := client.NewClient(socketPath, timeout)
+		defer c.Close()
+
+		result, err := c.CallMethod(context.Background(), "window.getLayer", params)
+		if err != nil {
+			printError(fmt.Sprintf("Failed to get window layer: %v", err))
+			return err
+		}
+
+		if jsonOutput {
+			return printJSON(result)
+		}
+
+		if layer, ok := result["layer"].(string); ok {
+			fmt.Printf("Window %s layer: %s\n", args[0], layer)
+		}
+		return nil
+	},
+}
+
+// windowSetStickyCmd makes window visible on all spaces
+var windowSetStickyCmd = &cobra.Command{
+	Use:   "set-sticky <window-id> <true|false>",
+	Short: "Make window visible on all spaces (requires MSS)",
+	Long:  `Sets whether a window is sticky (visible on all spaces). Requires MSS.`,
+	Args:  cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		sticky, err := strconv.ParseBool(args[1])
+		if err != nil {
+			return fmt.Errorf("invalid sticky value: must be 'true' or 'false'")
+		}
+
+		params := map[string]interface{}{
+			"windowId": args[0],
+			"sticky":   sticky,
+		}
+
+		c := client.NewClient(socketPath, timeout)
+		defer c.Close()
+
+		result, err := c.CallMethod(context.Background(), "window.setSticky", params)
+		if err != nil {
+			printError(fmt.Sprintf("Failed to set window sticky: %v", err))
+			return err
+		}
+
+		if jsonOutput {
+			return printJSON(result)
+		}
+
+		if sticky {
+			successColor.Printf("✓ Window %s is now visible on all spaces\n", args[0])
+		} else {
+			successColor.Printf("✓ Window %s is now visible only on its assigned spaces\n", args[0])
+		}
+		return nil
+	},
+}
+
+// windowIsStickyCmd checks if window is sticky
+var windowIsStickyCmd = &cobra.Command{
+	Use:   "is-sticky <window-id>",
+	Short: "Check if window is sticky (requires MSS)",
+	Long:  `Checks whether a window is sticky (visible on all spaces). Requires MSS.`,
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		params := map[string]interface{}{
+			"windowId": args[0],
+		}
+
+		c := client.NewClient(socketPath, timeout)
+		defer c.Close()
+
+		result, err := c.CallMethod(context.Background(), "window.isSticky", params)
+		if err != nil {
+			printError(fmt.Sprintf("Failed to check window sticky status: %v", err))
+			return err
+		}
+
+		if jsonOutput {
+			return printJSON(result)
+		}
+
+		if sticky, ok := result["sticky"].(bool); ok {
+			if sticky {
+				fmt.Printf("Window %s is sticky (visible on all spaces)\n", args[0])
+			} else {
+				fmt.Printf("Window %s is not sticky\n", args[0])
+			}
+		}
+		return nil
+	},
+}
+
+// windowMinimizeCmd minimizes a window
+var windowMinimizeCmd = &cobra.Command{
+	Use:   "minimize <window-id>",
+	Short: "Minimize a window (requires MSS)",
+	Long:  `Minimizes a window to the Dock. Requires MSS.`,
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		params := map[string]interface{}{
+			"windowId": args[0],
+		}
+
+		c := client.NewClient(socketPath, timeout)
+		defer c.Close()
+
+		result, err := c.CallMethod(context.Background(), "window.minimize", params)
+		if err != nil {
+			printError(fmt.Sprintf("Failed to minimize window: %v", err))
+			return err
+		}
+
+		if jsonOutput {
+			return printJSON(result)
+		}
+
+		successColor.Printf("✓ Window %s minimized\n", args[0])
+		return nil
+	},
+}
+
+// windowUnminimizeCmd restores a minimized window
+var windowUnminimizeCmd = &cobra.Command{
+	Use:   "unminimize <window-id>",
+	Short: "Restore a minimized window (requires MSS)",
+	Long:  `Restores a minimized window from the Dock. Requires MSS.`,
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		params := map[string]interface{}{
+			"windowId": args[0],
+		}
+
+		c := client.NewClient(socketPath, timeout)
+		defer c.Close()
+
+		result, err := c.CallMethod(context.Background(), "window.unminimize", params)
+		if err != nil {
+			printError(fmt.Sprintf("Failed to unminimize window: %v", err))
+			return err
+		}
+
+		if jsonOutput {
+			return printJSON(result)
+		}
+
+		successColor.Printf("✓ Window %s restored\n", args[0])
+		return nil
+	},
+}
+
+// windowIsMinimizedCmd checks if window is minimized
+var windowIsMinimizedCmd = &cobra.Command{
+	Use:   "is-minimized <window-id>",
+	Short: "Check if window is minimized (requires MSS)",
+	Long:  `Checks whether a window is currently minimized. Requires MSS.`,
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		params := map[string]interface{}{
+			"windowId": args[0],
+		}
+
+		c := client.NewClient(socketPath, timeout)
+		defer c.Close()
+
+		result, err := c.CallMethod(context.Background(), "window.isMinimized", params)
+		if err != nil {
+			printError(fmt.Sprintf("Failed to check window minimized status: %v", err))
+			return err
+		}
+
+		if jsonOutput {
+			return printJSON(result)
+		}
+
+		if minimized, ok := result["minimized"].(bool); ok {
+			if minimized {
+				fmt.Printf("Window %s is minimized\n", args[0])
+			} else {
+				fmt.Printf("Window %s is not minimized\n", args[0])
+			}
+		}
+		return nil
+	},
+}
+
+// MARK: - Space Management Commands (MSS)
+
+// spaceCmd is the parent command for space subcommands
+var spaceCmd = &cobra.Command{
+	Use:   "space",
+	Short: "Manage spaces (requires MSS)",
+	Long:  `Commands for creating, destroying, and focusing spaces. Requires MSS.`,
+}
+
+// spaceCreateCmd creates a new space
+var spaceCreateCmd = &cobra.Command{
+	Use:   "create <display-space-id>",
+	Short: "Create a new space on a display (requires MSS)",
+	Long:  `Creates a new space on the same display as the specified space ID. Requires MSS.`,
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		params := map[string]interface{}{
+			"displaySpaceId": args[0],
+		}
+
+		c := client.NewClient(socketPath, timeout)
+		defer c.Close()
+
+		result, err := c.CallMethod(context.Background(), "space.create", params)
+		if err != nil {
+			printError(fmt.Sprintf("Failed to create space: %v", err))
+			return err
+		}
+
+		if jsonOutput {
+			return printJSON(result)
+		}
+
+		successColor.Printf("✓ Space created on display containing space %s\n", args[0])
+		return nil
+	},
+}
+
+// spaceDestroyCmd destroys a space
+var spaceDestroyCmd = &cobra.Command{
+	Use:   "destroy <space-id>",
+	Short: "Destroy a space (requires MSS)",
+	Long:  `Destroys (deletes) a space. Windows on this space will be moved to other spaces. Requires MSS.`,
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		params := map[string]interface{}{
+			"spaceId": args[0],
+		}
+
+		c := client.NewClient(socketPath, timeout)
+		defer c.Close()
+
+		result, err := c.CallMethod(context.Background(), "space.destroy", params)
+		if err != nil {
+			printError(fmt.Sprintf("Failed to destroy space: %v", err))
+			return err
+		}
+
+		if jsonOutput {
+			return printJSON(result)
+		}
+
+		successColor.Printf("✓ Space %s destroyed\n", args[0])
+		return nil
+	},
+}
+
+// spaceFocusCmd focuses (switches to) a space
+var spaceFocusCmd = &cobra.Command{
+	Use:   "focus <space-id>",
+	Short: "Switch to a space (requires MSS)",
+	Long:  `Switches to the specified space (makes it active). Requires MSS.`,
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		params := map[string]interface{}{
+			"spaceId": args[0],
+		}
+
+		c := client.NewClient(socketPath, timeout)
+		defer c.Close()
+
+		result, err := c.CallMethod(context.Background(), "space.focus", params)
+		if err != nil {
+			printError(fmt.Sprintf("Failed to focus space: %v", err))
+			return err
+		}
+
+		if jsonOutput {
+			return printJSON(result)
+		}
+
+		successColor.Printf("✓ Switched to space %s\n", args[0])
+		return nil
+	},
+}
+
 func init() {
 	// Global flags
 	rootCmd.PersistentFlags().StringVar(&socketPath, "socket", client.DefaultSocketPath, "Unix socket path")
@@ -709,6 +1152,7 @@ func init() {
 	rootCmd.AddCommand(showCmd)
 	rootCmd.AddCommand(listCmd)
 	rootCmd.AddCommand(windowCmd)
+	rootCmd.AddCommand(spaceCmd)
 
 	// Add show subcommands
 	showCmd.AddCommand(showLayoutCmd)
@@ -736,6 +1180,21 @@ func init() {
 	windowCmd.AddCommand(windowToSpaceCmd)
 	windowCmd.AddCommand(windowToDisplayCmd)
 	windowCmd.AddCommand(windowCenterCmd)
+	windowCmd.AddCommand(windowSetOpacityCmd)
+	windowCmd.AddCommand(windowFadeOpacityCmd)
+	windowCmd.AddCommand(windowGetOpacityCmd)
+	windowCmd.AddCommand(windowSetLayerCmd)
+	windowCmd.AddCommand(windowGetLayerCmd)
+	windowCmd.AddCommand(windowSetStickyCmd)
+	windowCmd.AddCommand(windowIsStickyCmd)
+	windowCmd.AddCommand(windowMinimizeCmd)
+	windowCmd.AddCommand(windowUnminimizeCmd)
+	windowCmd.AddCommand(windowIsMinimizedCmd)
+
+	// Add space subcommands
+	spaceCmd.AddCommand(spaceCreateCmd)
+	spaceCmd.AddCommand(spaceDestroyCmd)
+	spaceCmd.AddCommand(spaceFocusCmd)
 
 	// Add flags for manipulation commands
 	windowMoveCmd.Flags().Float64Var(&moveX, "x", 0, "X position")

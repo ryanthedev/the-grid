@@ -1,7 +1,10 @@
-# Swift Package Manager
-.build/
-.swiftpm/
-Package.resolved
+# Swift Package Manager (grid-server)
+grid-server/.build/
+grid-server/.swiftpm/
+grid-server/Package.resolved
+
+# Go build artifacts (grid-cli)
+grid-cli/bin/
 
 # Xcode
 xcuserdata/

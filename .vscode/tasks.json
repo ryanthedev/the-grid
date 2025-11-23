@@ -10,6 +10,9 @@
                 "-c",
                 "debug"
             ],
+            "options": {
+                "cwd": "${workspaceFolder}/grid-server"
+            },
             "group": {
                 "kind": "build",
                 "isDefault": true
@@ -29,6 +32,9 @@
                 "-c",
                 "release"
             ],
+            "options": {
+                "cwd": "${workspaceFolder}/grid-server"
+            },
             "group": "build",
             "presentation": {
                 "reveal": "always",
@@ -43,6 +49,9 @@
             "args": [
                 "test"
             ],
+            "options": {
+                "cwd": "${workspaceFolder}/grid-server"
+            },
             "group": "test",
             "presentation": {
                 "reveal": "always",
@@ -58,6 +67,9 @@
                 "package",
                 "clean"
             ],
+            "options": {
+                "cwd": "${workspaceFolder}/grid-server"
+            },
             "presentation": {
                 "reveal": "always",
                 "panel": "shared"
