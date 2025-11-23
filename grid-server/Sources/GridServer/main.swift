@@ -27,19 +27,33 @@ struct GridServerCommand: ParsableCommand {
     var heartbeatInterval: Double = 10.0
 
     func run() throws {
-        // Set up logging
-        LoggingSystem.bootstrap { label in
-            var handler = StreamLogHandler.standardOutput(label: label)
+        // Delete old log file to start fresh
+        let logFilePath = "grid-server.log"
+        try? FileManager.default.removeItem(atPath: logFilePath)
 
+        // Set up logging with both console and file output
+        LoggingSystem.bootstrap { label in
+            // Create console handler
+            var consoleHandler = StreamLogHandler.standardOutput(label: label)
+
+            // Create file handler
+            var fileHandler = FileLogHandler(label: label, filePath: logFilePath)
+
+            // Set log level for both handlers
+            let level: Logger.Level
             if debug {
-                handler.logLevel = .debug
+                level = .debug
             } else if verbose {
-                handler.logLevel = .info
+                level = .info
             } else {
-                handler.logLevel = .notice
+                level = .notice
             }
 
-            return handler
+            consoleHandler.logLevel = level
+            fileHandler.logLevel = level
+
+            // Combine both handlers
+            return MultiplexLogHandler(handlers: [consoleHandler, fileHandler])
         }
 
         let logger = Logger(label: "com.thegrid.server")
@@ -188,6 +202,144 @@ struct StreamLogHandler: LogHandler {
 struct StdoutOutputStream: TextOutputStream {
     func write(_ string: String) {
         print(string, terminator: "")
+    }
+}
+
+/// Custom log handler that writes to a file asynchronously
+struct FileLogHandler: LogHandler {
+    var logLevel: Logger.Level = .info
+    var metadata: Logger.Metadata = [:]
+
+    private let label: String
+    private let filePath: String
+    private let writeQueue: DispatchQueue
+
+    init(label: String, filePath: String) {
+        self.label = label
+        self.filePath = filePath
+        self.writeQueue = DispatchQueue(label: "com.thegrid.filelogger", qos: .background)
+    }
+
+    func log(
+        level: Logger.Level,
+        message: Logger.Message,
+        metadata: Logger.Metadata?,
+        source: String,
+        file: String,
+        function: String,
+        line: UInt
+    ) {
+        let timestamp = ISO8601DateFormatter().string(from: Date())
+        let levelStr = levelString(level)
+
+        var output = "[\(timestamp)] [\(levelStr)] \(message)"
+
+        let combinedMetadata = self.metadata.merging(metadata ?? [:]) { _, new in new }
+        if !combinedMetadata.isEmpty {
+            let metadataStr = combinedMetadata
+                .map { "\($0.key)=\($0.value)" }
+                .joined(separator: " ")
+            output += " | \(metadataStr)"
+        }
+
+        let logLine = output + "\n"
+        let filePath = self.filePath
+
+        // Write to file asynchronously to avoid blocking
+        writeQueue.async {
+            guard let data = logLine.data(using: .utf8) else { return }
+
+            if !FileManager.default.fileExists(atPath: filePath) {
+                FileManager.default.createFile(atPath: filePath, contents: nil, attributes: nil)
+            }
+
+            if let fileHandle = FileHandle(forWritingAtPath: filePath) {
+                fileHandle.seekToEndOfFile()
+                fileHandle.write(data)
+                fileHandle.closeFile()
+            }
+        }
+    }
+
+    subscript(metadataKey key: String) -> Logger.Metadata.Value? {
+        get { metadata[key] }
+        set { metadata[key] = newValue }
+    }
+
+    private func levelString(_ level: Logger.Level) -> String {
+        switch level {
+        case .trace: return "TRACE"
+        case .debug: return "DEBUG"
+        case .info: return "INFO"
+        case .notice: return "NOTICE"
+        case .warning: return "WARN"
+        case .error: return "ERROR"
+        case .critical: return "CRITICAL"
+        }
+    }
+}
+
+/// Multiplex log handler that sends logs to multiple handlers
+struct MultiplexLogHandler: LogHandler {
+    private var handlers: [LogHandler]
+
+    var logLevel: Logger.Level {
+        get {
+            handlers.first?.logLevel ?? .info
+        }
+        set {
+            for i in handlers.indices {
+                handlers[i].logLevel = newValue
+            }
+        }
+    }
+
+    var metadata: Logger.Metadata {
+        get {
+            handlers.first?.metadata ?? [:]
+        }
+        set {
+            for i in handlers.indices {
+                handlers[i].metadata = newValue
+            }
+        }
+    }
+
+    init(handlers: [LogHandler]) {
+        self.handlers = handlers
+    }
+
+    func log(
+        level: Logger.Level,
+        message: Logger.Message,
+        metadata: Logger.Metadata?,
+        source: String,
+        file: String,
+        function: String,
+        line: UInt
+    ) {
+        for handler in handlers {
+            handler.log(
+                level: level,
+                message: message,
+                metadata: metadata,
+                source: source,
+                file: file,
+                function: function,
+                line: line
+            )
+        }
+    }
+
+    subscript(metadataKey key: String) -> Logger.Metadata.Value? {
+        get {
+            handlers.first?[metadataKey: key]
+        }
+        set {
+            for i in handlers.indices {
+                handlers[i][metadataKey: key] = newValue
+            }
+        }
     }
 }
 

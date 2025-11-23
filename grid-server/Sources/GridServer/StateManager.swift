@@ -29,12 +29,16 @@ class StateManager {
     // Workspace observer (system-level events)
     private var workspaceObserver: WorkspaceObserver?
 
+    // MSS client for window manipulation and sticky detection
+    private let mssClient: MSSClient
+
     // MARK: - Initialization
 
     private init() {
         self.connectionID = SLSMainConnectionID()
         self.state = WindowManagerState()
         self.state.metadata.connectionID = self.connectionID
+        self.mssClient = MSSClient(logger: Logger(label: "com.grid.StateManager.MSS"))
 
         logger.info("StateManager initialized with connection ID: \(self.connectionID)")
     }
@@ -232,6 +236,15 @@ class StateManager {
             "displays": "\(state.displays.count)",
             "change": change != 0 ? "\(changeStr)" : "no change"
         ])
+
+        // Log all discovered spaces for debugging
+        let spaceDetails = spaces.values.map { space in
+            "ID:\(space.id) type:\(space.type) active:\(space.isActive)"
+        }.joined(separator: " | ")
+        logger.info("🔍 DEBUG: All discovered spaces", metadata: [
+            "spaceIDs": "\(spaces.keys.sorted().joined(separator: ", "))",
+            "details": "\(spaceDetails)"
+        ])
     }
 
     /// Get the current space for a window using fallback mechanism
@@ -248,19 +261,32 @@ class StateManager {
         return spaceID
     }
 
+    /// Get all user space IDs from current state
+    /// Returns array of all user space IDs (excludes fullscreen spaces)
+    private func getAllUserSpaceIDs() -> [UInt64] {
+        return state.spaces.values
+            .filter { $0.type == "user" }
+            .map { $0.id }
+    }
+
     private func refreshWindows() {
         let beforeCount = state.windows.count
         logger.debug("Refreshing windows...", metadata: ["current": "\(beforeCount)"])
 
         // Use public CGWindowListCopyWindowInfo API instead of private SkyLight API
         // This is safer and won't crash, though it provides slightly different data
-        let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+        // Use .optionAll to get windows from all spaces, not just the active space
+        let options: CGWindowListOption = [.optionAll, .excludeDesktopElements]
         guard let windowList = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
             logger.warning("Failed to get window list")
             return
         }
 
-        logger.debug("Found \(windowList.count) on-screen windows from CGWindowList")
+        logger.debug("Found \(windowList.count) windows from CGWindowList (all spaces)")
+        logger.info("🔍 DEBUG: Starting window enumeration", metadata: [
+            "totalWindows": "\(windowList.count)",
+            "knownSpaces": "\(state.spaces.keys.sorted().joined(separator: ", "))"
+        ])
 
         var windows: [String: WindowState] = [:]
 
@@ -310,25 +336,55 @@ class StateManager {
             // Window is on-screen if it's in the list (we filtered for on-screen only)
             windowState.isOrderedIn = true
 
-            // Get spaces for this window using private API with fallback
-            let windowArray = [windowID as CFNumber] as CFArray
-            if let spacesArray = SLSCopySpacesForWindows(connectionID, 0x7, windowArray) {
-                // Result is array of arrays (one per window)
-                let spaceArrays: [[NSNumber]] = cfArrayToSwiftArray(spacesArray)
-                if let firstArray = spaceArrays.first, !firstArray.isEmpty {
-                    windowState.spaces = firstArray.map { $0.uint64Value }
-                } else {
-                    // Fallback: Get current space from display
-                    let spaceID = getCurrentSpaceForWindow(windowID)
-                    if spaceID != 0 {
-                        windowState.spaces = [spaceID]
-                    }
-                }
+            // Get spaces for this window - check sticky first, then use SkyLight API
+            // 1. Check if window is sticky (visible on all spaces) using MSS
+            if let isSticky = mssClient.isWindowSticky(windowID), isSticky {
+                // Sticky windows are on all user spaces
+                windowState.spaces = getAllUserSpaceIDs()
+                logger.info("🔍 DEBUG: Window is sticky (on all spaces)", metadata: [
+                    "windowID": "\(windowID)",
+                    "appName": "\(windowState.appName ?? "unknown")",
+                    "title": "\(String(windowState.title?.prefix(30) ?? "untitled"))",
+                    "spaces": "\(windowState.spaces)",
+                    "method": "MSS sticky detection"
+                ])
             } else {
-                // API failed, use fallback
-                let spaceID = getCurrentSpaceForWindow(windowID)
-                if spaceID != 0 {
-                    windowState.spaces = [spaceID]
+                // 2. Not sticky - try to get spaces using SkyLight API
+                let windowArray = [windowID as CFNumber] as CFArray
+                if let spacesArray = SLSCopySpacesForWindows(connectionID, 0x7, windowArray) {
+                    // Result is array of arrays (one per window)
+                    let spaceArrays: [[NSNumber]] = cfArrayToSwiftArray(spacesArray)
+                    if let firstArray = spaceArrays.first, !firstArray.isEmpty {
+                        // Success - we know the actual spaces
+                        windowState.spaces = firstArray.map { $0.uint64Value }
+                        logger.info("🔍 DEBUG: Window space assignment", metadata: [
+                            "windowID": "\(windowID)",
+                            "appName": "\(windowState.appName ?? "unknown")",
+                            "title": "\(String(windowState.title?.prefix(30) ?? "untitled"))",
+                            "spaces": "\(firstArray.map { $0.uint64Value })",
+                            "method": "SLSCopySpacesForWindows"
+                        ])
+                    } else {
+                        // API returned empty - we don't know which spaces this window is on
+                        // Set to empty array instead of guessing
+                        windowState.spaces = []
+                        logger.warning("⚠️ DEBUG: Unable to determine window spaces", metadata: [
+                            "windowID": "\(windowID)",
+                            "appName": "\(windowState.appName ?? "unknown")",
+                            "title": "\(String(windowState.title?.prefix(30) ?? "untitled"))",
+                            "reason": "SLSCopySpacesForWindows returned empty",
+                            "result": "spaces set to [] (unknown)"
+                        ])
+                    }
+                } else {
+                    // API call failed entirely - we don't know which spaces this window is on
+                    windowState.spaces = []
+                    logger.error("❌ DEBUG: SLSCopySpacesForWindows API failed", metadata: [
+                        "windowID": "\(windowID)",
+                        "appName": "\(windowState.appName ?? "unknown")",
+                        "title": "\(String(windowState.title?.prefix(30) ?? "untitled"))",
+                        "result": "spaces set to [] (unknown)"
+                    ])
                 }
             }
 
@@ -366,6 +422,20 @@ class StateManager {
             "count": "\(afterCount)",
             "change": change != 0 ? "\(changeStr)" : "no change"
         ])
+
+        // Log space distribution for debugging
+        var spaceDistribution: [String: Int] = [:]
+        for (_, window) in windows {
+            for spaceID in window.spaces {
+                let key = String(spaceID)
+                spaceDistribution[key, default: 0] += 1
+            }
+        }
+        let distributionMetadata: Logger.Metadata = spaceDistribution.sorted { $0.key < $1.key }
+            .reduce(into: [:]) { result, pair in
+                result["space_\(pair.key)"] = Logger.MetadataValue(stringLiteral: "\(pair.value)")
+            }
+        logger.info("🔍 DEBUG: Window distribution across spaces", metadata: distributionMetadata)
     }
 
     // MARK: - Event Handling
