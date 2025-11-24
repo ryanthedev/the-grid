@@ -483,21 +483,11 @@ class StateManager {
                         // API returned empty - we don't know which spaces this window is on
                         // Leave as empty array, will be updated via events when we get definitive info
                         windowState.spaces = []
-                        logger.debug("Window spaces unknown (will update via events)", metadata: [
-                            "windowID": "\(windowID)",
-                            "appName": "\(windowState.appName ?? "unknown")",
-                            "title": "\(String(windowState.title?.prefix(30) ?? "untitled"))"
-                        ])
                     }
                 } else {
                     // API call failed - we don't know which spaces this window is on
                     // Leave as empty array, will be updated via events when we get definitive info
                     windowState.spaces = []
-                    logger.debug("SLSCopySpacesForWindows failed (will update via events)", metadata: [
-                        "windowID": "\(windowID)",
-                        "appName": "\(windowState.appName ?? "unknown")",
-                        "title": "\(String(windowState.title?.prefix(30) ?? "untitled"))"
-                    ])
                 }
             }
 
