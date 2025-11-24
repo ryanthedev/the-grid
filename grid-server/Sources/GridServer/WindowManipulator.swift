@@ -405,6 +405,9 @@ class WindowManipulator {
             "displayUUID": "\(displayUUID)"
         ])
 
+        // Re-query space assignment after successful move
+        stateManager.updateWindowSpacesPublic(windowID)
+
         return true
     }
 }

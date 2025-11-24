@@ -206,7 +206,10 @@ var listCmd = &cobra.Command{
 var listWindowsCmd = &cobra.Command{
 	Use:   "windows",
 	Short: "List all windows",
-	Long:  `Lists all windows with their IDs, titles, applications, and positions.`,
+	Long: `Lists all windows with their IDs, titles, applications, and positions.
+
+By default, filters out system UI, utility windows, and borders (yabai-style filtering).
+Use --all to show all windows including system components.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		state, err := getState()
 		if err != nil {
@@ -219,12 +222,27 @@ var listWindowsCmd = &cobra.Command{
 			return nil
 		}
 
+		// Apply filtering unless --all is specified
+		showAll, _ := cmd.Flags().GetBool("all")
+		if !showAll {
+			windows = filterWindows(windows)
+		}
+
+		if len(windows) == 0 {
+			fmt.Println("No windows found (try --all to show system windows)")
+			return nil
+		}
+
 		if jsonOutput {
 			return printJSON(windows)
 		}
 
 		output.PrintWindowsTable(windows)
-		fmt.Printf("\nTotal: %d windows\n", len(windows))
+		fmt.Printf("\nTotal: %d windows", len(windows))
+		if !showAll {
+			fmt.Printf(" (filtered, use --all to show all windows)")
+		}
+		fmt.Println()
 		return nil
 	},
 }
@@ -370,8 +388,16 @@ var windowFindCmd = &cobra.Command{
 		// Filter windows by title pattern
 		var matches []*models.Window
 		for _, win := range state.Windows {
-			if strings.Contains(strings.ToLower(win.Title), pattern) ||
-			   strings.Contains(strings.ToLower(win.AppName), pattern) {
+			title := ""
+			if win.Title != nil {
+				title = *win.Title
+			}
+			appName := ""
+			if win.AppName != nil {
+				appName = *win.AppName
+			}
+			if strings.Contains(strings.ToLower(title), pattern) ||
+			   strings.Contains(strings.ToLower(appName), pattern) {
 				matches = append(matches, win)
 			}
 		}
@@ -1171,6 +1197,9 @@ func init() {
 	listCmd.AddCommand(listDisplaysCmd)
 	listCmd.AddCommand(listAppsCmd)
 
+	// Add list windows flags
+	listWindowsCmd.Flags().Bool("all", false, "Show all windows including system UI and utility windows")
+
 	// Add window subcommands
 	windowCmd.AddCommand(windowGetCmd)
 	windowCmd.AddCommand(windowFindCmd)
@@ -1241,6 +1270,127 @@ func printError(msg string) {
 		errorColor.Fprint(os.Stderr, "✗ Error: ")
 		fmt.Fprintln(os.Stderr, msg)
 	}
+}
+
+// filterWindows applies yabai-style filtering to exclude system UI and utility windows
+func filterWindows(windows []*models.Window) []*models.Window {
+	filtered := make([]*models.Window, 0, len(windows))
+
+	for _, w := range windows {
+		if shouldIncludeWindow(w) {
+			filtered = append(filtered, w)
+		}
+	}
+
+	return filtered
+}
+
+// shouldIncludeWindow determines if a window should be included in filtered results
+// Implements yabai-style filtering logic
+func shouldIncludeWindow(w *models.Window) bool {
+	// Filter 1: Exclude windows with invalid frames (too small or zero-sized)
+	// Also exclude very small windows (likely utility windows, icons, etc.)
+	if w.GetWidth() < 100 || w.GetHeight() < 100 {
+		return false
+	}
+
+	// Filter 2: Exclude windows that are not at normal level (level 0)
+	// Popup menus, tooltips, etc. have higher levels
+	// Level is interface{}, so we need to type-assert
+	levelOK := false
+	switch v := w.Level.(type) {
+	case int:
+		levelOK = (v == 0)
+	case float64:
+		levelOK = (v == 0.0)
+	}
+	if !levelOK {
+		return false
+	}
+
+	// Filter 3: Check AX role/subrole (if available)
+	// Only apply this filter if role data exists
+	if w.Role != nil && *w.Role != "" {
+		// Only include standard windows
+		if *w.Role != "AXWindow" {
+			return false
+		}
+
+		// Check subrole - exclude non-standard windows
+		if w.Subrole != nil && *w.Subrole != "" {
+			excludedSubroles := []string{
+				"AXSystemDialog",
+				"AXFloatingWindow",
+				"AXUnknown",
+			}
+
+			for _, excluded := range excludedSubroles {
+				if *w.Subrole == excluded {
+					return false
+				}
+			}
+		}
+	}
+	// Note: If role is nil/empty, we don't filter - this allows windows
+	// that don't expose AX properties to still be shown
+
+	// Filter 4: Exclude windows with parents (child windows, popups)
+	if w.Parent != nil && *w.Parent != 0 {
+		return false
+	}
+
+	// Filter 5: Exclude windows from system processes
+	// This catches menu bar extras, notification center, etc.
+	if w.AppName != nil && *w.AppName != "" {
+		systemApps := []string{
+			"Window Server",
+			"Dock",
+			"SystemUIServer",
+			"ControlCenter",
+			"Control Center",
+			"NotificationCenter",
+			"Notification Center",
+			"Spotlight",
+			"TextInputMenuAgent",
+			"TextInputSwitcher",
+			"Open and Save Panel Service",
+			"CursorUIViewService",
+			"PhotosPicker",
+		}
+
+		appName := *w.AppName
+		for _, sysApp := range systemApps {
+			if appName == sysApp {
+				return false
+			}
+		}
+	}
+
+	// Also filter borders and similar utilities by checking window title
+	if w.Title != nil && *w.Title != "" {
+		title := *w.Title
+		utilityTitles := []string{
+			"borders",
+			"Menubar",
+			"Window Server",
+		}
+
+		for _, utilTitle := range utilityTitles {
+			if title == utilTitle {
+				return false
+			}
+		}
+	}
+
+	// Filter 6: Exclude windows with no space assignment
+	// Windows without spaces are typically floating overlays or system utilities
+	// that aren't meant to be managed (e.g., screenshot tools, global overlays)
+	if len(w.Spaces) == 0 {
+		return false
+	}
+
+	// Passed all filters
+	return true
 }
 
 // getState retrieves and parses the current state from the server

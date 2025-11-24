@@ -228,3 +228,19 @@ func extractSpaceID(from dict: NSDictionary) -> UInt64? {
     }
     return nil
 }
+
+/// Create a CFArray of window IDs with proper CFNumber types for SkyLight API
+/// This explicitly creates CFNumbers with kCFNumberSInt32Type, which is required
+/// by SLSCopySpacesForWindows. Swift's automatic bridging doesn't guarantee the
+/// correct type, causing the API to return empty arrays.
+func createWindowIDArray(_ windowIDs: [UInt32]) -> CFArray {
+    // Create CFNumber objects with explicit kCFNumberSInt32Type
+    let cfNumbers: [CFNumber] = windowIDs.map { windowID in
+        var mutableID = windowID
+        return CFNumberCreate(nil, .sInt32Type, &mutableID)
+    }
+
+    // Create CFArray with proper callbacks
+    // Note: CFArray retains the CFNumbers, so we don't need to manage their lifetime
+    return cfNumbers as CFArray
+}

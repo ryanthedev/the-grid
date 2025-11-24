@@ -10,6 +10,10 @@ import CoreGraphics
 import AppKit
 import Logging
 
+// Private AX API for getting window ID from AXUIElement
+@_silgen_name("_AXUIElementGetWindow")
+private func _AXUIElementGetWindow(_ element: AXUIElement, _ windowID: UnsafeMutablePointer<UInt32>) -> AXError
+
 class StateManager {
     // MARK: - Singleton
 
@@ -21,7 +25,6 @@ class StateManager {
     private let connectionID: Int32
     private let logger = Logger(label: "com.grid.StateManager")
     private let queue = DispatchQueue(label: "com.grid.StateManager", qos: .userInitiated)
-    private var eventContexts: [EventContext] = []  // Keep contexts alive (SkyLight - currently unused)
 
     // AX Observers (one per application)
     private var applicationObservers: [pid_t: ApplicationObserver] = [:]
@@ -61,9 +64,6 @@ class StateManager {
 
             // Create AX observers for existing applications
             self.observeExistingApplications()
-
-            // Register for window server events (SkyLight - currently not working)
-            // self.registerEventHandlers()
 
             self.logger.info("StateManager started successfully")
         }
@@ -269,6 +269,115 @@ class StateManager {
             .map { $0.id }
     }
 
+    /// Get AX role, subrole, and parent window ID for a window
+    /// Used for client-side filtering - server collects, client filters
+    private func getAXProperties(pid: pid_t, windowID: UInt32) -> (role: String?, subrole: String?, parent: UInt32?) {
+        let appElement = AXUIElementCreateApplication(pid)
+
+        // Get windows for this application
+        var windowsValue: CFTypeRef?
+        let windowsResult = AXUIElementCopyAttributeValue(
+            appElement,
+            kAXWindowsAttribute as CFString,
+            &windowsValue
+        )
+
+        guard windowsResult == .success,
+              let windows = windowsValue as? [AXUIElement] else {
+            return (nil, nil, nil)
+        }
+
+        // Find the matching window element
+        for windowElement in windows {
+            var cgWindowID: UInt32 = 0
+            let result = _AXUIElementGetWindow(windowElement, &cgWindowID)
+
+            if result == .success && cgWindowID == windowID {
+                // Get role
+                var roleValue: CFTypeRef?
+                AXUIElementCopyAttributeValue(
+                    windowElement,
+                    kAXRoleAttribute as CFString,
+                    &roleValue
+                )
+                let role = roleValue as? String
+
+                // Get subrole
+                var subroleValue: CFTypeRef?
+                AXUIElementCopyAttributeValue(
+                    windowElement,
+                    kAXSubroleAttribute as CFString,
+                    &subroleValue
+                )
+                let subrole = subroleValue as? String
+
+                // Get parent window (if any)
+                var parentValue: CFTypeRef?
+                AXUIElementCopyAttributeValue(
+                    windowElement,
+                    kAXParentAttribute as CFString,
+                    &parentValue
+                )
+
+                var parentID: UInt32? = nil
+                if let parentElement = parentValue {
+                    // Check if parent is also a window
+                    var parentCGID: UInt32 = 0
+                    if _AXUIElementGetWindow(parentElement as! AXUIElement, &parentCGID) == .success {
+                        parentID = parentCGID
+                    }
+                }
+
+                return (role, subrole, parentID)
+            }
+        }
+
+        return (nil, nil, nil)
+    }
+
+    /// Public method to update window spaces (for WindowManipulator)
+    func updateWindowSpacesPublic(_ windowID: UInt32) {
+        queue.async {
+            self.updateWindowSpaces(windowID)
+        }
+    }
+
+    /// Re-query and update space assignment for a specific window
+    /// Called after window moves or space changes to get fresh space data
+    private func updateWindowSpaces(_ windowID: UInt32) {
+        guard var window = state.windows[String(windowID)] else { return }
+
+        // Query spaces using SkyLight API with properly typed CFArray
+        let windowArray = createWindowIDArray([windowID])
+        if let spacesArray = SLSCopySpacesForWindows(connectionID, 0x7, windowArray) {
+            // Result is flat array of space IDs (CFNumbers)
+            let spaceNumbers: [NSNumber] = cfArrayToSwiftArray(spacesArray)
+            if !spaceNumbers.isEmpty {
+                // Success - update with actual spaces
+                window.spaces = spaceNumbers.map { $0.uint64Value }
+                state.windows[String(windowID)] = window
+                logger.trace("Updated window space assignment", metadata: [
+                    "windowID": "\(windowID)",
+                    "spaces": "\(spaceNumbers.map { $0.uint64Value })"
+                ])
+            } else {
+                // API returned empty - mark as unknown
+                window.spaces = []
+                state.windows[String(windowID)] = window
+                logger.trace("Window spaces unknown after re-query", metadata: [
+                    "windowID": "\(windowID)"
+                ])
+            }
+        } else {
+            // API call failed - mark as unknown
+            window.spaces = []
+            state.windows[String(windowID)] = window
+            logger.trace("SLSCopySpacesForWindows failed during re-query", metadata: [
+                "windowID": "\(windowID)"
+            ])
+        }
+    }
+
     private func refreshWindows() {
         let beforeCount = state.windows.count
         logger.debug("Refreshing windows...", metadata: ["current": "\(beforeCount)"])
@@ -331,6 +440,12 @@ class StateManager {
                 } else if let ownerName = windowInfo[kCGWindowOwnerName as String] as? String {
                     windowState.title = ownerName
                 }
+
+                // Get AX properties for client-side filtering
+                let (role, subrole, parent) = getAXProperties(pid: pid, windowID: windowID)
+                windowState.role = role
+                windowState.subrole = subrole
+                windowState.parent = parent
             }
 
             // Window is on-screen if it's in the list (we filtered for on-screen only)
@@ -349,41 +464,39 @@ class StateManager {
                     "method": "MSS sticky detection"
                 ])
             } else {
-                // 2. Not sticky - try to get spaces using SkyLight API
-                let windowArray = [windowID as CFNumber] as CFArray
+                // 2. Not sticky - try to get spaces using SkyLight API with properly typed CFArray
+                let windowArray = createWindowIDArray([windowID])
                 if let spacesArray = SLSCopySpacesForWindows(connectionID, 0x7, windowArray) {
-                    // Result is array of arrays (one per window)
-                    let spaceArrays: [[NSNumber]] = cfArrayToSwiftArray(spacesArray)
-                    if let firstArray = spaceArrays.first, !firstArray.isEmpty {
+                    // Result is flat array of space IDs (CFNumbers)
+                    let spaceNumbers: [NSNumber] = cfArrayToSwiftArray(spacesArray)
+                    if !spaceNumbers.isEmpty {
                         // Success - we know the actual spaces
-                        windowState.spaces = firstArray.map { $0.uint64Value }
+                        windowState.spaces = spaceNumbers.map { $0.uint64Value }
                         logger.info("🔍 DEBUG: Window space assignment", metadata: [
                             "windowID": "\(windowID)",
                             "appName": "\(windowState.appName ?? "unknown")",
                             "title": "\(String(windowState.title?.prefix(30) ?? "untitled"))",
-                            "spaces": "\(firstArray.map { $0.uint64Value })",
+                            "spaces": "\(spaceNumbers.map { $0.uint64Value })",
                             "method": "SLSCopySpacesForWindows"
                         ])
                     } else {
                         // API returned empty - we don't know which spaces this window is on
-                        // Set to empty array instead of guessing
+                        // Leave as empty array, will be updated via events when we get definitive info
                         windowState.spaces = []
-                        logger.warning("⚠️ DEBUG: Unable to determine window spaces", metadata: [
+                        logger.debug("Window spaces unknown (will update via events)", metadata: [
                             "windowID": "\(windowID)",
                             "appName": "\(windowState.appName ?? "unknown")",
-                            "title": "\(String(windowState.title?.prefix(30) ?? "untitled"))",
-                            "reason": "SLSCopySpacesForWindows returned empty",
-                            "result": "spaces set to [] (unknown)"
+                            "title": "\(String(windowState.title?.prefix(30) ?? "untitled"))"
                         ])
                     }
                 } else {
-                    // API call failed entirely - we don't know which spaces this window is on
+                    // API call failed - we don't know which spaces this window is on
+                    // Leave as empty array, will be updated via events when we get definitive info
                     windowState.spaces = []
-                    logger.error("❌ DEBUG: SLSCopySpacesForWindows API failed", metadata: [
+                    logger.debug("SLSCopySpacesForWindows failed (will update via events)", metadata: [
                         "windowID": "\(windowID)",
                         "appName": "\(windowState.appName ?? "unknown")",
-                        "title": "\(String(windowState.title?.prefix(30) ?? "untitled"))",
-                        "result": "spaces set to [] (unknown)"
+                        "title": "\(String(windowState.title?.prefix(30) ?? "untitled"))"
                     ])
                 }
             }
@@ -436,114 +549,6 @@ class StateManager {
                 result["space_\(pair.key)"] = Logger.MetadataValue(stringLiteral: "\(pair.value)")
             }
         logger.info("🔍 DEBUG: Window distribution across spaces", metadata: distributionMetadata)
-    }
-
-    // MARK: - Event Handling
-
-    private func registerEventHandlers() {
-        logger.info("Registering event handlers...")
-
-        // Register for window ordered events
-        registerEvent(.windowOrdered)
-
-        // Register for window destroyed events
-        registerEvent(.windowDestroyed)
-
-        // Register for space created events
-        registerEvent(.spaceCreated)
-
-        // Register for space destroyed events
-        registerEvent(.spaceDestroyed)
-
-        logger.info("Event handlers registered successfully", metadata: [
-            "count": "\(eventContexts.count)"
-        ])
-    }
-
-    private func registerEvent(_ eventType: SLSEventType) {
-        // Create a unique context for this event type
-        let eventContext = EventContext(manager: self, eventType: eventType)
-        eventContexts.append(eventContext)  // Keep it alive
-
-        let context = Unmanaged.passRetained(eventContext).toOpaque()
-
-        let error = SLSRegisterConnectionNotifyProc(
-            connectionID,
-            eventCallbackFunction,
-            eventType.rawValue,
-            context
-        )
-
-        if error.isSuccess {
-            logger.info("✓ Registered event handler", metadata: [
-                "event": "\(eventCodeToName(eventType.rawValue))",
-                "code": "\(eventType.rawValue)"
-            ])
-        } else {
-            logger.error("✗ Failed to register event handler", metadata: [
-                "event": "\(eventCodeToName(eventType.rawValue))",
-                "code": "\(eventType.rawValue)",
-                "error": "\(error)"
-            ])
-        }
-    }
-
-    func handleEvent(eventCode: UInt32, data: Int32) {
-        queue.async {
-            self.handleEventInternal(eventCode: eventCode, data: data)
-        }
-    }
-
-    private func handleEventInternal(eventCode: UInt32, data: Int32) {
-        let eventName = eventCodeToName(eventCode)
-        logger.info("📡 Event received", metadata: [
-            "event": "\(eventName)",
-            "code": "\(eventCode)",
-            "data": "\(data)"
-        ])
-
-        // Determine event type from code
-        let isWindowEvent = (eventCode == SLSEventType.windowOrdered.rawValue ||
-                            eventCode == SLSEventType.windowDestroyed.rawValue)
-        let isSpaceEvent = (eventCode == SLSEventType.spaceCreated.rawValue ||
-                           eventCode == SLSEventType.spaceDestroyed.rawValue)
-
-        if isWindowEvent {
-            logger.debug("→ Triggering window state refresh...")
-            refreshWindows()
-        } else if isSpaceEvent {
-            logger.debug("→ Triggering space state refresh...")
-            refreshSpaces()
-            refreshWindows()  // Also refresh windows since they may have moved
-        } else {
-            logger.warning("⚠️  Unknown event type, ignoring")
-            return
-        }
-
-        state.metadata.update()
-        logger.debug("✓ State updated", metadata: [
-            "timestamp": "\(state.metadata.lastUpdate)"
-        ])
-    }
-
-    // Helper to translate event codes to readable names
-    private func eventCodeToName(_ code: UInt32) -> String {
-        switch code {
-        case SLSEventType.windowOrdered.rawValue:
-            return "windowOrdered"
-        case SLSEventType.windowDestroyed.rawValue:
-            return "windowDestroyed"
-        case SLSEventType.spaceCreated.rawValue:
-            return "spaceCreated"
-        case SLSEventType.spaceDestroyed.rawValue:
-            return "spaceDestroyed"
-        case SLSEventType.missionControlEnter.rawValue:
-            return "missionControlEnter"
-        case SLSEventType.missionControlExit.rawValue:
-            return "missionControlExit"
-        default:
-            return "unknown(\(code))"
-        }
     }
 
     // MARK: - Observer Management
@@ -675,6 +680,10 @@ class StateManager {
             guard var window = self.state.windows[String(windowID)] else { return }
             window.frame = frame
             self.state.windows[String(windowID)] = window
+
+            // Re-query space assignment after move
+            self.updateWindowSpaces(windowID)
+
             self.state.metadata.update()
         }
     }
@@ -761,8 +770,18 @@ class StateManager {
 
     func handleSpaceChanged() {
         queue.async {
-            self.logger.info("Space changed - refreshing spaces")
+            self.logger.info("Space changed - refreshing spaces and window assignments")
             self.refreshSpaces()
+
+            // Re-query space assignments for all visible windows
+            for windowKey in self.state.windows.keys {
+                if let windowID = UInt32(windowKey),
+                   let window = self.state.windows[windowKey],
+                   window.isOrderedIn && !window.isMinimized {
+                    self.updateWindowSpaces(windowID)
+                }
+            }
+
             self.state.metadata.update()
         }
     }
@@ -869,10 +888,13 @@ class StateManager {
                 self.state.applications[pidKey]!.isHidden = false
             }
 
-            // Mark all windows for this app as ordered in
+            // Mark all windows for this app as ordered in and re-query their spaces
             for (key, var window) in self.state.windows where window.pid == pid {
                 window.isOrderedIn = true
                 self.state.windows[key] = window
+
+                // Re-query space assignment (may have changed while hidden)
+                self.updateWindowSpaces(window.id)
             }
 
             self.state.metadata.update()
@@ -937,39 +959,3 @@ class StateManager {
     }
 }
 
-// MARK: - Event Context
-
-// Context structure to pass both StateManager and event type to callback
-private class EventContext {
-    weak var manager: StateManager?
-    let eventType: SLSEventType
-
-    init(manager: StateManager, eventType: SLSEventType) {
-        self.manager = manager
-        self.eventType = eventType
-    }
-}
-
-// MARK: - Global Event Callback
-
-private func eventCallbackFunction(cid: Int32, data: Int32, ctx: UnsafeMutableRawPointer?) -> Void {
-    // Add logging at the very start to prove callback is invoked
-    print("[DEBUG] 🔔 Event callback invoked | cid=\(cid) data=\(data)")
-
-    guard let ctx = ctx else {
-        print("[ERROR] ⚠️  Event callback context is nil!")
-        return
-    }
-
-    let context = Unmanaged<EventContext>.fromOpaque(ctx).takeUnretainedValue()
-
-    guard let manager = context.manager else {
-        print("[ERROR] ⚠️  StateManager is nil in context!")
-        return
-    }
-
-    let eventCode = context.eventType.rawValue
-    print("[DEBUG] → Queuing event to dispatch queue | event=\(eventCode) data=\(data)")
-
-    manager.handleEvent(eventCode: eventCode, data: data)
-}

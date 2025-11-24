@@ -18,8 +18,8 @@ type State struct {
 // Window represents a window in the system
 type Window struct {
 	ID           int                    `json:"id"`
-	Title        string                 `json:"title"`
-	AppName      string                 `json:"appName"`
+	Title        *string                `json:"title"`
+	AppName      *string                `json:"appName"`
 	PID          int                    `json:"pid"`
 	Frame        [][]interface{}        `json:"frame"` // [[x, y], [width, height]] - can contain float64 or bool for overflow
 	Spaces       []interface{}          `json:"spaces"` // Can be int or bool for large uint64
@@ -30,6 +30,9 @@ type Window struct {
 	SubLevel     interface{}            `json:"subLevel"`
 	HasTransform bool                   `json:"hasTransform"`
 	Metadata     map[string]interface{} `json:"metadata"`
+	Role         *string                `json:"role,omitempty"`    // AX role for filtering
+	Subrole      *string                `json:"subrole,omitempty"` // AX subrole for filtering
+	Parent       *int                   `json:"parent,omitempty"`  // Parent window ID for filtering
 }
 
 // toFloat64 converts interface{} to float64, handling bool for overflow

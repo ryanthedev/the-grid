@@ -224,9 +224,9 @@ func getWindowsForDisplay(state *models.State, display *models.Display) []*model
 
 // createWindowLabel creates a label for a window
 func createWindowLabel(win *models.Window, showID bool) string {
-	appName := win.AppName
-	if appName == "" {
-		appName = "Unknown"
+	appName := "Unknown"
+	if win.AppName != nil && *win.AppName != "" {
+		appName = *win.AppName
 	}
 
 	size := fmt.Sprintf("%.0fx%.0f", win.GetWidth(), win.GetHeight())

@@ -176,6 +176,11 @@ struct WindowState: Codable {
     var hasTransform: Bool
     var metadata: [String: String]  // Custom metadata
 
+    // Properties for client-side filtering
+    var role: String?       // AX role (e.g., "AXWindow", "AXButton")
+    var subrole: String?    // AX subrole (e.g., "AXStandardWindow", "AXDialog")
+    var parent: UInt32?     // Parent window ID (nil if root window)
+
     enum CodingKeys: String, CodingKey {
         case id
         case frame
@@ -190,6 +195,9 @@ struct WindowState: Codable {
         case alpha
         case hasTransform
         case metadata
+        case role
+        case subrole
+        case parent
     }
 
     init(id: UInt32) {
@@ -206,6 +214,9 @@ struct WindowState: Codable {
         self.alpha = 1.0
         self.hasTransform = false
         self.metadata = [:]
+        self.role = nil
+        self.subrole = nil
+        self.parent = nil
     }
 }
 

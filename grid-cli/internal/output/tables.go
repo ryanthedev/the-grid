@@ -27,8 +27,14 @@ func PrintWindowsTable(windows []*models.Window) {
 		}
 
 		spaces := formatIntSlice(win.Spaces)
-		title := truncate(win.Title, 30)
-		appName := truncate(win.AppName, 20)
+		title := ""
+		if win.Title != nil {
+			title = truncate(*win.Title, 30)
+		}
+		appName := ""
+		if win.AppName != nil {
+			appName = truncate(*win.AppName, 20)
+		}
 		size := fmt.Sprintf("%.0fx%.0f", win.GetWidth(), win.GetHeight())
 
 		table.Append(
@@ -148,8 +154,16 @@ func PrintApplicationsTable(apps []*models.Application) {
 // PrintWindowDetail prints detailed information about a single window
 func PrintWindowDetail(win *models.Window, app *models.Application) {
 	fmt.Printf("Window ID: %d\n", win.ID)
-	fmt.Printf("Title: %s\n", win.Title)
-	fmt.Printf("Application: %s (PID: %d)\n", win.AppName, win.PID)
+	title := ""
+	if win.Title != nil {
+		title = *win.Title
+	}
+	appName := ""
+	if win.AppName != nil {
+		appName = *win.AppName
+	}
+	fmt.Printf("Title: %s\n", title)
+	fmt.Printf("Application: %s (PID: %d)\n", appName, win.PID)
 	if app != nil {
 		fmt.Printf("Bundle ID: %s\n", app.BundleIdentifier)
 	}
