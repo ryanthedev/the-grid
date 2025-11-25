@@ -28,7 +28,33 @@ All types, constants, and methods match the spec:
 
 ## Phase 1: Config Parser
 
-*Not yet started*
+### 2025-11-25 - Minor Addition
+
+**Summary:** Phase 1 was implemented as specified in `PHASE1_CONFIG_PARSER.md` with one addition.
+
+**Spec said:** Only `LoadConfig(path)` for loading configuration.
+
+**What I did:** Added `LoadConfigFromBytes(data, format)` helper function.
+
+**Reason:** Makes testing easier without needing to write temporary files. Tests can pass YAML/JSON strings directly.
+
+**Files created:**
+- `grid-cli/internal/config/types.go`
+- `grid-cli/internal/config/parser.go`
+- `grid-cli/internal/config/validate.go`
+- `grid-cli/internal/config/config.go`
+- `grid-cli/internal/config/config_test.go`
+
+**All spec features implemented:**
+- YAML and JSON loading
+- Track size parsing: "1fr", "2.5fr", "300px", "auto", "minmax(200px, 1fr)"
+- Areas-to-cells conversion
+- Full validation (duplicate IDs, rectangular areas, bounds checking)
+- ToLayout() conversion to types.Layout
+
+**Verification:**
+- `go build ./...` - PASS
+- `go test ./internal/config/... -v` - 17 tests PASS
 
 ---
 
