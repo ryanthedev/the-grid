@@ -176,10 +176,17 @@ struct WindowState: Codable {
     var hasTransform: Bool
     var metadata: [String: String]  // Custom metadata
 
-    // Properties for client-side filtering
+    // Properties for client-side filtering (from AX API)
     var role: String?       // AX role (e.g., "AXWindow", "AXButton")
     var subrole: String?    // AX subrole (e.g., "AXStandardWindow", "AXDialog")
     var parent: UInt32?     // Parent window ID (nil if root window)
+
+    // Window button presence (for floating/popup detection)
+    var hasCloseButton: Bool
+    var hasFullscreenButton: Bool
+    var hasMinimizeButton: Bool
+    var hasZoomButton: Bool
+    var isModal: Bool
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -198,6 +205,11 @@ struct WindowState: Codable {
         case role
         case subrole
         case parent
+        case hasCloseButton
+        case hasFullscreenButton
+        case hasMinimizeButton
+        case hasZoomButton
+        case isModal
     }
 
     init(id: UInt32) {
@@ -217,6 +229,11 @@ struct WindowState: Codable {
         self.role = nil
         self.subrole = nil
         self.parent = nil
+        self.hasCloseButton = false
+        self.hasFullscreenButton = false
+        self.hasMinimizeButton = false
+        self.hasZoomButton = false
+        self.isModal = false
     }
 }
 

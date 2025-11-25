@@ -550,6 +550,46 @@ class MessageHandler {
             }
         }
 
+        // MARK: - Window Focus Methods
+
+        // Focus window (raise and activate)
+        register(method: "window.focus") { [weak self] request, completion in
+            guard let self = self else { return }
+            guard let params = request.params else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
+                return
+            }
+
+            // Accept windowId as either string or int
+            var windowID: UInt32?
+            if let windowIdInt = params["windowId"]?.value as? Int {
+                windowID = UInt32(windowIdInt)
+            } else if let windowIdStr = params["windowId"]?.value as? String,
+                      let parsed = UInt32(windowIdStr) {
+                windowID = parsed
+            }
+
+            guard let wid = windowID else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Missing or invalid windowId")))
+                return
+            }
+
+            // Get window state to find PID
+            let state = StateManager.shared.getState()
+            guard let windowState = state.windows[String(wid)] else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32001, message: "Window not found: \(wid)")))
+                return
+            }
+
+            let manipulator = WindowManipulator(connectionID: state.metadata.connectionID, logger: self.logger)
+
+            if manipulator.focusWindow(pid: windowState.pid, windowID: wid) {
+                completion(Response(id: request.id, result: AnyCodable(["success": true, "windowId": wid])))
+            } else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to focus window")))
+            }
+        }
+
         // MARK: - Space Management Methods (MSS)
 
         // Create space

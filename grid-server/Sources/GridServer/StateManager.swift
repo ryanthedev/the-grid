@@ -269,9 +269,22 @@ class StateManager {
             .map { $0.id }
     }
 
-    /// Get AX role, subrole, and parent window ID for a window
-    /// Used for client-side filtering - server collects, client filters
-    private func getAXProperties(pid: pid_t, windowID: UInt32) -> (role: String?, subrole: String?, parent: UInt32?) {
+    /// Result of AX property collection for a window
+    struct AXWindowProperties {
+        var role: String?
+        var subrole: String?
+        var parent: UInt32?
+        var hasCloseButton: Bool = false
+        var hasFullscreenButton: Bool = false
+        var hasMinimizeButton: Bool = false
+        var hasZoomButton: Bool = false
+        var isModal: Bool = false
+    }
+
+    /// Get AX properties for a window (role, subrole, buttons, modal status)
+    /// Used for client-side floating/popup detection
+    private func getAXProperties(pid: pid_t, windowID: UInt32) -> AXWindowProperties {
+        var props = AXWindowProperties()
         let appElement = AXUIElementCreateApplication(pid)
 
         // Get windows for this application
@@ -284,8 +297,11 @@ class StateManager {
 
         guard windowsResult == .success,
               let windows = windowsValue as? [AXUIElement] else {
-            return (nil, nil, nil)
+            logger.debug("🔍 AX: Failed to get windows for pid \(pid), windowID \(windowID), error: \(windowsResult.rawValue)")
+            return props
         }
+
+        logger.debug("🔍 AX: pid \(pid) has \(windows.count) AX windows, looking for CGWindow \(windowID)")
 
         // Find the matching window element
         for windowElement in windows {
@@ -295,44 +311,58 @@ class StateManager {
             if result == .success && cgWindowID == windowID {
                 // Get role
                 var roleValue: CFTypeRef?
-                AXUIElementCopyAttributeValue(
-                    windowElement,
-                    kAXRoleAttribute as CFString,
-                    &roleValue
-                )
-                let role = roleValue as? String
+                AXUIElementCopyAttributeValue(windowElement, kAXRoleAttribute as CFString, &roleValue)
+                props.role = roleValue as? String
 
                 // Get subrole
                 var subroleValue: CFTypeRef?
-                AXUIElementCopyAttributeValue(
-                    windowElement,
-                    kAXSubroleAttribute as CFString,
-                    &subroleValue
-                )
-                let subrole = subroleValue as? String
+                AXUIElementCopyAttributeValue(windowElement, kAXSubroleAttribute as CFString, &subroleValue)
+                props.subrole = subroleValue as? String
 
                 // Get parent window (if any)
                 var parentValue: CFTypeRef?
-                AXUIElementCopyAttributeValue(
-                    windowElement,
-                    kAXParentAttribute as CFString,
-                    &parentValue
-                )
-
-                var parentID: UInt32? = nil
+                AXUIElementCopyAttributeValue(windowElement, kAXParentAttribute as CFString, &parentValue)
                 if let parentElement = parentValue {
-                    // Check if parent is also a window
                     var parentCGID: UInt32 = 0
                     if _AXUIElementGetWindow(parentElement as! AXUIElement, &parentCGID) == .success {
-                        parentID = parentCGID
+                        props.parent = parentCGID
                     }
                 }
 
-                return (role, subrole, parentID)
+                // Get button presence (for floating/popup detection)
+                var closeBtn: CFTypeRef?
+                if AXUIElementCopyAttributeValue(windowElement, kAXCloseButtonAttribute as CFString, &closeBtn) == .success {
+                    props.hasCloseButton = closeBtn != nil
+                }
+
+                var fullscreenBtn: CFTypeRef?
+                if AXUIElementCopyAttributeValue(windowElement, kAXFullScreenButtonAttribute as CFString, &fullscreenBtn) == .success {
+                    props.hasFullscreenButton = fullscreenBtn != nil
+                }
+
+                var minimizeBtn: CFTypeRef?
+                if AXUIElementCopyAttributeValue(windowElement, kAXMinimizeButtonAttribute as CFString, &minimizeBtn) == .success {
+                    props.hasMinimizeButton = minimizeBtn != nil
+                }
+
+                var zoomBtn: CFTypeRef?
+                if AXUIElementCopyAttributeValue(windowElement, kAXZoomButtonAttribute as CFString, &zoomBtn) == .success {
+                    props.hasZoomButton = zoomBtn != nil
+                }
+
+                // Get modal status
+                var modalValue: CFTypeRef?
+                if AXUIElementCopyAttributeValue(windowElement, kAXModalAttribute as CFString, &modalValue) == .success {
+                    props.isModal = (modalValue as? Bool) ?? false
+                }
+
+                logger.debug("🔍 AX: Matched windowID \(windowID): role=\(props.role ?? "nil"), subrole=\(props.subrole ?? "nil"), buttons=[\(props.hasCloseButton ? "close" : "")|\(props.hasFullscreenButton ? "fs" : "")|\(props.hasMinimizeButton ? "min" : "")|\(props.hasZoomButton ? "zoom" : "")], modal=\(props.isModal)")
+                return props
             }
         }
 
-        return (nil, nil, nil)
+        logger.debug("🔍 AX: No AX window matched CGWindow \(windowID) in pid \(pid) (checked \(windows.count) windows)")
+        return props
     }
 
     /// Public method to update window spaces (for WindowManipulator)
@@ -442,10 +472,15 @@ class StateManager {
                 }
 
                 // Get AX properties for client-side filtering
-                let (role, subrole, parent) = getAXProperties(pid: pid, windowID: windowID)
-                windowState.role = role
-                windowState.subrole = subrole
-                windowState.parent = parent
+                let axProps = getAXProperties(pid: pid, windowID: windowID)
+                windowState.role = axProps.role
+                windowState.subrole = axProps.subrole
+                windowState.parent = axProps.parent
+                windowState.hasCloseButton = axProps.hasCloseButton
+                windowState.hasFullscreenButton = axProps.hasFullscreenButton
+                windowState.hasMinimizeButton = axProps.hasMinimizeButton
+                windowState.hasZoomButton = axProps.hasZoomButton
+                windowState.isModal = axProps.isModal
             }
 
             // Window is on-screen if it's in the list (we filtered for on-screen only)

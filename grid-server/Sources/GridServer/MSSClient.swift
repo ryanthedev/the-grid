@@ -261,6 +261,44 @@ class MSSClient {
         return result
     }
 
+    /// Focus a window (bring to front and give focus)
+    /// - Parameter windowID: The window ID
+    /// - Returns: true if successful
+    func focusWindow(_ windowID: UInt32) -> Bool {
+        return queue.sync {
+            guard let ctx = ctx else { return false }
+
+            logger.debug("Focusing window via MSS", metadata: ["windowID": "\(windowID)"])
+            return mss_window_focus(ctx, windowID)
+        }
+    }
+
+    /// Order a window to the front of the z-stack
+    /// - Parameter windowID: The window ID
+    /// - Returns: true if successful
+    func orderWindowToFront(_ windowID: UInt32) -> Bool {
+        return queue.sync {
+            guard let ctx = ctx else { return false }
+
+            logger.debug("Ordering window to front via MSS", metadata: ["windowID": "\(windowID)"])
+            var wid = windowID
+            return mss_window_order_in(ctx, &wid, 1)
+        }
+    }
+
+    /// Order multiple windows to the front of the z-stack
+    /// - Parameter windowIDs: Array of window IDs
+    /// - Returns: true if successful
+    func orderWindowsToFront(_ windowIDs: [UInt32]) -> Bool {
+        return queue.sync {
+            guard let ctx = ctx, !windowIDs.isEmpty else { return false }
+
+            logger.debug("Ordering \(windowIDs.count) windows to front via MSS")
+            var wids = windowIDs
+            return mss_window_order_in(ctx, &wids, Int32(windowIDs.count))
+        }
+    }
+
     /// Set window shadow visibility
     /// - Parameters:
     ///   - windowID: The window ID
