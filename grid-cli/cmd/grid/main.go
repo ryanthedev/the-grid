@@ -1164,6 +1164,173 @@ var spaceFocusCmd = &cobra.Command{
 	},
 }
 
+// MARK: - Render Command (POC)
+
+// RenderWindow represents a window with normalized coordinates
+type RenderWindow struct {
+	ID     int     `json:"id"`
+	X      float64 `json:"x"`      // Normalized 0.0-1.0
+	Y      float64 `json:"y"`      // Normalized 0.0-1.0
+	Width  float64 `json:"width"`  // Normalized 0.0-1.0
+	Height float64 `json:"height"` // Normalized 0.0-1.0
+}
+
+// RenderLayout represents the layout configuration from stdin
+type RenderLayout struct {
+	Windows []RenderWindow `json:"windows"`
+}
+
+// renderCmd renders window layout from JSON stdin
+var renderCmd = &cobra.Command{
+	Use:   "render <space-id>",
+	Short: "Render window layout from JSON configuration",
+	Long: `Reads window layout configuration from stdin as JSON and positions
+windows on the specified space. Coordinates are normalized (0.0-1.0) relative
+to the display dimensions.
+
+Example JSON input:
+{
+  "windows": [
+    {"id": 12345, "x": 0.0, "y": 0.0, "width": 0.5, "height": 1.0},
+    {"id": 67890, "x": 0.5, "y": 0.0, "width": 0.5, "height": 1.0}
+  ]
+}`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		spaceID := args[0]
+
+		// 1. Read JSON from stdin
+		var layout RenderLayout
+		decoder := json.NewDecoder(os.Stdin)
+		if err := decoder.Decode(&layout); err != nil {
+			printError(fmt.Sprintf("Failed to parse input JSON: %v", err))
+			return err
+		}
+
+		if len(layout.Windows) == 0 {
+			printError("No windows specified in input")
+			return fmt.Errorf("no windows specified")
+		}
+
+		// 2. Get current state to find the space and display
+		state, err := getState()
+		if err != nil {
+			return err
+		}
+
+		// 3. Validate space exists
+		_, exists := state.Spaces[spaceID]
+		if !exists {
+			printError(fmt.Sprintf("Space %s not found", spaceID))
+			return fmt.Errorf("space not found: %s", spaceID)
+		}
+
+		// 4. Find the display for this space
+		var targetDisplay *models.Display
+		for _, display := range state.Displays {
+			for _, sid := range display.GetSpaceIDs() {
+				if sid == spaceID {
+					targetDisplay = display
+					break
+				}
+			}
+			if targetDisplay != nil {
+				break
+			}
+		}
+
+		if targetDisplay == nil {
+			printError(fmt.Sprintf("Could not find display for space %s", spaceID))
+			return fmt.Errorf("display not found for space")
+		}
+
+		// Get display dimensions
+		if targetDisplay.PixelWidth == nil || targetDisplay.PixelHeight == nil {
+			printError("Display dimensions not available")
+			return fmt.Errorf("display dimensions missing")
+		}
+
+		displayWidth := float64(*targetDisplay.PixelWidth)
+		displayHeight := float64(*targetDisplay.PixelHeight)
+
+		if !jsonOutput {
+			infoColor.Printf("Rendering %d windows on space %s (display: %.0fx%.0f)\n",
+				len(layout.Windows), spaceID, displayWidth, displayHeight)
+		}
+
+		// 5. Create client
+		c := client.NewClient(socketPath, timeout)
+		defer c.Close()
+
+		// 6. Apply window positions
+		var errors []string
+		successCount := 0
+
+		for _, win := range layout.Windows {
+			// Convert normalized coordinates to absolute pixels
+			absX := win.X * displayWidth
+			absY := win.Y * displayHeight
+			absWidth := win.Width * displayWidth
+			absHeight := win.Height * displayHeight
+
+			updates := map[string]interface{}{
+				"x":       absX,
+				"y":       absY,
+				"width":   absWidth,
+				"height":  absHeight,
+				"spaceId": spaceID,
+			}
+
+			result, err := c.UpdateWindow(context.Background(), win.ID, updates)
+			if err != nil {
+				errors = append(errors, fmt.Sprintf("Window %d: %v", win.ID, err))
+				continue
+			}
+
+			// Check for partial failures
+			if result != nil {
+				if errInfo, ok := result["error"]; ok && errInfo != nil {
+					errors = append(errors, fmt.Sprintf("Window %d: server error", win.ID))
+					continue
+				}
+			}
+
+			successCount++
+			if !jsonOutput {
+				successColor.Printf("✓ Window %d positioned at (%.0f, %.0f) size %.0fx%.0f\n",
+					win.ID, absX, absY, absWidth, absHeight)
+			}
+		}
+
+		// 7. Report results
+		if len(errors) > 0 {
+			printError(fmt.Sprintf("Render completed with %d errors out of %d windows",
+				len(errors), len(layout.Windows)))
+			for _, e := range errors {
+				fmt.Fprintln(os.Stderr, "  -", e)
+			}
+			return fmt.Errorf("%d window(s) failed to render", len(errors))
+		}
+
+		if !jsonOutput {
+			successColor.Printf("\n✓ Successfully rendered %d windows on space %s\n",
+				successCount, spaceID)
+		} else {
+			// Output summary in JSON mode
+			summary := map[string]interface{}{
+				"success":      true,
+				"spaceId":      spaceID,
+				"windowsTotal": len(layout.Windows),
+				"windowsOk":    successCount,
+				"windowsFail":  len(errors),
+			}
+			return printJSON(summary)
+		}
+
+		return nil
+	},
+}
+
 func init() {
 	// Global flags
 	rootCmd.PersistentFlags().StringVar(&socketPath, "socket", client.DefaultSocketPath, "Unix socket path")
@@ -1179,6 +1346,7 @@ func init() {
 	rootCmd.AddCommand(listCmd)
 	rootCmd.AddCommand(windowCmd)
 	rootCmd.AddCommand(spaceCmd)
+	rootCmd.AddCommand(renderCmd)
 
 	// Add show subcommands
 	showCmd.AddCommand(showLayoutCmd)
