@@ -1,6 +1,6 @@
-# GridWM Layout Feature - Working Notes
+# theGrid Layout Feature - Working Notes
 
-This document tracks context and knowledge for implementing the GridWM layout feature across phases.
+This document tracks context and knowledge for implementing the theGrid layout feature across phases.
 
 ## Project Overview
 
@@ -77,7 +77,7 @@ This document tracks context and knowledge for implementing the GridWM layout fe
 
 ### Type Organization
 - **`internal/models/`** - Server state types (Window, Space, Display, Application)
-- **`internal/types/`** - Layout calculation types (NEW - for GridWM feature)
+- **`internal/types/`** - Layout calculation types (NEW - for layouts feature)
 
 ### Coordinate Systems
 - Server uses global screen coordinates with origin at top-left

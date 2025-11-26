@@ -1,4 +1,4 @@
-# GridWM Layout Feature - Deviations from Spec
+# theGrid Layout Feature - Deviations from Spec
 
 This document tracks any deviations from the original specifications in the `phases/` folder.
 
@@ -326,4 +326,4 @@ All types, constants, and methods match the spec:
 
 ## All Phases Complete!
 
-The GridWM layout feature is now fully implemented across all 7 phases.
+The theGrid layout feature is now fully implemented across all 7 phases.

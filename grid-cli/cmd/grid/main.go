@@ -427,89 +427,10 @@ var windowFindCmd = &cobra.Command{
 
 // Window manipulation command variables
 var (
-	moveX, moveY         float64
-	resizeWidth, resizeHeight float64
 	updateX, updateY, updateWidth, updateHeight float64
-	toSpace              string
-	toDisplay            string
-	centerWindow         bool
+	toSpace                                     string
+	toDisplay                                   string
 )
-
-// windowMoveCmd moves a window to a specific position
-var windowMoveCmd = &cobra.Command{
-	Use:   "move <window-id>",
-	Short: "Move a window to a specific position",
-	Long:  `Moves a window to the specified X and Y coordinates.`,
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		windowID, err := strconv.Atoi(args[0])
-		if err != nil {
-			return fmt.Errorf("invalid window ID: %v", err)
-		}
-
-		updates := map[string]interface{}{
-			"x": moveX,
-			"y": moveY,
-		}
-
-		c := client.NewClient(socketPath, timeout)
-		defer c.Close()
-
-		result, err := c.UpdateWindow(context.Background(), windowID, updates)
-		if err != nil {
-			printError(fmt.Sprintf("Failed to move window: %v", err))
-			return err
-		}
-
-		if jsonOutput {
-			return printJSON(result)
-		}
-
-		successColor.Printf("✓ Window %d moved to (%.0f, %.0f)\n", windowID, moveX, moveY)
-		if updates, ok := result["updatesApplied"].([]interface{}); ok && len(updates) > 0 {
-			fmt.Printf("  Applied: %v\n", updates)
-		}
-		return nil
-	},
-}
-
-// windowResizeCmd resizes a window
-var windowResizeCmd = &cobra.Command{
-	Use:   "resize <window-id>",
-	Short: "Resize a window",
-	Long:  `Resizes a window to the specified width and height.`,
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		windowID, err := strconv.Atoi(args[0])
-		if err != nil {
-			return fmt.Errorf("invalid window ID: %v", err)
-		}
-
-		updates := map[string]interface{}{
-			"width":  resizeWidth,
-			"height": resizeHeight,
-		}
-
-		c := client.NewClient(socketPath, timeout)
-		defer c.Close()
-
-		result, err := c.UpdateWindow(context.Background(), windowID, updates)
-		if err != nil {
-			printError(fmt.Sprintf("Failed to resize window: %v", err))
-			return err
-		}
-
-		if jsonOutput {
-			return printJSON(result)
-		}
-
-		successColor.Printf("✓ Window %d resized to %.0fx%.0f\n", windowID, resizeWidth, resizeHeight)
-		if updates, ok := result["updatesApplied"].([]interface{}); ok && len(updates) > 0 {
-			fmt.Printf("  Applied: %v\n", updates)
-		}
-		return nil
-	},
-}
 
 // windowUpdateCmd updates multiple window properties at once
 var windowUpdateCmd = &cobra.Command{
@@ -634,94 +555,6 @@ var windowToDisplayCmd = &cobra.Command{
 		}
 
 		successColor.Printf("✓ Window %d moved to display %s\n", windowID, displayUUID)
-		if updates, ok := result["updatesApplied"].([]interface{}); ok && len(updates) > 0 {
-			fmt.Printf("  Applied: %v\n", updates)
-		}
-		return nil
-	},
-}
-
-// windowCenterCmd centers a window on its current display
-var windowCenterCmd = &cobra.Command{
-	Use:   "center <window-id>",
-	Short: "Center a window on its display",
-	Long:  `Centers a window on its current display. Calculates the center position based on display size.`,
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		windowID, err := strconv.Atoi(args[0])
-		if err != nil {
-			return fmt.Errorf("invalid window ID: %v", err)
-		}
-
-		// Get current state to calculate center position
-		state, err := getState()
-		if err != nil {
-			return err
-		}
-
-		window := state.FindWindowByID(windowID)
-		if window == nil {
-			return fmt.Errorf("window %d not found", windowID)
-		}
-
-		// Find the display containing this window's primary space
-		if len(state.Displays) == 0 {
-			return fmt.Errorf("no displays found")
-		}
-
-		// Find the display for this window based on its primary space
-		var targetDisplay *models.Display
-		primarySpace := window.GetPrimarySpace()
-		for _, display := range state.Displays {
-			for _, spaceID := range display.GetSpaceIDs() {
-				if spaceID == primarySpace {
-					targetDisplay = display
-					break
-				}
-			}
-			if targetDisplay != nil {
-				break
-			}
-		}
-
-		// Fall back to first display if we can't find the window's display
-		if targetDisplay == nil {
-			targetDisplay = state.Displays[0]
-		}
-
-		// Use actual display dimensions
-		displayWidth := 1920.0  // Default fallback
-		displayHeight := 1080.0 // Default fallback
-		if targetDisplay.PixelWidth != nil && targetDisplay.PixelHeight != nil {
-			displayWidth = float64(*targetDisplay.PixelWidth)
-			displayHeight = float64(*targetDisplay.PixelHeight)
-		}
-
-		winWidth := window.GetWidth()
-		winHeight := window.GetHeight()
-
-		centerX := (displayWidth - winWidth) / 2
-		centerY := (displayHeight - winHeight) / 2
-
-		updates := map[string]interface{}{
-			"x": centerX,
-			"y": centerY,
-		}
-
-		c := client.NewClient(socketPath, timeout)
-		defer c.Close()
-
-		result, err := c.UpdateWindow(context.Background(), windowID, updates)
-		if err != nil {
-			printError(fmt.Sprintf("Failed to center window: %v", err))
-			return err
-		}
-
-		if jsonOutput {
-			return printJSON(result)
-		}
-
-		successColor.Printf("✓ Window %d centered at (%.0f, %.0f)\n", windowID, centerX, centerY)
 		if updates, ok := result["updatesApplied"].([]interface{}); ok && len(updates) > 0 {
 			fmt.Printf("  Applied: %v\n", updates)
 		}
@@ -1172,7 +1005,7 @@ var spaceFocusCmd = &cobra.Command{
 	},
 }
 
-// MARK: - GridWM Layout Commands
+// MARK: - Layout Commands
 
 // layoutCmd is the parent command for layout subcommands
 var gridLayoutCmd = &cobra.Command{
@@ -1427,7 +1260,7 @@ var layoutReapplyCmd = &cobra.Command{
 	},
 }
 
-// MARK: - GridWM Config Commands
+// MARK: - Config Commands
 
 // gridConfigCmd is the parent command for config subcommands
 var gridConfigCmd = &cobra.Command{
@@ -1555,7 +1388,7 @@ appRules:
 	},
 }
 
-// MARK: - GridWM State Commands
+// MARK: - State Commands
 
 // gridStateCmd is the parent command for state subcommands
 var gridStateCmd = &cobra.Command{
@@ -2263,12 +2096,9 @@ func init() {
 	// Add window subcommands
 	windowCmd.AddCommand(windowGetCmd)
 	windowCmd.AddCommand(windowFindCmd)
-	windowCmd.AddCommand(windowMoveCmd)
-	windowCmd.AddCommand(windowResizeCmd)
 	windowCmd.AddCommand(windowUpdateCmd)
 	windowCmd.AddCommand(windowToSpaceCmd)
 	windowCmd.AddCommand(windowToDisplayCmd)
-	windowCmd.AddCommand(windowCenterCmd)
 	windowCmd.AddCommand(windowSetOpacityCmd)
 	windowCmd.AddCommand(windowFadeOpacityCmd)
 	windowCmd.AddCommand(windowGetOpacityCmd)
@@ -2285,17 +2115,7 @@ func init() {
 	spaceCmd.AddCommand(spaceDestroyCmd)
 	spaceCmd.AddCommand(spaceFocusCmd)
 
-	// Add flags for manipulation commands
-	windowMoveCmd.Flags().Float64Var(&moveX, "x", 0, "X position")
-	windowMoveCmd.Flags().Float64Var(&moveY, "y", 0, "Y position")
-	windowMoveCmd.MarkFlagRequired("x")
-	windowMoveCmd.MarkFlagRequired("y")
-
-	windowResizeCmd.Flags().Float64Var(&resizeWidth, "width", 0, "Width in pixels")
-	windowResizeCmd.Flags().Float64Var(&resizeHeight, "height", 0, "Height in pixels")
-	windowResizeCmd.MarkFlagRequired("width")
-	windowResizeCmd.MarkFlagRequired("height")
-
+	// Add flags for window update command
 	windowUpdateCmd.Flags().Float64Var(&updateX, "x", 0, "X position (optional)")
 	windowUpdateCmd.Flags().Float64Var(&updateY, "y", 0, "Y position (optional)")
 	windowUpdateCmd.Flags().Float64Var(&updateWidth, "width", 0, "Width in pixels (optional)")

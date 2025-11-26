@@ -1,11 +1,11 @@
-# GridWM: Grid-Based macOS Tiling Window Manager
+# theGrid: Grid-Based macOS Tiling Window Manager
 ## Technical Specification v1.0
 
 ---
 
 ## 1. Executive Summary
 
-GridWM is a macOS tiling window manager that uses a grid-based layout model. Users define 2D grid layouts (tracks, areas, spanning) and cycle through these layouts to organize their workspace. The system supports multiple monitors, per-Space configurations, and flexible window arrangement within cells.
+theGrid is a macOS tiling window manager that uses a grid-based layout model. Users define 2D grid layouts (tracks, areas, spanning) and cycle through these layouts to organize their workspace. The system supports multiple monitors, per-Space configurations, and flexible window arrangement within cells.
 
 ### Key Design Principles
 
@@ -137,7 +137,7 @@ Window closes
 
 ### 4.1 File Structure
 
-Configuration is stored in YAML format at `~/.config/gridwm/config.yaml`
+Configuration is stored in YAML format at `~/.config/thegrid/config.yaml`
 
 ```yaml
 settings:           # Global settings
@@ -991,30 +991,30 @@ AXObserverAddNotification(observer, window, kAXWindowCreatedNotification, contex
 
 ```bash
 # Apply a layout
-gridwm apply-layout ide
+grid layout apply ide
 
 # Cycle layouts
-gridwm cycle-layout
+grid layout cycle
 
 # Move focus
-gridwm focus left
-gridwm focus-cell editor
+grid focus left
+grid focus cell editor
 
 # Move window
-gridwm move-window --window-id 123 --cell terminal
-gridwm move-window-direction right
+grid window move --window-id 123 --cell terminal
+grid window move-direction right
 
 # Query state
-gridwm get-windows
-gridwm get-layout
+grid list windows
+grid layout current
 
 # Configuration
-gridwm reload-config
-gridwm validate-config
+grid config show
+grid config validate
 
 # Debugging
-gridwm dump-state
-gridwm list-spaces
+grid state show
+grid list spaces
 ```
 
 ---

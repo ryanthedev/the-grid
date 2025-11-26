@@ -50,9 +50,7 @@ func ApplyLayout(
 		return fmt.Errorf("failed to get server state: %w", err)
 	}
 
-	// 2.5 Log context
 	logging.Log("ApplyLayout: %s", layoutID)
-	logContextChange(runtimeState, serverState)
 
 	// 3. Determine which space to use
 	spaceID := opts.SpaceID

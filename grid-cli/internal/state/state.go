@@ -18,13 +18,6 @@ type RuntimeState struct {
 	Spaces      map[string]*SpaceState `json:"spaces"`
 	LastUpdated time.Time              `json:"lastUpdated"`
 
-	// Context tracking for logging (previous values)
-	ActiveDisplayUUID  string `json:"activeDisplayUUID,omitempty"`
-	ActiveSpaceID      string `json:"activeSpaceId,omitempty"`
-	FocusedWindowID    uint32 `json:"focusedWindowId,omitempty"`
-	FocusedAppName     string `json:"focusedAppName,omitempty"`
-	FocusedWindowTitle string `json:"focusedWindowTitle,omitempty"`
-
 	mu sync.RWMutex `json:"-"` // For thread-safe access (not serialized)
 }
 
@@ -111,35 +104,6 @@ func (rs *RuntimeState) MarkUpdated() {
 	rs.LastUpdated = time.Now()
 }
 
-// UpdateContext updates the context tracking fields and returns the previous values
-func (rs *RuntimeState) UpdateContext(displayUUID, spaceID string, windowID uint32, appName, windowTitle string) (prevDisplay, prevSpace string, prevWindowID uint32, prevApp, prevTitle string) {
-	rs.mu.Lock()
-	defer rs.mu.Unlock()
-
-	// Capture previous values
-	prevDisplay = rs.ActiveDisplayUUID
-	prevSpace = rs.ActiveSpaceID
-	prevWindowID = rs.FocusedWindowID
-	prevApp = rs.FocusedAppName
-	prevTitle = rs.FocusedWindowTitle
-
-	// Update with new values
-	rs.ActiveDisplayUUID = displayUUID
-	rs.ActiveSpaceID = spaceID
-	rs.FocusedWindowID = windowID
-	rs.FocusedAppName = appName
-	rs.FocusedWindowTitle = windowTitle
-
-	return
-}
-
-// GetContext returns the current context values
-func (rs *RuntimeState) GetContext() (displayUUID, spaceID string, windowID uint32, appName, windowTitle string) {
-	rs.mu.RLock()
-	defer rs.mu.RUnlock()
-
-	return rs.ActiveDisplayUUID, rs.ActiveSpaceID, rs.FocusedWindowID, rs.FocusedAppName, rs.FocusedWindowTitle
-}
 
 // GetCell returns the state for a cell, creating it if needed
 func (ss *SpaceState) GetCell(cellID string) *CellState {

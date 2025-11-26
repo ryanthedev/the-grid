@@ -6,7 +6,6 @@ import (
 
 	"github.com/yourusername/grid-cli/internal/client"
 	"github.com/yourusername/grid-cli/internal/config"
-	"github.com/yourusername/grid-cli/internal/logging"
 	"github.com/yourusername/grid-cli/internal/state"
 	"github.com/yourusername/grid-cli/internal/types"
 )
@@ -33,11 +32,6 @@ func RefreshSpaceState(
 	// 2. Always reconcile first - directly removes stale windows from state
 	if err := ReconcileState(ctx, c, runtimeState, spaceID); err != nil {
 		return false, fmt.Errorf("reconcile failed: %w", err)
-	}
-
-	// 2.5 Log context after reconcile
-	if serverState, err := c.Dump(ctx); err == nil {
-		logContextChange(runtimeState, serverState)
 	}
 
 	// 3. Check for new windows that need assignment
@@ -206,73 +200,3 @@ func reconcileEqualRatios(n int) []float64 {
 	return ratios
 }
 
-// extractContext extracts context info from server state
-func extractContext(serverState map[string]interface{}) (displayUUID, spaceID string, windowID uint32, appName, windowTitle string) {
-	// Get metadata
-	if metadata, ok := serverState["metadata"].(map[string]interface{}); ok {
-		if uuid, ok := metadata["activeDisplayUUID"].(string); ok {
-			displayUUID = uuid
-		}
-		if wid, ok := metadata["focusedWindowID"].(float64); ok {
-			windowID = uint32(wid)
-		}
-	}
-
-	// Find active space
-	if spaces, ok := serverState["spaces"].(map[string]interface{}); ok {
-		for sid, s := range spaces {
-			if space, ok := s.(map[string]interface{}); ok {
-				if isActive, ok := space["isActive"].(bool); ok && isActive {
-					spaceID = sid
-					break
-				}
-			}
-		}
-	}
-
-	// Get focused window info
-	if windowID > 0 {
-		if windows, ok := serverState["windows"].(map[string]interface{}); ok {
-			widStr := fmt.Sprintf("%d", windowID)
-			if w, ok := windows[widStr].(map[string]interface{}); ok {
-				if name, ok := w["appName"].(string); ok {
-					appName = name
-				}
-				if title, ok := w["title"].(string); ok {
-					windowTitle = title
-				}
-			}
-		}
-	}
-
-	return
-}
-
-// logContextChange logs the context change after reconcile
-func logContextChange(
-	runtimeState *state.RuntimeState,
-	serverState map[string]interface{},
-) {
-	// Extract current context from server state
-	curDisplay, curSpace, curWindowID, curApp, curTitle := extractContext(serverState)
-
-	// Update state and get previous values
-	prevDisplay, prevSpace, prevWindowID, prevApp, prevTitle := runtimeState.UpdateContext(
-		curDisplay, curSpace, curWindowID, curApp, curTitle,
-	)
-
-	// Check if anything changed
-	changed := prevDisplay != curDisplay || prevSpace != curSpace ||
-		prevWindowID != curWindowID || prevApp != curApp || prevTitle != curTitle
-
-	if changed && (prevDisplay != "" || prevSpace != "" || prevWindowID != 0) {
-		logging.Log("Context changed:")
-		logging.Log("  Previous: display=%s space=%s app=%s window=%d \"%s\"",
-			prevDisplay, prevSpace, prevApp, prevWindowID, prevTitle)
-		logging.Log("  Current:  display=%s space=%s app=%s window=%d \"%s\"",
-			curDisplay, curSpace, curApp, curWindowID, curTitle)
-	} else {
-		logging.Log("Context: display=%s space=%s app=%s window=%d \"%s\"",
-			curDisplay, curSpace, curApp, curWindowID, curTitle)
-	}
-}

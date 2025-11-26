@@ -7,6 +7,7 @@ import (
 	"github.com/yourusername/grid-cli/internal/client"
 	"github.com/yourusername/grid-cli/internal/config"
 	"github.com/yourusername/grid-cli/internal/layout"
+	"github.com/yourusername/grid-cli/internal/logging"
 	"github.com/yourusername/grid-cli/internal/state"
 	"github.com/yourusername/grid-cli/internal/types"
 )
@@ -162,19 +163,39 @@ func CycleFocusInCell(
 	}
 
 	// Get server state for current space if spaceID not provided
+	var serverSpaceID string
 	if spaceID == "" {
 		serverState, err := c.Dump(ctx)
 		if err != nil {
 			return 0, fmt.Errorf("failed to get server state: %w", err)
 		}
 		spaceID = getCurrentSpaceID(serverState)
+		serverSpaceID = spaceID
 	}
+	logging.Log("focus cycle: serverSpaceID=%s, using spaceID=%s", serverSpaceID, spaceID)
 
 	// Get space state
 	spaceState := runtimeState.GetSpaceReadOnly(spaceID)
+
+	// If server space not found in runtime state, fall back to first space with a layout
 	if spaceState == nil {
-		return 0, fmt.Errorf("no layout applied to space %s", spaceID)
+		logging.Log("focus cycle: space %s not found in runtime state, searching for fallback", spaceID)
+		for configSpaceID, space := range runtimeState.Spaces {
+			if space.CurrentLayoutID != "" {
+				logging.Log("focus cycle: falling back to space %s (layout=%s)", configSpaceID, space.CurrentLayoutID)
+				spaceID = configSpaceID
+				spaceState = runtimeState.GetSpaceReadOnly(spaceID)
+				break
+			}
+		}
 	}
+
+	if spaceState == nil {
+		return 0, fmt.Errorf("no layout applied to any space")
+	}
+
+	logging.Log("focus cycle: spaceID=%s, focusedCell=%s, focusedWindow=%d",
+		spaceID, spaceState.FocusedCell, spaceState.FocusedWindow)
 
 	currentCell := spaceState.FocusedCell
 	if currentCell == "" {
@@ -219,6 +240,9 @@ func CycleFocusInCell(
 	} else {
 		newWindowID, newIndex = PrevWindowInCell(cellState.Windows, currentIndex)
 	}
+
+	logging.Log("focus cycle: cell=%s, windows=%v, currentIndex=%d, newIndex=%d, newWindowID=%d",
+		currentCell, cellState.Windows, currentIndex, newIndex, newWindowID)
 
 	// Focus the window
 	if err := focusWindow(ctx, c, newWindowID); err != nil {
