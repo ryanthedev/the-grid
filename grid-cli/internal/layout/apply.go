@@ -48,7 +48,7 @@ func ApplyLayout(
 		return fmt.Errorf("layout not found: %w", err)
 	}
 
-	logging.Log("ApplyLayout: %s on space %s", layoutID, snap.SpaceID)
+	logging.Info().Str("layout", layoutID).Str("space", snap.SpaceID).Msg("applying layout")
 
 	// 2. Calculate grid layout using snapshot's display bounds
 	calculatedLayout := CalculateLayout(layout, snap.DisplayBounds, opts.Gap)

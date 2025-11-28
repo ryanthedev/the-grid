@@ -331,19 +331,31 @@ func assignPreserve(windows []Window, layout *types.Layout, previous map[string]
 
 // assignByPosition assigns windows to cells based on maximum overlap with current position.
 func assignByPosition(windows []Window, cellBounds map[string]types.Rect, result *AssignmentResult) {
-	logging.Log("[assignByPosition] %d windows, %d cells", len(windows), len(cellBounds))
+	logging.Debug().Int("windows", len(windows)).Int("cells", len(cellBounds)).Msg("assign by position")
 
 	for _, w := range windows {
-		logging.Log("  Window %d (%s): frame=%.0f,%.0f %.0fx%.0f",
-			w.ID, w.AppName, w.Frame.X, w.Frame.Y, w.Frame.Width, w.Frame.Height)
+		logging.Debug().
+			Uint32("wid", w.ID).
+			Str("app", w.AppName).
+			Float64("x", w.Frame.X).
+			Float64("y", w.Frame.Y).
+			Float64("w", w.Frame.Width).
+			Float64("h", w.Frame.Height).
+			Msg("window frame")
 
 		bestCell := ""
 		bestOverlap := 0.0
 
 		for cellID, bounds := range cellBounds {
 			overlap := w.Frame.Overlap(bounds)
-			logging.Log("    Cell %s: bounds=%.0f,%.0f %.0fx%.0f -> overlap=%.0f",
-				cellID, bounds.X, bounds.Y, bounds.Width, bounds.Height, overlap)
+			logging.Debug().
+				Str("cell", cellID).
+				Float64("x", bounds.X).
+				Float64("y", bounds.Y).
+				Float64("w", bounds.Width).
+				Float64("h", bounds.Height).
+				Float64("overlap", overlap).
+				Msg("cell overlap")
 			if overlap > bestOverlap {
 				bestOverlap = overlap
 				bestCell = cellID
@@ -351,11 +363,11 @@ func assignByPosition(windows []Window, cellBounds map[string]types.Rect, result
 		}
 
 		if bestCell != "" {
-			logging.Log("    => Assigned to %s (overlap=%.0f)", bestCell, bestOverlap)
+			logging.Debug().Str("cell", bestCell).Float64("overlap", bestOverlap).Msg("assigned")
 			result.Assignments[bestCell] = append(result.Assignments[bestCell], w.ID)
 		} else {
 			cellID := findLeastPopulatedCell(result.Assignments)
-			logging.Log("    => No overlap, fallback to %s", cellID)
+			logging.Debug().Str("cell", cellID).Msg("no overlap, fallback")
 			result.Assignments[cellID] = append(result.Assignments[cellID], w.ID)
 		}
 	}

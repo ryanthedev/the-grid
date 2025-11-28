@@ -1,15 +1,26 @@
 package logging
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/rs/zerolog"
 )
 
-var logFile *os.File
+var (
+	Logger  zerolog.Logger
+	logFile *os.File
+)
 
-// Init initializes the logging system
+// timestampHook adds timestamp at the end of each log event
+type timestampHook struct{}
+
+func (h timestampHook) Run(e *zerolog.Event, level zerolog.Level, msg string) {
+	e.Time("ts", time.Now())
+}
+
+// Init initializes the logging system with zerolog
 func Init() error {
 	logDir := filepath.Join(os.Getenv("HOME"), ".local", "state", "thegrid")
 	os.MkdirAll(logDir, 0755)
@@ -20,17 +31,17 @@ func Init() error {
 		return err
 	}
 	logFile = f
-	return nil
-}
 
-// Log writes a formatted message to the log file
-func Log(format string, args ...interface{}) {
-	if logFile == nil {
-		return
-	}
-	timestamp := time.Now().Format("2006-01-02 15:04:05.000")
-	msg := fmt.Sprintf(format, args...)
-	fmt.Fprintf(logFile, "[%s] %s\n", timestamp, msg)
+	// Set global level to Info
+	zerolog.SetGlobalLevel(zerolog.InfoLevel)
+
+	// Configure field names
+	zerolog.MessageFieldName = "msg"
+
+	// Create logger with hook that adds timestamp last
+	Logger = zerolog.New(logFile).Hook(timestampHook{})
+
+	return nil
 }
 
 // Close closes the log file
@@ -38,4 +49,24 @@ func Close() {
 	if logFile != nil {
 		logFile.Close()
 	}
+}
+
+// Debug returns a debug level event
+func Debug() *zerolog.Event {
+	return Logger.Debug()
+}
+
+// Info returns an info level event
+func Info() *zerolog.Event {
+	return Logger.Info()
+}
+
+// Warn returns a warn level event
+func Warn() *zerolog.Event {
+	return Logger.Warn()
+}
+
+// Error returns an error level event
+func Error() *zerolog.Event {
+	return Logger.Error()
 }

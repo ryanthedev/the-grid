@@ -1570,11 +1570,11 @@ var focusNextCmd = &cobra.Command{
 	Short: "Cycle focus to next window in current cell",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		logging.Log("focus next: starting")
+		logging.Info().Str("cmd", "focus-next").Msg("starting")
 
 		runtimeState, err := gridState.LoadState()
 		if err != nil {
-			logging.Log("focus next: failed to load state: %v", err)
+			logging.Error().Str("cmd", "focus-next").Err(err).Msg("failed to load state")
 			return fmt.Errorf("failed to load state: %w", err)
 		}
 
@@ -1586,28 +1586,28 @@ var focusNextCmd = &cobra.Command{
 		// 1. Fetch server state ONCE
 		snap, err := gridServer.Fetch(ctx, c)
 		if err != nil {
-			logging.Log("focus next: failed to fetch server state: %v", err)
+			logging.Error().Str("cmd", "focus-next").Err(err).Msg("failed to fetch server state")
 			return fmt.Errorf("failed to fetch server state: %w", err)
 		}
 
 		// 2. Reconcile local state with server
 		if err := gridReconcile.Sync(snap, runtimeState); err != nil {
-			logging.Log("focus next: failed to reconcile: %v", err)
+			logging.Error().Str("cmd", "focus-next").Err(err).Msg("failed to reconcile")
 			return fmt.Errorf("failed to reconcile state: %w", err)
 		}
 
 		// 3. Cycle focus using local state
 		windowID, err := gridFocus.CycleFocus(ctx, c, runtimeState, snap.SpaceID, true)
 		if err != nil {
-			logging.Log("focus next: failed to cycle: %v", err)
+			logging.Error().Str("cmd", "focus-next").Err(err).Msg("failed to cycle")
 			return fmt.Errorf("failed to cycle focus: %w", err)
 		}
 
 		if windowID == 0 {
-			logging.Log("focus next: no windows in cell")
+			logging.Info().Str("cmd", "focus-next").Msg("no windows in cell")
 			fmt.Println("No windows in current cell")
 		} else {
-			logging.Log("focus next: focused window %d", windowID)
+			logging.Info().Str("cmd", "focus-next").Int("window_id", int(windowID)).Msg("focused window")
 			successColor.Printf("✓ Focused window: %d\n", windowID)
 		}
 		return nil
@@ -1620,11 +1620,11 @@ var focusPrevCmd = &cobra.Command{
 	Short: "Cycle focus to previous window in current cell",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		logging.Log("focus prev: starting")
+		logging.Info().Str("cmd", "focus-prev").Msg("starting")
 
 		runtimeState, err := gridState.LoadState()
 		if err != nil {
-			logging.Log("focus prev: failed to load state: %v", err)
+			logging.Error().Str("cmd", "focus-prev").Err(err).Msg("failed to load state")
 			return fmt.Errorf("failed to load state: %w", err)
 		}
 
@@ -1636,28 +1636,28 @@ var focusPrevCmd = &cobra.Command{
 		// 1. Fetch server state ONCE
 		snap, err := gridServer.Fetch(ctx, c)
 		if err != nil {
-			logging.Log("focus prev: failed to fetch server state: %v", err)
+			logging.Error().Str("cmd", "focus-prev").Err(err).Msg("failed to fetch server state")
 			return fmt.Errorf("failed to fetch server state: %w", err)
 		}
 
 		// 2. Reconcile local state with server
 		if err := gridReconcile.Sync(snap, runtimeState); err != nil {
-			logging.Log("focus prev: failed to reconcile: %v", err)
+			logging.Error().Str("cmd", "focus-prev").Err(err).Msg("failed to reconcile")
 			return fmt.Errorf("failed to reconcile state: %w", err)
 		}
 
 		// 3. Cycle focus using local state
 		windowID, err := gridFocus.CycleFocus(ctx, c, runtimeState, snap.SpaceID, false)
 		if err != nil {
-			logging.Log("focus prev: failed to cycle: %v", err)
+			logging.Error().Str("cmd", "focus-prev").Err(err).Msg("failed to cycle")
 			return fmt.Errorf("failed to cycle focus: %w", err)
 		}
 
 		if windowID == 0 {
-			logging.Log("focus prev: no windows in cell")
+			logging.Info().Str("cmd", "focus-prev").Msg("no windows in cell")
 			fmt.Println("No windows in current cell")
 		} else {
-			logging.Log("focus prev: focused window %d", windowID)
+			logging.Info().Str("cmd", "focus-prev").Int("window_id", int(windowID)).Msg("focused window")
 			successColor.Printf("✓ Focused window: %d\n", windowID)
 		}
 		return nil
