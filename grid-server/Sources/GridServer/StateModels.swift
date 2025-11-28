@@ -188,6 +188,9 @@ struct WindowState: Codable {
     var hasZoomButton: Bool
     var isModal: Bool
 
+    // Timestamp for conflict resolution between events and polling
+    var lastUpdated: Date
+
     enum CodingKeys: String, CodingKey {
         case id
         case frame
@@ -210,6 +213,7 @@ struct WindowState: Codable {
         case hasMinimizeButton
         case hasZoomButton
         case isModal
+        case lastUpdated
     }
 
     init(id: UInt32) {
@@ -234,6 +238,7 @@ struct WindowState: Codable {
         self.hasMinimizeButton = false
         self.hasZoomButton = false
         self.isModal = false
+        self.lastUpdated = Date()
     }
 }
 

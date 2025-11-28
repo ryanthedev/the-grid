@@ -35,6 +35,9 @@ class StateManager {
     // MSS client for window manipulation and sticky detection
     private let mssClient: MSSClient
 
+    // Polling timer for periodic state refresh
+    private var pollTimer: DispatchSourceTimer?
+
     // MARK: - Initialization
 
     private init() {
@@ -64,6 +67,9 @@ class StateManager {
 
             // Create AX observers for existing applications
             self.observeExistingApplications()
+
+            // Start periodic polling to catch windows that events miss
+            self.startPolling(interval: 3.0)
 
             self.logger.info("StateManager started successfully")
         }
@@ -632,6 +638,154 @@ class StateManager {
         logger.debug("AX observer removed", metadata: ["pid": "\(pid)"])
     }
 
+    // MARK: - Polling
+
+    /// Start periodic window state polling
+    func startPolling(interval: TimeInterval = 3.0) {
+        stopPolling()
+
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + interval, repeating: interval)
+        timer.setEventHandler { [weak self] in
+            self?.pollWindowState()
+        }
+        timer.resume()
+        pollTimer = timer
+        logger.info("Started window polling", metadata: ["interval": "\(interval)s"])
+    }
+
+    /// Stop periodic window state polling
+    func stopPolling() {
+        pollTimer?.cancel()
+        pollTimer = nil
+    }
+
+    /// Poll window state from CGWindowList
+    private func pollWindowState() {
+        let pollTimestamp = Date()
+
+        let options: CGWindowListOption = [.optionAll, .excludeDesktopElements]
+        guard let windowList = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
+            return
+        }
+
+        var seenWindowIDs = Set<UInt32>()
+
+        for windowInfo in windowList {
+            guard let windowID = windowInfo[kCGWindowNumber as String] as? UInt32 else { continue }
+            seenWindowIDs.insert(windowID)
+
+            if let existing = state.windows[String(windowID)] {
+                // Window exists - only update if our data is newer
+                if existing.lastUpdated < pollTimestamp {
+                    updateWindowFromPoll(windowID: windowID, windowInfo: windowInfo, timestamp: pollTimestamp)
+                }
+                // else: skip - event data is fresher
+            } else {
+                // New window discovered by poll
+                addWindowFromPoll(windowID: windowID, windowInfo: windowInfo, timestamp: pollTimestamp)
+            }
+        }
+
+        // Remove windows no longer in CGWindowList
+        for windowKey in state.windows.keys {
+            if let windowID = UInt32(windowKey), !seenWindowIDs.contains(windowID) {
+                logger.info("📡 Poll: removing stale window", metadata: ["windowID": "\(windowID)"])
+                // Inline removal logic (don't call handleWindowDestroyed to avoid log confusion)
+                let pid = state.windows[windowKey]?.pid
+                if state.metadata.focusedWindowID == windowID {
+                    state.metadata.focusedWindowID = nil
+                }
+                state.windows.removeValue(forKey: windowKey)
+                if let pid = pid {
+                    state.applications[String(pid)]?.windows.removeAll { $0 == windowID }
+                }
+                for spaceKey in state.spaces.keys {
+                    state.spaces[spaceKey]?.windows.removeAll { $0 == windowID }
+                }
+            }
+        }
+
+        state.metadata.update()
+    }
+
+    /// Update existing window from poll data
+    private func updateWindowFromPoll(windowID: UInt32, windowInfo: [String: Any], timestamp: Date) {
+        guard var window = state.windows[String(windowID)] else { return }
+
+        // Update frame
+        if let boundsDict = windowInfo[kCGWindowBounds as String] as? [String: CGFloat] {
+            window.frame = CGRect(
+                x: boundsDict["X"] ?? 0, y: boundsDict["Y"] ?? 0,
+                width: boundsDict["Width"] ?? 0, height: boundsDict["Height"] ?? 0
+            )
+        }
+
+        // Update title
+        if let name = windowInfo[kCGWindowName as String] as? String {
+            window.title = name
+        }
+
+        window.lastUpdated = timestamp
+        state.windows[String(windowID)] = window
+
+        // Refresh space assignment
+        updateWindowSpaces(windowID)
+    }
+
+    /// Add new window discovered by poll
+    private func addWindowFromPoll(windowID: UInt32, windowInfo: [String: Any], timestamp: Date) {
+        var window = WindowState(id: windowID)
+
+        if let pid = windowInfo[kCGWindowOwnerPID as String] as? pid_t {
+            window.pid = pid
+            window.appName = getAppNameForPID(pid)
+
+            // Add to app's window list
+            let pidKey = String(pid)
+            if state.applications[pidKey] != nil {
+                if !state.applications[pidKey]!.windows.contains(windowID) {
+                    state.applications[pidKey]!.windows.append(windowID)
+                }
+            }
+        }
+
+        if let boundsDict = windowInfo[kCGWindowBounds as String] as? [String: CGFloat] {
+            window.frame = CGRect(
+                x: boundsDict["X"] ?? 0, y: boundsDict["Y"] ?? 0,
+                width: boundsDict["Width"] ?? 0, height: boundsDict["Height"] ?? 0
+            )
+        }
+
+        if let name = windowInfo[kCGWindowName as String] as? String {
+            window.title = name
+        } else if let ownerName = windowInfo[kCGWindowOwnerName as String] as? String {
+            window.title = ownerName
+        }
+
+        window.isOrderedIn = true
+        window.lastUpdated = timestamp
+
+        // Get AX properties
+        let axProps = getAXProperties(pid: window.pid, windowID: windowID)
+        window.role = axProps.role
+        window.subrole = axProps.subrole
+        window.parent = axProps.parent
+        window.hasCloseButton = axProps.hasCloseButton
+        window.hasFullscreenButton = axProps.hasFullscreenButton
+        window.hasMinimizeButton = axProps.hasMinimizeButton
+        window.hasZoomButton = axProps.hasZoomButton
+        window.isModal = axProps.isModal
+
+        state.windows[String(windowID)] = window
+        updateWindowSpaces(windowID)
+
+        logger.info("📡 Poll discovered window", metadata: [
+            "windowID": "\(windowID)",
+            "app": "\(window.appName ?? "unknown")"
+        ])
+    }
+
     // MARK: - AX Event Handlers (Per-Window Events)
 
     func handleWindowCreated(_ windowID: UInt32, pid: pid_t) {
@@ -737,6 +891,7 @@ class StateManager {
 
             guard var window = self.state.windows[String(windowID)] else { return }
             window.frame = frame
+            window.lastUpdated = Date()
             self.state.windows[String(windowID)] = window
 
             // Re-query space assignment after move
@@ -755,6 +910,7 @@ class StateManager {
 
             guard var window = self.state.windows[String(windowID)] else { return }
             window.frame = frame
+            window.lastUpdated = Date()
             self.state.windows[String(windowID)] = window
             self.state.metadata.update()
         }
@@ -793,6 +949,7 @@ class StateManager {
             guard var window = self.state.windows[String(windowID)] else { return }
             window.isMinimized = true
             window.isOrderedIn = false
+            window.lastUpdated = Date()
             self.state.windows[String(windowID)] = window
             self.state.metadata.update()
         }
@@ -805,6 +962,7 @@ class StateManager {
             guard var window = self.state.windows[String(windowID)] else { return }
             window.isMinimized = false
             window.isOrderedIn = true
+            window.lastUpdated = Date()
             self.state.windows[String(windowID)] = window
             self.state.metadata.update()
         }
@@ -819,6 +977,7 @@ class StateManager {
 
             guard var window = self.state.windows[String(windowID)] else { return }
             window.title = title
+            window.lastUpdated = Date()
             self.state.windows[String(windowID)] = window
             self.state.metadata.update()
         }
