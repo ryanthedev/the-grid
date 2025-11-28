@@ -4,6 +4,7 @@ import (
 	"sort"
 
 	"github.com/yourusername/grid-cli/internal/config"
+	"github.com/yourusername/grid-cli/internal/logging"
 	"github.com/yourusername/grid-cli/internal/types"
 )
 
@@ -188,8 +189,10 @@ func AssignWindows(
 		assignPinned(tileable, layout, appRules, result)
 	case types.AssignPreserve:
 		assignPreserve(tileable, layout, previousAssignments, result)
-	default:
+	case types.AssignAutoFlow:
 		assignAutoFlow(tileable, layout, cellBounds, result)
+	default:
+		assignByPosition(tileable, cellBounds, result)
 	}
 
 	return result
@@ -321,6 +324,38 @@ func assignPreserve(windows []Window, layout *types.Layout, previous map[string]
 	if len(unassigned) > 0 {
 		for _, w := range unassigned {
 			cellID := findLeastPopulatedCell(result.Assignments)
+			result.Assignments[cellID] = append(result.Assignments[cellID], w.ID)
+		}
+	}
+}
+
+// assignByPosition assigns windows to cells based on maximum overlap with current position.
+func assignByPosition(windows []Window, cellBounds map[string]types.Rect, result *AssignmentResult) {
+	logging.Log("[assignByPosition] %d windows, %d cells", len(windows), len(cellBounds))
+
+	for _, w := range windows {
+		logging.Log("  Window %d (%s): frame=%.0f,%.0f %.0fx%.0f",
+			w.ID, w.AppName, w.Frame.X, w.Frame.Y, w.Frame.Width, w.Frame.Height)
+
+		bestCell := ""
+		bestOverlap := 0.0
+
+		for cellID, bounds := range cellBounds {
+			overlap := w.Frame.Overlap(bounds)
+			logging.Log("    Cell %s: bounds=%.0f,%.0f %.0fx%.0f -> overlap=%.0f",
+				cellID, bounds.X, bounds.Y, bounds.Width, bounds.Height, overlap)
+			if overlap > bestOverlap {
+				bestOverlap = overlap
+				bestCell = cellID
+			}
+		}
+
+		if bestCell != "" {
+			logging.Log("    => Assigned to %s (overlap=%.0f)", bestCell, bestOverlap)
+			result.Assignments[bestCell] = append(result.Assignments[bestCell], w.ID)
+		} else {
+			cellID := findLeastPopulatedCell(result.Assignments)
+			logging.Log("    => No overlap, fallback to %s", cellID)
 			result.Assignments[cellID] = append(result.Assignments[cellID], w.ID)
 		}
 	}

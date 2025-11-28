@@ -22,7 +22,7 @@ type ApplyLayoutOptions struct {
 // DefaultApplyOptions returns sensible default options
 func DefaultApplyOptions() ApplyLayoutOptions {
 	return ApplyLayoutOptions{
-		Strategy: types.AssignAutoFlow,
+		Strategy: types.AssignPosition,
 		Gap:      8,
 		Padding:  4,
 	}

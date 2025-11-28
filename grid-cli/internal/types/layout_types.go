@@ -77,6 +77,19 @@ func (r Rect) Contains(p Point) bool {
 		p.Y >= r.Y && p.Y <= r.Y+r.Height
 }
 
+// Overlap returns the area of intersection between two Rects
+func (r Rect) Overlap(other Rect) float64 {
+	left := max(r.X, other.X)
+	right := min(r.X+r.Width, other.X+other.Width)
+	top := max(r.Y, other.Y)
+	bottom := min(r.Y+r.Height, other.Y+other.Height)
+
+	if left >= right || top >= bottom {
+		return 0
+	}
+	return (right - left) * (bottom - top)
+}
+
 // CellBounds contains calculated pixel positions for a cell
 type CellBounds struct {
 	CellID string // Reference to cell definition
@@ -148,4 +161,5 @@ const (
 	AssignAutoFlow AssignmentStrategy = iota // Even distribution
 	AssignPinned                             // Use app rules
 	AssignPreserve                           // Maintain previous assignments
+	AssignPosition                           // Assign based on current window position
 )
