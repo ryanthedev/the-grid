@@ -31,6 +31,7 @@ var (
 	timeout    time.Duration
 	jsonOutput bool
 	noColor    bool
+	debugMode  bool
 
 	// Color functions
 	successColor = color.New(color.FgGreen, color.Bold)
@@ -2061,6 +2062,7 @@ func init() {
 	rootCmd.PersistentFlags().DurationVar(&timeout, "timeout", client.DefaultTimeout, "Request timeout")
 	rootCmd.PersistentFlags().BoolVar(&jsonOutput, "json", false, "Output in JSON format")
 	rootCmd.PersistentFlags().BoolVar(&noColor, "no-color", false, "Disable colored output")
+	rootCmd.PersistentFlags().BoolVar(&debugMode, "debug", false, "Enable debug logging")
 
 	// Add top-level commands
 	rootCmd.AddCommand(pingCmd)
@@ -2173,10 +2175,13 @@ func init() {
 	windowUpdateCmd.Flags().Float64Var(&updateWidth, "width", 0, "Width in pixels (optional)")
 	windowUpdateCmd.Flags().Float64Var(&updateHeight, "height", 0, "Height in pixels (optional)")
 
-	// Disable color if requested
+	// Disable color if requested, enable debug logging if requested
 	cobra.OnInitialize(func() {
 		if noColor {
 			color.NoColor = true
+		}
+		if debugMode {
+			logging.SetDebug(true)
 		}
 	})
 }

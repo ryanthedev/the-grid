@@ -584,6 +584,8 @@ class MessageHandler {
             let manipulator = WindowManipulator(connectionID: state.metadata.connectionID, logger: self.logger)
 
             if manipulator.focusWindow(pid: windowState.pid, windowID: wid) {
+                // Immediately update focus state (don't wait for AX notification)
+                StateManager.shared.handleWindowFocused(wid)
                 completion(Response(id: request.id, result: AnyCodable(["success": true, "windowId": wid])))
             } else {
                 completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to focus window")))

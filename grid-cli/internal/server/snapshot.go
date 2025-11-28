@@ -11,10 +11,11 @@ import (
 // Snapshot is a parsed, read-only view of server state at a point in time.
 // It contains everything needed to reconcile local state and execute commands.
 type Snapshot struct {
-	SpaceID       string            // Current active space ID
-	DisplayBounds types.Rect        // Visible frame for layout calculations
-	Windows       []WindowInfo      // All tileable windows on current space
-	WindowIDs     map[uint32]bool   // Quick lookup: does window exist?
+	SpaceID         string            // Current active space ID
+	DisplayBounds   types.Rect        // Visible frame for layout calculations
+	Windows         []WindowInfo      // All tileable windows on current space
+	WindowIDs       map[uint32]bool   // Quick lookup: does window exist?
+	FocusedWindowID uint32            // OS-focused window ID (from metadata)
 }
 
 // WindowInfo contains window data needed for layout operations.
@@ -68,7 +69,18 @@ func parseSnapshot(raw map[string]interface{}) (*Snapshot, error) {
 		}
 	}
 
+	// 5. Get focused window ID from metadata
+	snap.FocusedWindowID = parseFocusedWindowID(raw)
+
 	return snap, nil
+}
+
+func parseFocusedWindowID(raw map[string]interface{}) uint32 {
+	metadata, ok := raw["metadata"].(map[string]interface{})
+	if !ok {
+		return 0
+	}
+	return uint32(toFloat64(metadata["focusedWindowID"]))
 }
 
 func findActiveSpaceID(raw map[string]interface{}) string {

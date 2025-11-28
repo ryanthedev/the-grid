@@ -32,8 +32,8 @@ func Init() error {
 	}
 	logFile = f
 
-	// Set global level to Info
-	zerolog.SetGlobalLevel(zerolog.InfoLevel)
+	// Set global level to Debug
+	zerolog.SetGlobalLevel(zerolog.DebugLevel)
 
 	// Configure field names
 	zerolog.MessageFieldName = "msg"
@@ -69,4 +69,13 @@ func Warn() *zerolog.Event {
 // Error returns an error level event
 func Error() *zerolog.Event {
 	return Logger.Error()
+}
+
+// SetDebug enables or disables debug level logging
+func SetDebug(enabled bool) {
+	if enabled {
+		zerolog.SetGlobalLevel(zerolog.DebugLevel)
+	} else {
+		zerolog.SetGlobalLevel(zerolog.InfoLevel)
+	}
 }

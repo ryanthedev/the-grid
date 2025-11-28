@@ -1071,7 +1071,52 @@ class StateManager {
                 self.state.applications[key] = appState
             }
 
+            // Query the app's focused window and update focusedWindowID
+            // This is needed because not all apps send kAXFocusedWindowChangedNotification reliably
+            self.updateFocusedWindowForApp(pid: pid)
+
             self.state.metadata.update()
+        }
+    }
+
+    /// Query an app's focused window via AX API and update focusedWindowID
+    /// This provides a fallback when AX notifications don't fire reliably
+    private func updateFocusedWindowForApp(pid: pid_t) {
+        let appElement = AXUIElementCreateApplication(pid)
+
+        var focusedWindow: CFTypeRef?
+        let result = AXUIElementCopyAttributeValue(
+            appElement,
+            kAXFocusedWindowAttribute as CFString,
+            &focusedWindow
+        )
+
+        guard result == .success,
+              let windowElement = focusedWindow else {
+            logger.debug("Could not get focused window for app", metadata: ["pid": "\(pid)"])
+            return
+        }
+
+        // Get CGWindowID from AX element
+        var windowID: UInt32 = 0
+        let windowResult = _AXUIElementGetWindow(windowElement as! AXUIElement, &windowID)
+
+        guard windowResult == .success, windowID != 0 else {
+            logger.debug("Could not get window ID from focused window", metadata: ["pid": "\(pid)"])
+            return
+        }
+
+        // Update focused window state
+        logger.info("🎯 Window focused (from app activation)", metadata: [
+            "windowID": "\(windowID)",
+            "pid": "\(pid)"
+        ])
+
+        self.state.metadata.focusedWindowID = windowID
+
+        // Also update active display
+        if let displayUUID = SLSCopyManagedDisplayForWindow(self.connectionID, windowID) {
+            self.state.metadata.activeDisplayUUID = displayUUID as String
         }
     }
 
