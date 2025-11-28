@@ -6,263 +6,131 @@ import (
 
 	"github.com/yourusername/grid-cli/internal/client"
 	"github.com/yourusername/grid-cli/internal/config"
+	"github.com/yourusername/grid-cli/internal/server"
 	"github.com/yourusername/grid-cli/internal/state"
-	"github.com/yourusername/grid-cli/internal/types"
 )
 
-// SplitInfo contains information about splits in a cell
-type SplitInfo struct {
-	CellID       string
-	WindowCount  int
-	Ratios       []float64
-	FocusedIndex int
-}
-
-// AdjustSplit adjusts the split ratio for the focused window.
-// delta is the change in ratio (positive = grow, negative = shrink)
-func AdjustSplit(
+// AdjustFocusedSplit grows/shrinks the focused window's split ratio.
+func AdjustFocusedSplit(
 	ctx context.Context,
 	c *client.Client,
+	snap *server.Snapshot,
 	cfg *config.Config,
-	runtimeState *state.RuntimeState,
+	rs *state.RuntimeState,
 	delta float64,
 ) error {
-	// Refresh state to handle window changes
-	RefreshSpaceState(ctx, c, cfg, runtimeState, "")
-
-	// Get current space
-	serverState, err := c.Dump(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to get server state: %w", err)
-	}
-
-	spaceID := getCurrentSpaceID(serverState)
-	spaceState := runtimeState.GetSpace(spaceID)
-
-	if spaceState.CurrentLayoutID == "" {
+	spaceState := rs.GetSpaceReadOnly(snap.SpaceID)
+	if spaceState == nil {
 		return fmt.Errorf("no layout applied")
 	}
 
-	if spaceState.FocusedCell == "" {
-		return fmt.Errorf("no cell is focused")
+	cellID := spaceState.FocusedCell
+	if cellID == "" {
+		return fmt.Errorf("no focused cell")
 	}
 
-	cellState, ok := spaceState.Cells[spaceState.FocusedCell]
-	if !ok || len(cellState.Windows) < 2 {
-		return fmt.Errorf("need at least 2 windows in cell to adjust splits")
+	cell := spaceState.Cells[cellID]
+	if cell == nil || len(cell.Windows) < 2 {
+		return fmt.Errorf("need at least 2 windows to resize")
 	}
 
-	// Ensure split ratios are initialized
-	if len(cellState.SplitRatios) != len(cellState.Windows) {
-		cellState.SplitRatios = InitializeSplitRatios(len(cellState.Windows))
+	// Get focused window index in cell
+	idx := spaceState.FocusedWindow
+	if idx < 0 || idx >= len(cell.Windows) {
+		idx = 0
 	}
 
-	// Determine which boundary to adjust based on focused window
-	// Positive delta grows the focused window, shrinks the next one
-	boundaryIndex := spaceState.FocusedWindow
-	adjustedDelta := delta
-
-	if boundaryIndex >= len(cellState.Windows)-1 {
-		// Last window - adjust boundary before it
-		boundaryIndex = len(cellState.Windows) - 2
-		adjustedDelta = -delta // Invert because we're adjusting from the other side
+	// Ensure we have ratios
+	ratios := cell.SplitRatios
+	if len(ratios) != len(cell.Windows) {
+		ratios = InitializeSplitRatios(len(cell.Windows))
 	}
 
-	// Adjust ratios
-	newRatios, err := AdjustSplitRatio(cellState.SplitRatios, boundaryIndex, adjustedDelta, MinimumRatio)
+	// Boundary to adjust is between idx and idx+1 (or idx-1 and idx)
+	boundaryIdx := idx
+	if boundaryIdx >= len(ratios)-1 {
+		boundaryIdx = len(ratios) - 2
+	}
+
+	newRatios, err := AdjustSplitRatio(ratios, boundaryIdx, delta, MinimumRatio)
 	if err != nil {
-		return fmt.Errorf("failed to adjust split: %w", err)
+		return err
 	}
 
-	cellState.SplitRatios = newRatios
-
-	// Recalculate and apply window bounds
-	if err := reapplyCell(ctx, c, cfg, runtimeState, spaceID, spaceState.FocusedCell); err != nil {
-		return fmt.Errorf("failed to apply changes: %w", err)
+	// Update state
+	mutableCell := rs.GetSpace(snap.SpaceID).GetCell(cellID)
+	mutableCell.SplitRatios = newRatios
+	rs.MarkUpdated()
+	if err := rs.Save(); err != nil {
+		return fmt.Errorf("failed to save state: %w", err)
 	}
 
-	// Save state
-	runtimeState.MarkUpdated()
-	return runtimeState.Save()
+	// Reapply layout to update window positions
+	opts := DefaultApplyOptions()
+	opts.Gap = float64(cfg.Settings.CellPadding)
+	return ReapplyLayout(ctx, c, snap, cfg, rs, opts)
 }
 
-// ResetSplits resets all splits in the focused cell to equal
-func ResetSplits(
+// ResetFocusedSplits resets the focused cell's splits to equal.
+func ResetFocusedSplits(
 	ctx context.Context,
 	c *client.Client,
+	snap *server.Snapshot,
 	cfg *config.Config,
-	runtimeState *state.RuntimeState,
+	rs *state.RuntimeState,
 ) error {
-	// Refresh state to handle window changes
-	RefreshSpaceState(ctx, c, cfg, runtimeState, "")
-
-	// Get current space
-	serverState, err := c.Dump(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to get server state: %w", err)
+	spaceState := rs.GetSpaceReadOnly(snap.SpaceID)
+	if spaceState == nil {
+		return fmt.Errorf("no layout applied")
 	}
 
-	spaceID := getCurrentSpaceID(serverState)
-	spaceState := runtimeState.GetSpace(spaceID)
-
-	if spaceState.FocusedCell == "" {
-		return fmt.Errorf("no cell is focused")
+	cellID := spaceState.FocusedCell
+	if cellID == "" {
+		return fmt.Errorf("no focused cell")
 	}
 
-	cellState, ok := spaceState.Cells[spaceState.FocusedCell]
-	if !ok {
-		return fmt.Errorf("focused cell not found in state")
+	cell := spaceState.Cells[cellID]
+	if cell == nil {
+		return fmt.Errorf("no focused cell")
 	}
 
-	// Reset to equal ratios
-	cellState.SplitRatios = InitializeSplitRatios(len(cellState.Windows))
-
-	// Recalculate and apply window bounds
-	if err := reapplyCell(ctx, c, cfg, runtimeState, spaceID, spaceState.FocusedCell); err != nil {
-		return fmt.Errorf("failed to apply changes: %w", err)
+	// Reset to equal
+	mutableCell := rs.GetSpace(snap.SpaceID).GetCell(cellID)
+	mutableCell.SplitRatios = InitializeSplitRatios(len(cell.Windows))
+	rs.MarkUpdated()
+	if err := rs.Save(); err != nil {
+		return fmt.Errorf("failed to save state: %w", err)
 	}
 
-	// Save state
-	runtimeState.MarkUpdated()
-	return runtimeState.Save()
+	opts := DefaultApplyOptions()
+	opts.Gap = float64(cfg.Settings.CellPadding)
+	return ReapplyLayout(ctx, c, snap, cfg, rs, opts)
 }
 
-// ResetAllSplits resets splits in all cells of the current layout
+// ResetAllSplits resets all cells' splits to equal.
 func ResetAllSplits(
 	ctx context.Context,
 	c *client.Client,
+	snap *server.Snapshot,
 	cfg *config.Config,
-	runtimeState *state.RuntimeState,
+	rs *state.RuntimeState,
 ) error {
-	serverState, err := c.Dump(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to get server state: %w", err)
-	}
-
-	spaceID := getCurrentSpaceID(serverState)
-	spaceState := runtimeState.GetSpace(spaceID)
-
-	if spaceState.CurrentLayoutID == "" {
+	spaceState := rs.GetSpaceReadOnly(snap.SpaceID)
+	if spaceState == nil {
 		return fmt.Errorf("no layout applied")
 	}
 
-	// Reset all cells
-	for _, cellState := range spaceState.Cells {
-		cellState.SplitRatios = InitializeSplitRatios(len(cellState.Windows))
+	mutableSpace := rs.GetSpace(snap.SpaceID)
+	for cellID, cell := range spaceState.Cells {
+		mutableCell := mutableSpace.GetCell(cellID)
+		mutableCell.SplitRatios = InitializeSplitRatios(len(cell.Windows))
+	}
+	rs.MarkUpdated()
+	if err := rs.Save(); err != nil {
+		return fmt.Errorf("failed to save state: %w", err)
 	}
 
-	// Reapply entire layout
 	opts := DefaultApplyOptions()
-	opts.SpaceID = spaceID
-	opts.Strategy = types.AssignPreserve
-
-	if err := ApplyLayout(ctx, c, cfg, runtimeState, spaceState.CurrentLayoutID, opts); err != nil {
-		return fmt.Errorf("failed to reapply layout: %w", err)
-	}
-
-	return nil
-}
-
-// GetSplitInfo returns information about splits in the focused cell
-func GetSplitInfo(runtimeState *state.RuntimeState, spaceID string) (*SplitInfo, error) {
-	spaceState := runtimeState.GetSpaceReadOnly(spaceID)
-	if spaceState == nil {
-		return nil, fmt.Errorf("no state for space %s", spaceID)
-	}
-
-	if spaceState.FocusedCell == "" {
-		return nil, fmt.Errorf("no cell is focused")
-	}
-
-	cellState, ok := spaceState.Cells[spaceState.FocusedCell]
-	if !ok {
-		return nil, fmt.Errorf("focused cell not found")
-	}
-
-	return &SplitInfo{
-		CellID:       spaceState.FocusedCell,
-		WindowCount:  len(cellState.Windows),
-		Ratios:       cellState.SplitRatios,
-		FocusedIndex: spaceState.FocusedWindow,
-	}, nil
-}
-
-// reapplyCell recalculates and applies bounds for a single cell
-func reapplyCell(
-	ctx context.Context,
-	c *client.Client,
-	cfg *config.Config,
-	runtimeState *state.RuntimeState,
-	spaceID string,
-	cellID string,
-) error {
-	spaceState := runtimeState.GetSpace(spaceID)
-
-	// Get layout
-	l, err := cfg.GetLayout(spaceState.CurrentLayoutID)
-	if err != nil {
-		return fmt.Errorf("layout not found: %w", err)
-	}
-
-	// Get display bounds
-	serverState, err := c.Dump(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to get server state: %w", err)
-	}
-
-	displayBounds, err := getDisplayBoundsForSpace(serverState, spaceID)
-	if err != nil {
-		return fmt.Errorf("failed to get display bounds: %w", err)
-	}
-
-	// Calculate layout
-	gap := float64(cfg.Settings.CellPadding)
-	calculatedLayout := CalculateLayout(l, displayBounds, gap)
-
-	// Get cell bounds
-	cellBounds, ok := calculatedLayout.CellBounds[cellID]
-	if !ok {
-		return fmt.Errorf("cell not found: %s", cellID)
-	}
-
-	// Get cell state
-	cellState := spaceState.Cells[cellID]
-	if cellState == nil || len(cellState.Windows) == 0 {
-		return nil // Nothing to apply
-	}
-
-	// Determine stack mode
-	mode := cfg.Settings.DefaultStackMode
-	if l.CellModes != nil {
-		if m, ok := l.CellModes[cellID]; ok && m != "" {
-			mode = m
-		}
-	}
-	if cellState.StackMode != "" {
-		mode = cellState.StackMode
-	}
-
-	// Calculate window bounds
-	padding := gap / 2 // Use half gap between windows
-	windowBounds := CalculateWindowBounds(cellBounds, len(cellState.Windows), mode, cellState.SplitRatios, padding)
-
-	// Apply bounds to server
-	for i, windowID := range cellState.Windows {
-		if i >= len(windowBounds) {
-			break
-		}
-
-		_, err := c.UpdateWindow(ctx, int(windowID), map[string]interface{}{
-			"x":      windowBounds[i].X,
-			"y":      windowBounds[i].Y,
-			"width":  windowBounds[i].Width,
-			"height": windowBounds[i].Height,
-		})
-		if err != nil {
-			// Log warning but continue with other windows
-			fmt.Printf("Warning: failed to update window %d: %v\n", windowID, err)
-		}
-	}
-
-	return nil
+	opts.Gap = float64(cfg.Settings.CellPadding)
+	return ReapplyLayout(ctx, c, snap, cfg, rs, opts)
 }

@@ -647,9 +647,42 @@ class StateManager {
             window.appName = getAppNameForPID(pid)
             window.isOrderedIn = true
 
-            // TODO: Query initial window properties via AX
-            // For now, just add it to state
+            // Query window properties from CGWindowList
+            let options: CGWindowListOption = [.optionIncludingWindow]
+            if let windowList = CGWindowListCopyWindowInfo(options, windowID) as? [[String: Any]],
+               let windowInfo = windowList.first {
+                // Get frame
+                if let boundsDict = windowInfo[kCGWindowBounds as String] as? [String: CGFloat] {
+                    window.frame = CGRect(
+                        x: boundsDict["X"] ?? 0,
+                        y: boundsDict["Y"] ?? 0,
+                        width: boundsDict["Width"] ?? 0,
+                        height: boundsDict["Height"] ?? 0
+                    )
+                }
+                // Get title
+                if let name = windowInfo[kCGWindowName as String] as? String {
+                    window.title = name
+                } else if let ownerName = windowInfo[kCGWindowOwnerName as String] as? String {
+                    window.title = ownerName
+                }
+            }
+
+            // Get AX properties
+            let axProps = self.getAXProperties(pid: pid, windowID: windowID)
+            window.role = axProps.role
+            window.subrole = axProps.subrole
+            window.parent = axProps.parent
+            window.hasCloseButton = axProps.hasCloseButton
+            window.hasFullscreenButton = axProps.hasFullscreenButton
+            window.hasMinimizeButton = axProps.hasMinimizeButton
+            window.hasZoomButton = axProps.hasZoomButton
+            window.isModal = axProps.isModal
+
             self.state.windows[String(windowID)] = window
+
+            // Query space assignment
+            self.updateWindowSpaces(windowID)
 
             // Add window to app's window list
             let pidKey = String(pid)

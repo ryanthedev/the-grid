@@ -48,6 +48,7 @@ class WindowManipulator {
             "pid": "\(pid)",
             "windowID": "\(windowID)"
         ])
+        StateManager.shared.handleWindowDestroyed(windowID)
         return nil
     }
 

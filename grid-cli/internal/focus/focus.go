@@ -3,265 +3,99 @@ package focus
 import (
 	"context"
 	"fmt"
+	"math"
 
 	"github.com/yourusername/grid-cli/internal/client"
 	"github.com/yourusername/grid-cli/internal/config"
 	"github.com/yourusername/grid-cli/internal/layout"
-	"github.com/yourusername/grid-cli/internal/logging"
+	"github.com/yourusername/grid-cli/internal/server"
 	"github.com/yourusername/grid-cli/internal/state"
 	"github.com/yourusername/grid-cli/internal/types"
 )
 
-// Options configures focus operations
-type Options struct {
-	SpaceID    string // Space to operate on (empty = current)
-	WrapAround bool   // Enable wrap-around navigation
-}
-
-// DefaultOptions returns sensible default options
-func DefaultOptions() Options {
-	return Options{
-		WrapAround: true,
-	}
-}
-
-// MoveFocus moves focus to an adjacent cell in the given direction.
-// Returns the new focused cell ID.
-func MoveFocus(
+// CycleFocus cycles to the next/prev window in the focused cell.
+// Operates entirely on LOCAL state (which must be reconciled first).
+// Returns the window ID that was focused.
+func CycleFocus(
 	ctx context.Context,
 	c *client.Client,
-	cfg *config.Config,
-	runtimeState *state.RuntimeState,
-	direction types.Direction,
-	opts Options,
-) (string, error) {
-	// Refresh state to handle window changes (reconcile stale windows)
-	if _, err := layout.RefreshSpaceState(ctx, c, cfg, runtimeState, opts.SpaceID); err != nil {
-		// Log warning but continue - don't fail the focus operation
-		fmt.Printf("Warning: state refresh failed: %v\n", err)
-	}
-
-	// Get server state for current space
-	serverState, err := c.Dump(ctx)
-	if err != nil {
-		return "", fmt.Errorf("failed to get server state: %w", err)
-	}
-
-	spaceID := opts.SpaceID
-	if spaceID == "" {
-		spaceID = getCurrentSpaceID(serverState)
-	}
-
-	// Get space state
-	spaceState := runtimeState.GetSpaceReadOnly(spaceID)
-	if spaceState == nil {
-		return "", fmt.Errorf("no layout applied to space %s", spaceID)
-	}
-
-	if spaceState.CurrentLayoutID == "" {
-		return "", fmt.Errorf("no layout applied to space %s", spaceID)
-	}
-
-	// Get current layout
-	layoutDef, err := cfg.GetLayout(spaceState.CurrentLayoutID)
-	if err != nil {
-		return "", fmt.Errorf("layout not found: %w", err)
-	}
-
-	// Get display bounds and calculate cell bounds
-	displayBounds, err := getDisplayBoundsForSpace(serverState, spaceID)
-	if err != nil {
-		return "", fmt.Errorf("failed to get display bounds: %w", err)
-	}
-
-	calculatedLayout := layout.CalculateLayout(layoutDef, displayBounds, 8) // Default gap
-
-	// Determine current cell
-	currentCell := spaceState.FocusedCell
-	if currentCell == "" {
-		// No focused cell, pick first cell
-		if len(layoutDef.Cells) > 0 {
-			currentCell = layoutDef.Cells[0].ID
-		} else {
-			return "", fmt.Errorf("layout has no cells")
-		}
-	}
-
-	// Find target cell
-	targetCell, found := FindTargetCell(currentCell, direction, calculatedLayout.CellBounds, opts.WrapAround)
-	if !found {
-		return currentCell, fmt.Errorf("no cell in direction %s", direction.String())
-	}
-
-	// Focus the target cell
-	return FocusCell(ctx, c, cfg, runtimeState, spaceID, targetCell)
-}
-
-// FocusCell focuses a specific cell by ID.
-// Returns the focused cell ID.
-func FocusCell(
-	ctx context.Context,
-	c *client.Client,
-	cfg *config.Config,
-	runtimeState *state.RuntimeState,
-	spaceID string,
-	cellID string,
-) (string, error) {
-	// Refresh state to handle window changes (reconcile stale windows)
-	if _, err := layout.RefreshSpaceState(ctx, c, cfg, runtimeState, spaceID); err != nil {
-		fmt.Printf("Warning: state refresh failed: %v\n", err)
-	}
-
-	// Get space state (create if needed)
-	spaceState := runtimeState.GetSpace(spaceID)
-
-	// Get cell state
-	cellState, ok := spaceState.Cells[cellID]
-	if !ok || len(cellState.Windows) == 0 {
-		// Cell exists in layout but has no windows - just update focus state
-		spaceState.SetFocus(cellID, 0)
-		runtimeState.MarkUpdated()
-		if err := runtimeState.Save(); err != nil {
-			return cellID, fmt.Errorf("failed to save state: %w", err)
-		}
-		return cellID, nil
-	}
-
-	// Focus first window in cell
-	windowID := cellState.Windows[0]
-	if err := focusWindow(ctx, c, windowID); err != nil {
-		// Even if server focus fails, update state
-		spaceState.SetFocus(cellID, 0)
-		runtimeState.MarkUpdated()
-		runtimeState.Save()
-		return cellID, fmt.Errorf("failed to focus window: %w", err)
-	}
-
-	// Update state
-	spaceState.SetFocus(cellID, 0)
-	runtimeState.MarkUpdated()
-	if err := runtimeState.Save(); err != nil {
-		return cellID, fmt.Errorf("failed to save state: %w", err)
-	}
-
-	return cellID, nil
-}
-
-// CycleFocusInCell cycles focus to the next/previous window within the current cell.
-// Returns the new focused window ID.
-func CycleFocusInCell(
-	ctx context.Context,
-	c *client.Client,
-	cfg *config.Config,
-	runtimeState *state.RuntimeState,
+	rs *state.RuntimeState,
 	spaceID string,
 	forward bool,
 ) (uint32, error) {
-	// Refresh state to handle window changes (reconcile stale windows)
-	if _, err := layout.RefreshSpaceState(ctx, c, cfg, runtimeState, spaceID); err != nil {
-		fmt.Printf("Warning: state refresh failed: %v\n", err)
-	}
-
-	// Get server state for current space if spaceID not provided
-	var serverSpaceID string
-	if spaceID == "" {
-		serverState, err := c.Dump(ctx)
-		if err != nil {
-			return 0, fmt.Errorf("failed to get server state: %w", err)
-		}
-		spaceID = getCurrentSpaceID(serverState)
-		serverSpaceID = spaceID
-	}
-	logging.Log("focus cycle: serverSpaceID=%s, using spaceID=%s", serverSpaceID, spaceID)
-
-	// Get space state
-	spaceState := runtimeState.GetSpaceReadOnly(spaceID)
-
-	// If server space not found in runtime state, fall back to first space with a layout
+	spaceState := rs.GetSpaceReadOnly(spaceID)
 	if spaceState == nil {
-		logging.Log("focus cycle: space %s not found in runtime state, searching for fallback", spaceID)
-		for configSpaceID, space := range runtimeState.Spaces {
-			if space.CurrentLayoutID != "" {
-				logging.Log("focus cycle: falling back to space %s (layout=%s)", configSpaceID, space.CurrentLayoutID)
-				spaceID = configSpaceID
-				spaceState = runtimeState.GetSpaceReadOnly(spaceID)
-				break
-			}
-		}
+		return 0, fmt.Errorf("no layout applied to space %s", spaceID)
 	}
 
-	if spaceState == nil {
-		return 0, fmt.Errorf("no layout applied to any space")
-	}
-
-	logging.Log("focus cycle: spaceID=%s, focusedCell=%s, focusedWindow=%d",
-		spaceID, spaceState.FocusedCell, spaceState.FocusedWindow)
-
-	currentCell := spaceState.FocusedCell
-	if currentCell == "" {
-		// Auto-focus first cell with windows
-		for cellID, cellState := range spaceState.Cells {
-			if len(cellState.Windows) > 0 {
-				currentCell = cellID
-				// Update state with new focus
-				mutableSpace := runtimeState.GetSpace(spaceID)
-				mutableSpace.SetFocus(cellID, 0)
-				runtimeState.MarkUpdated()
-				runtimeState.Save()
-				break
-			}
-		}
-		if currentCell == "" {
+	cellID := spaceState.FocusedCell
+	if cellID == "" {
+		// Auto-select first cell with windows
+		cellID = findFirstCellWithWindows(spaceState)
+		if cellID == "" {
 			return 0, fmt.Errorf("no cells with windows")
 		}
 	}
 
-	// Get cell state
-	cellState, ok := spaceState.Cells[currentCell]
-	if !ok || len(cellState.Windows) == 0 {
-		return 0, fmt.Errorf("focused cell has no windows")
-	}
-
-	// Only one window, nothing to cycle
-	if len(cellState.Windows) == 1 {
-		return cellState.Windows[0], nil
+	cell := spaceState.Cells[cellID]
+	if cell == nil || len(cell.Windows) == 0 {
+		return 0, fmt.Errorf("no windows in focused cell %s", cellID)
 	}
 
 	// Calculate next window index
-	currentIndex := spaceState.FocusedWindow
-	if currentIndex < 0 || currentIndex >= len(cellState.Windows) {
-		currentIndex = 0
+	idx := spaceState.FocusedWindow
+	if idx < 0 || idx >= len(cell.Windows) {
+		idx = 0
 	}
 
-	var newWindowID uint32
-	var newIndex int
+	if len(cell.Windows) == 1 {
+		// Only one window, just ensure it's focused
+		windowID := cell.Windows[0]
+		if err := focusWindow(ctx, c, windowID); err != nil {
+			return 0, err
+		}
+		// Update state
+		mutableSpace := rs.GetSpace(spaceID)
+		mutableSpace.SetFocus(cellID, 0)
+		rs.MarkUpdated()
+		rs.Save()
+		return windowID, nil
+	}
+
+	// Cycle to next/prev window
 	if forward {
-		newWindowID, newIndex = NextWindowInCell(cellState.Windows, currentIndex)
+		idx = (idx + 1) % len(cell.Windows)
 	} else {
-		newWindowID, newIndex = PrevWindowInCell(cellState.Windows, currentIndex)
+		idx = (idx - 1 + len(cell.Windows)) % len(cell.Windows)
 	}
 
-	logging.Log("focus cycle: cell=%s, windows=%v, currentIndex=%d, newIndex=%d, newWindowID=%d",
-		currentCell, cellState.Windows, currentIndex, newIndex, newWindowID)
+	windowID := cell.Windows[idx]
 
-	// Focus the window
-	if err := focusWindow(ctx, c, newWindowID); err != nil {
-		return 0, fmt.Errorf("failed to focus window: %w", err)
+	// Focus via server
+	if err := focusWindow(ctx, c, windowID); err != nil {
+		return 0, err
 	}
 
-	// Update state (need mutable reference)
-	mutableSpace := runtimeState.GetSpace(spaceID)
-	mutableSpace.SetFocus(currentCell, newIndex)
-	runtimeState.MarkUpdated()
-	if err := runtimeState.Save(); err != nil {
-		return newWindowID, fmt.Errorf("failed to save state: %w", err)
-	}
+	// Update local state
+	mutableSpace := rs.GetSpace(spaceID)
+	mutableSpace.SetFocus(cellID, idx)
+	rs.MarkUpdated()
+	rs.Save()
 
-	return newWindowID, nil
+	return windowID, nil
+}
+
+// findFirstCellWithWindows returns the first cell ID that has windows.
+func findFirstCellWithWindows(spaceState *state.SpaceState) string {
+	for cellID, cell := range spaceState.Cells {
+		if len(cell.Windows) > 0 {
+			return cellID
+		}
+	}
+	return ""
 }
 
 // focusWindow requests the server to focus a window.
-// Tries window.focus first, falls back to window.raise.
 func focusWindow(ctx context.Context, c *client.Client, windowID uint32) error {
 	// Try window.focus first
 	_, err := c.CallMethod(ctx, "window.focus", map[string]interface{}{
@@ -276,98 +110,235 @@ func focusWindow(ctx context.Context, c *client.Client, windowID uint32) error {
 		"windowId": windowID,
 	})
 	if err != nil {
-		return fmt.Errorf("focus/raise failed: %w", err)
+		return fmt.Errorf("focus/raise failed for window %d: %w", windowID, err)
 	}
 
 	return nil
 }
 
-// Helper functions (duplicated from layout/apply.go for package independence)
+// MoveFocus moves focus to adjacent cell in direction.
+// Requires config and snapshot to calculate layout bounds.
+func MoveFocus(
+	ctx context.Context,
+	c *client.Client,
+	snap *server.Snapshot,
+	cfg *config.Config,
+	rs *state.RuntimeState,
+	direction types.Direction,
+	wrapAround bool,
+) (uint32, error) {
+	spaceState := rs.GetSpaceReadOnly(snap.SpaceID)
+	if spaceState == nil || spaceState.CurrentLayoutID == "" {
+		return 0, fmt.Errorf("no layout applied")
+	}
 
-// getCurrentSpaceID extracts the current space ID from server state.
-func getCurrentSpaceID(serverState map[string]interface{}) string {
-	if metadata, ok := serverState["metadata"].(map[string]interface{}); ok {
-		if activeSpace, ok := metadata["activeSpace"]; ok {
-			return fmt.Sprintf("%v", activeSpace)
+	// Get current layout and calculate bounds
+	layoutDef, err := cfg.GetLayout(spaceState.CurrentLayoutID)
+	if err != nil {
+		return 0, fmt.Errorf("layout not found: %w", err)
+	}
+	calculated := layout.CalculateLayout(layoutDef, snap.DisplayBounds, float64(cfg.Settings.CellPadding))
+
+	// Find current cell
+	currentCell := spaceState.FocusedCell
+	if currentCell == "" {
+		currentCell = findFirstCellWithWindows(spaceState)
+		if currentCell == "" {
+			return 0, fmt.Errorf("no cells with windows")
 		}
 	}
-	return "1"
-}
 
-// getDisplayBoundsForSpace finds the display for a space and returns its visible frame.
-func getDisplayBoundsForSpace(serverState map[string]interface{}, spaceID string) (types.Rect, error) {
-	displays, ok := serverState["displays"].([]interface{})
-	if !ok {
-		return types.Rect{}, fmt.Errorf("no displays in state")
+	// Find adjacent cells
+	adjacentMap := layout.GetAdjacentCells(currentCell, calculated.CellBounds)
+	candidates := adjacentMap[direction]
+
+	if len(candidates) == 0 {
+		if !wrapAround {
+			return 0, fmt.Errorf("no cell in direction %s", direction.String())
+		}
+		// Wrap: find cell on opposite edge
+		candidates = findWrapTarget(direction, currentCell, calculated.CellBounds)
+		if len(candidates) == 0 {
+			return 0, fmt.Errorf("no cell in direction %s (wrap)", direction.String())
+		}
 	}
 
-	for _, d := range displays {
-		display, ok := d.(map[string]interface{})
-		if !ok {
+	// Pick closest candidate
+	targetCell := pickClosestCell(currentCell, candidates, calculated.CellBounds)
+
+	// Focus the target cell
+	return focusCellByID(ctx, c, rs, snap.SpaceID, targetCell)
+}
+
+// FocusCell focuses a specific cell by ID.
+func FocusCell(
+	ctx context.Context,
+	c *client.Client,
+	rs *state.RuntimeState,
+	spaceID string,
+	cellID string,
+) (uint32, error) {
+	return focusCellByID(ctx, c, rs, spaceID, cellID)
+}
+
+// focusCellByID is internal helper to focus a cell.
+func focusCellByID(ctx context.Context, c *client.Client, rs *state.RuntimeState, spaceID string, cellID string) (uint32, error) {
+	mutableSpace := rs.GetSpace(spaceID)
+	cell := mutableSpace.Cells[cellID]
+	if cell == nil || len(cell.Windows) == 0 {
+		return 0, fmt.Errorf("no windows in cell %s", cellID)
+	}
+
+	windowID := cell.Windows[0]
+	if err := focusWindow(ctx, c, windowID); err != nil {
+		return 0, err
+	}
+	mutableSpace.SetFocus(cellID, 0)
+	rs.MarkUpdated()
+	rs.Save()
+	return windowID, nil
+}
+
+// findWrapTarget finds cells on the opposite edge for wrap-around navigation.
+func findWrapTarget(direction types.Direction, currentCell string, cellBounds map[string]types.Rect) []string {
+	current, ok := cellBounds[currentCell]
+	if !ok {
+		return nil
+	}
+
+	var candidates []string
+
+	for cellID, bounds := range cellBounds {
+		if cellID == currentCell {
 			continue
 		}
 
-		// Get visible frame (excludes menu bar and dock)
-		if rect, ok := parseFrame(display["visibleFrame"]); ok {
-			return rect, nil
-		}
-
-		// Fallback to regular frame
-		if rect, ok := parseFrame(display["frame"]); ok {
-			return rect, nil
+		switch direction {
+		case types.DirLeft:
+			// Wrap to right edge: find rightmost cells that overlap vertically
+			if overlapsVertically(current, bounds) {
+				candidates = append(candidates, cellID)
+			}
+		case types.DirRight:
+			// Wrap to left edge: find leftmost cells that overlap vertically
+			if overlapsVertically(current, bounds) {
+				candidates = append(candidates, cellID)
+			}
+		case types.DirUp:
+			// Wrap to bottom: find bottommost cells that overlap horizontally
+			if overlapsHorizontally(current, bounds) {
+				candidates = append(candidates, cellID)
+			}
+		case types.DirDown:
+			// Wrap to top: find topmost cells that overlap horizontally
+			if overlapsHorizontally(current, bounds) {
+				candidates = append(candidates, cellID)
+			}
 		}
 	}
 
-	return types.Rect{}, fmt.Errorf("no display found for space %s", spaceID)
+	// Sort by position based on direction (find the extremes)
+	if len(candidates) > 0 {
+		// For wrap, we want the cells on the opposite edge
+		switch direction {
+		case types.DirLeft:
+			// Find rightmost
+			candidates = filterByEdge(candidates, cellBounds, func(a, b types.Rect) bool {
+				return a.X+a.Width > b.X+b.Width
+			})
+		case types.DirRight:
+			// Find leftmost
+			candidates = filterByEdge(candidates, cellBounds, func(a, b types.Rect) bool {
+				return a.X < b.X
+			})
+		case types.DirUp:
+			// Find bottommost
+			candidates = filterByEdge(candidates, cellBounds, func(a, b types.Rect) bool {
+				return a.Y+a.Height > b.Y+b.Height
+			})
+		case types.DirDown:
+			// Find topmost
+			candidates = filterByEdge(candidates, cellBounds, func(a, b types.Rect) bool {
+				return a.Y < b.Y
+			})
+		}
+	}
+
+	return candidates
 }
 
-// parseFrame handles both object format {x,y,width,height} and array format [[x,y],[w,h]]
-func parseFrame(frame interface{}) (types.Rect, bool) {
-	if frame == nil {
-		return types.Rect{}, false
+// filterByEdge returns cells that are at the extreme edge.
+func filterByEdge(cells []string, cellBounds map[string]types.Rect, better func(a, b types.Rect) bool) []string {
+	if len(cells) == 0 {
+		return nil
 	}
 
-	// Try object format: {x, y, width, height}
-	if obj, ok := frame.(map[string]interface{}); ok {
-		return types.Rect{
-			X:      toFloat64(obj["x"]),
-			Y:      toFloat64(obj["y"]),
-			Width:  toFloat64(obj["width"]),
-			Height: toFloat64(obj["height"]),
-		}, true
-	}
+	best := cells[0]
+	bestBounds := cellBounds[best]
 
-	// Try array format: [[x, y], [width, height]]
-	if arr, ok := frame.([]interface{}); ok && len(arr) == 2 {
-		origin, okOrigin := arr[0].([]interface{})
-		size, okSize := arr[1].([]interface{})
-
-		if okOrigin && okSize && len(origin) >= 2 && len(size) >= 2 {
-			return types.Rect{
-				X:      toFloat64(origin[0]),
-				Y:      toFloat64(origin[1]),
-				Width:  toFloat64(size[0]),
-				Height: toFloat64(size[1]),
-			}, true
+	for _, cellID := range cells[1:] {
+		bounds := cellBounds[cellID]
+		if better(bounds, bestBounds) {
+			best = cellID
+			bestBounds = bounds
 		}
 	}
 
-	return types.Rect{}, false
+	// Return all cells at the same edge position
+	var result []string
+	for _, cellID := range cells {
+		bounds := cellBounds[cellID]
+		if !better(bestBounds, bounds) && !better(bounds, bestBounds) {
+			result = append(result, cellID)
+		} else if bounds == bestBounds {
+			result = append(result, cellID)
+		}
+	}
+
+	if len(result) == 0 {
+		result = []string{best}
+	}
+
+	return result
 }
 
-func toFloat64(v interface{}) float64 {
-	switch n := v.(type) {
-	case float64:
-		return n
-	case float32:
-		return float64(n)
-	case int:
-		return float64(n)
-	case int64:
-		return float64(n)
-	case int32:
-		return float64(n)
-	default:
-		return 0
+// pickClosestCell picks the cell closest to the current cell's center.
+func pickClosestCell(currentCell string, candidates []string, cellBounds map[string]types.Rect) string {
+	if len(candidates) == 0 {
+		return ""
 	}
+	if len(candidates) == 1 {
+		return candidates[0]
+	}
+
+	currentBounds, ok := cellBounds[currentCell]
+	if !ok {
+		return candidates[0]
+	}
+	currentCenter := currentBounds.Center()
+
+	closest := candidates[0]
+	closestDist := math.MaxFloat64
+
+	for _, cellID := range candidates {
+		bounds := cellBounds[cellID]
+		center := bounds.Center()
+		dist := math.Sqrt(math.Pow(center.X-currentCenter.X, 2) + math.Pow(center.Y-currentCenter.Y, 2))
+		if dist < closestDist {
+			closestDist = dist
+			closest = cellID
+		}
+	}
+
+	return closest
+}
+
+// overlapsVertically checks if two rects have vertical overlap.
+func overlapsVertically(a, b types.Rect) bool {
+	return a.Y < b.Y+b.Height && a.Y+a.Height > b.Y
+}
+
+// overlapsHorizontally checks if two rects have horizontal overlap.
+func overlapsHorizontally(a, b types.Rect) bool {
+	return a.X < b.X+b.Width && a.X+a.Width > b.X
 }
