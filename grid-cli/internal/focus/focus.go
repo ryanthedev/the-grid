@@ -182,6 +182,7 @@ func FocusCell(
 }
 
 // focusCellByID is internal helper to focus a cell.
+// Uses the cell's LastFocusedIdx to restore the previously focused window.
 func focusCellByID(ctx context.Context, c *client.Client, rs *state.RuntimeState, spaceID string, cellID string) (uint32, error) {
 	mutableSpace := rs.GetSpace(spaceID)
 	cell := mutableSpace.Cells[cellID]
@@ -189,11 +190,17 @@ func focusCellByID(ctx context.Context, c *client.Client, rs *state.RuntimeState
 		return 0, fmt.Errorf("no windows in cell %s", cellID)
 	}
 
-	windowID := cell.Windows[0]
+	// Use LastFocusedIdx instead of hardcoded 0
+	idx := cell.LastFocusedIdx
+	if idx < 0 || idx >= len(cell.Windows) {
+		idx = 0 // Fallback if index is out of bounds
+	}
+
+	windowID := cell.Windows[idx]
 	if err := focusWindow(ctx, c, windowID); err != nil {
 		return 0, err
 	}
-	mutableSpace.SetFocus(cellID, 0)
+	mutableSpace.SetFocus(cellID, idx)
 	rs.MarkUpdated()
 	rs.Save()
 	return windowID, nil
