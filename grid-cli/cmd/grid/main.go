@@ -1478,7 +1478,7 @@ var focusCmd = &cobra.Command{
 }
 
 // focusDirectionHelper is a helper function for directional focus commands
-func focusDirectionHelper(direction gridTypes.Direction, wrapAround bool) error {
+func focusDirectionHelper(direction gridTypes.Direction, wrapAround bool, extend bool) error {
 	cfg, err := gridConfig.LoadConfig("")
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
@@ -1506,7 +1506,11 @@ func focusDirectionHelper(direction gridTypes.Direction, wrapAround bool) error 
 	}
 
 	// 3. Move focus
-	windowID, err := gridFocus.MoveFocus(ctx, c, snap, cfg, runtimeState, direction, wrapAround)
+	opts := gridFocus.MoveFocusOpts{
+		WrapAround: wrapAround,
+		Extend:     extend,
+	}
+	windowID, err := gridFocus.MoveFocus(ctx, c, snap, cfg, runtimeState, direction, opts)
 	if err != nil {
 		return fmt.Errorf("failed to move focus: %w", err)
 	}
@@ -1522,7 +1526,11 @@ var focusLeftCmd = &cobra.Command{
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		wrap, _ := cmd.Flags().GetBool("wrap")
-		return focusDirectionHelper(gridTypes.DirLeft, wrap)
+		extend, _ := cmd.Flags().GetBool("extend")
+		if extend {
+			logging.Debug().Bool("extend", extend).Msg("cross-monitor focus enabled")
+		}
+		return focusDirectionHelper(gridTypes.DirLeft, wrap, extend)
 	},
 }
 
@@ -1533,7 +1541,11 @@ var focusRightCmd = &cobra.Command{
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		wrap, _ := cmd.Flags().GetBool("wrap")
-		return focusDirectionHelper(gridTypes.DirRight, wrap)
+		extend, _ := cmd.Flags().GetBool("extend")
+		if extend {
+			logging.Debug().Bool("extend", extend).Msg("cross-monitor focus enabled")
+		}
+		return focusDirectionHelper(gridTypes.DirRight, wrap, extend)
 	},
 }
 
@@ -1544,7 +1556,11 @@ var focusUpCmd = &cobra.Command{
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		wrap, _ := cmd.Flags().GetBool("wrap")
-		return focusDirectionHelper(gridTypes.DirUp, wrap)
+		extend, _ := cmd.Flags().GetBool("extend")
+		if extend {
+			logging.Debug().Bool("extend", extend).Msg("cross-monitor focus enabled")
+		}
+		return focusDirectionHelper(gridTypes.DirUp, wrap, extend)
 	},
 }
 
@@ -1555,7 +1571,11 @@ var focusDownCmd = &cobra.Command{
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		wrap, _ := cmd.Flags().GetBool("wrap")
-		return focusDirectionHelper(gridTypes.DirDown, wrap)
+		extend, _ := cmd.Flags().GetBool("extend")
+		if extend {
+			logging.Debug().Bool("extend", extend).Msg("cross-monitor focus enabled")
+		}
+		return focusDirectionHelper(gridTypes.DirDown, wrap, extend)
 	},
 }
 
@@ -2108,6 +2128,11 @@ func init() {
 	focusRightCmd.Flags().Bool("wrap", true, "Wrap around to opposite edge")
 	focusUpCmd.Flags().Bool("wrap", true, "Wrap around to opposite edge")
 	focusDownCmd.Flags().Bool("wrap", true, "Wrap around to opposite edge")
+
+	focusLeftCmd.Flags().Bool("extend", false, "Extend focus to adjacent monitors when no cell exists in direction")
+	focusRightCmd.Flags().Bool("extend", false, "Extend focus to adjacent monitors when no cell exists in direction")
+	focusUpCmd.Flags().Bool("extend", false, "Extend focus to adjacent monitors when no cell exists in direction")
+	focusDownCmd.Flags().Bool("extend", false, "Extend focus to adjacent monitors when no cell exists in direction")
 
 	// Add the-grid resize commands
 	rootCmd.AddCommand(gridResizeCmd)

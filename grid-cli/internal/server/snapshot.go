@@ -8,6 +8,15 @@ import (
 	"github.com/yourusername/grid-cli/internal/types"
 )
 
+// DisplayInfo contains display metadata for cross-monitor navigation
+type DisplayInfo struct {
+	UUID           string
+	Frame          types.Rect  // Full screen bounds in global Quartz coordinates
+	VisibleFrame   types.Rect  // Excludes menu bar/dock
+	CurrentSpaceID interface{} // Can be int, float64, or bool (for overflow)
+	IsMain         bool
+}
+
 // Snapshot is a parsed, read-only view of server state at a point in time.
 // It contains everything needed to reconcile local state and execute commands.
 type Snapshot struct {
@@ -16,6 +25,7 @@ type Snapshot struct {
 	Windows         []WindowInfo      // All tileable windows on current space
 	WindowIDs       map[uint32]bool   // Quick lookup: does window exist?
 	FocusedWindowID uint32            // OS-focused window ID (from metadata)
+	AllDisplays     []DisplayInfo     // All connected displays with global frames
 }
 
 // WindowInfo contains window data needed for layout operations.
@@ -82,6 +92,9 @@ func parseSnapshot(raw map[string]interface{}) (*Snapshot, error) {
 	// 6. Get focused window ID from metadata
 	snap.FocusedWindowID = parseFocusedWindowID(raw)
 
+	// 7. Parse all displays for cross-monitor navigation
+	snap.AllDisplays = parseAllDisplays(raw)
+
 	return snap, nil
 }
 
@@ -91,6 +104,49 @@ func parseFocusedWindowID(raw map[string]interface{}) uint32 {
 		return 0
 	}
 	return uint32(toFloat64(metadata["focusedWindowID"]))
+}
+
+// parseAllDisplays extracts information about all connected displays
+func parseAllDisplays(raw map[string]interface{}) []DisplayInfo {
+	displays, ok := raw["displays"].([]interface{})
+	if !ok || len(displays) == 0 {
+		return nil
+	}
+
+	var allDisplays []DisplayInfo
+
+	for _, d := range displays {
+		display, ok := d.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		// Extract UUID (required)
+		uuid, ok := display["uuid"].(string)
+		if !ok || uuid == "" {
+			continue
+		}
+
+		displayInfo := DisplayInfo{
+			UUID:           uuid,
+			CurrentSpaceID: display["currentSpaceID"], // Keep as interface{} for overflow handling
+			IsMain:         toBool(display["isMain"]),
+		}
+
+		// Parse frame (full screen bounds)
+		if rect, ok := parseFrame(display["frame"]); ok {
+			displayInfo.Frame = rect
+		}
+
+		// Parse visibleFrame (excludes menu bar/dock)
+		if rect, ok := parseFrame(display["visibleFrame"]); ok {
+			displayInfo.VisibleFrame = rect
+		}
+
+		allDisplays = append(allDisplays, displayInfo)
+	}
+
+	return allDisplays
 }
 
 // getActiveDisplayUUID extracts the active display UUID from server metadata.
