@@ -22,9 +22,30 @@ class DisplayInfoHelper {
         let displayID = getCGDisplayID(from: screen)
         display.displayID = displayID
 
-        // Extract NSScreen properties
-        display.frame = screen.frame
-        display.visibleFrame = screen.visibleFrame
+        // Extract NSScreen properties and convert to Quartz coordinates
+        // NSScreen uses Cocoa coords (Y=0 at bottom, increases upward)
+        // Windows use Quartz coords (Y=0 at top of MAIN display, increases downward)
+        // Formula: quartz_y = main_screen_height - (cocoa_y + rect_height)
+        let mainScreenHeight = NSScreen.main?.frame.height ?? screen.frame.height
+
+        // Convert frame from Cocoa to Quartz
+        let frameQuartzY = mainScreenHeight - (screen.frame.origin.y + screen.frame.height)
+        display.frame = CGRect(
+            x: screen.frame.origin.x,
+            y: frameQuartzY,
+            width: screen.frame.width,
+            height: screen.frame.height
+        )
+
+        // Convert visibleFrame from Cocoa to Quartz
+        let visibleQuartzY = mainScreenHeight - (screen.visibleFrame.origin.y + screen.visibleFrame.height)
+        display.visibleFrame = CGRect(
+            x: screen.visibleFrame.origin.x,
+            y: visibleQuartzY,
+            width: screen.visibleFrame.width,
+            height: screen.visibleFrame.height
+        )
+
         display.backingScaleFactor = screen.backingScaleFactor
 
         // Check if main display

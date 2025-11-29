@@ -49,27 +49,37 @@ func parseSnapshot(raw map[string]interface{}) (*Snapshot, error) {
 		WindowIDs: make(map[uint32]bool),
 	}
 
-	// 1. Find current active space
-	snap.SpaceID = findActiveSpaceID(raw)
+	// 1. Get active display UUID first - this determines everything else
+	activeDisplayUUID, err := getActiveDisplayUUID(raw)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get active display: %w", err)
+	}
 
-	// 2. Get display bounds for the active space
-	bounds, err := findDisplayBounds(raw, snap.SpaceID)
+	// 2. Find current active space using the display UUID
+	spaceID, err := findActiveSpaceID(raw, activeDisplayUUID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to determine active space: %w", err)
+	}
+	snap.SpaceID = spaceID
+
+	// 3. Get display bounds for the ACTIVE display (not first display!)
+	bounds, err := findDisplayBounds(raw, activeDisplayUUID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get display bounds: %w", err)
 	}
 	snap.DisplayBounds = bounds
 
-	// 3. Parse and filter windows for the active space
+	// 4. Parse and filter windows for the active space
 	snap.Windows = parseWindows(raw, snap.SpaceID)
 
-	// 4. Build window ID lookup map (only tileable windows)
+	// 5. Build window ID lookup map (only tileable windows)
 	for _, w := range snap.Windows {
 		if w.IsTileable() {
 			snap.WindowIDs[w.ID] = true
 		}
 	}
 
-	// 5. Get focused window ID from metadata
+	// 6. Get focused window ID from metadata
 	snap.FocusedWindowID = parseFocusedWindowID(raw)
 
 	return snap, nil
@@ -83,45 +93,26 @@ func parseFocusedWindowID(raw map[string]interface{}) uint32 {
 	return uint32(toFloat64(metadata["focusedWindowID"]))
 }
 
-func findActiveSpaceID(raw map[string]interface{}) string {
-	// Try displays first - find the display with the active space
-	displays, ok := raw["displays"].([]interface{})
-	if ok {
-		for _, d := range displays {
-			display, ok := d.(map[string]interface{})
-			if !ok {
-				continue
-			}
-			if currentSpaceID := display["currentSpaceID"]; currentSpaceID != nil {
-				return fmt.Sprintf("%v", interfaceToInt(currentSpaceID))
-			}
-		}
+// getActiveDisplayUUID extracts the active display UUID from server metadata.
+func getActiveDisplayUUID(raw map[string]interface{}) (string, error) {
+	metadata, ok := raw["metadata"].(map[string]interface{})
+	if !ok {
+		return "", fmt.Errorf("missing metadata in server state")
 	}
 
-	// Fallback to spaces - find the active one
-	spaces, ok := raw["spaces"].(map[string]interface{})
-	if ok {
-		for _, s := range spaces {
-			space, ok := s.(map[string]interface{})
-			if !ok {
-				continue
-			}
-			if isActive, ok := space["isActive"].(bool); ok && isActive {
-				if id := space["id"]; id != nil {
-					return fmt.Sprintf("%v", interfaceToInt(id))
-				}
-			}
-		}
+	activeDisplayUUID, ok := metadata["activeDisplayUUID"].(string)
+	if !ok || activeDisplayUUID == "" {
+		return "", fmt.Errorf("missing activeDisplayUUID in metadata")
 	}
 
-	// Last resort fallback
-	return "1"
+	return activeDisplayUUID, nil
 }
 
-func findDisplayBounds(raw map[string]interface{}, spaceID string) (types.Rect, error) {
+// findActiveSpaceID finds the current space ID for the given active display.
+func findActiveSpaceID(raw map[string]interface{}, activeDisplayUUID string) (string, error) {
 	displays, ok := raw["displays"].([]interface{})
-	if !ok {
-		return types.Rect{}, fmt.Errorf("no displays in state")
+	if !ok || len(displays) == 0 {
+		return "", fmt.Errorf("no displays in server state")
 	}
 
 	for _, d := range displays {
@@ -130,18 +121,52 @@ func findDisplayBounds(raw map[string]interface{}, spaceID string) (types.Rect, 
 			continue
 		}
 
-		// Try visibleFrame first (excludes menu bar and dock)
+		uuid, ok := display["uuid"].(string)
+		if !ok || uuid != activeDisplayUUID {
+			continue
+		}
+
+		currentSpaceID := display["currentSpaceID"]
+		if currentSpaceID == nil {
+			return "", fmt.Errorf("active display %s has no currentSpaceID", activeDisplayUUID)
+		}
+
+		return fmt.Sprintf("%v", interfaceToInt(currentSpaceID)), nil
+	}
+
+	return "", fmt.Errorf("active display %s not found", activeDisplayUUID)
+}
+
+// findDisplayBounds finds the visible frame for the given active display.
+func findDisplayBounds(raw map[string]interface{}, activeDisplayUUID string) (types.Rect, error) {
+	displays, ok := raw["displays"].([]interface{})
+	if !ok || len(displays) == 0 {
+		return types.Rect{}, fmt.Errorf("no displays in server state")
+	}
+
+	for _, d := range displays {
+		display, ok := d.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		uuid, ok := display["uuid"].(string)
+		if !ok || uuid != activeDisplayUUID {
+			continue
+		}
+
+		// Found the active display - get its bounds
 		if rect, ok := parseFrame(display["visibleFrame"]); ok {
 			return rect, nil
 		}
-
-		// Fallback to regular frame
 		if rect, ok := parseFrame(display["frame"]); ok {
 			return rect, nil
 		}
+
+		return types.Rect{}, fmt.Errorf("active display %s has no frame data", activeDisplayUUID)
 	}
 
-	return types.Rect{}, fmt.Errorf("no display bounds found")
+	return types.Rect{}, fmt.Errorf("active display %s not found", activeDisplayUUID)
 }
 
 func parseWindows(raw map[string]interface{}, spaceID string) []WindowInfo {

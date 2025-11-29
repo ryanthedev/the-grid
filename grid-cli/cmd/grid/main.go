@@ -1200,21 +1200,15 @@ var layoutCurrentCmd = &cobra.Command{
 			return fmt.Errorf("failed to load state: %w", err)
 		}
 
-		// If no space specified, get current from server
+		// If no space specified, get current from server using proper snapshot
 		if spaceID == "" {
 			c := client.NewClient(socketPath, timeout)
 			defer c.Close()
-			result, err := c.Dump(context.Background())
-			if err == nil {
-				if metadata, ok := result["metadata"].(map[string]interface{}); ok {
-					if activeSpace, ok := metadata["activeSpace"]; ok {
-						spaceID = fmt.Sprintf("%v", activeSpace)
-					}
-				}
+			snap, err := gridServer.Fetch(context.Background(), c)
+			if err != nil {
+				return fmt.Errorf("failed to get current space: %w", err)
 			}
-			if spaceID == "" {
-				spaceID = "1" // fallback
-			}
+			spaceID = snap.SpaceID
 		}
 
 		layoutID := runtimeState.GetCurrentLayoutForSpace(spaceID)

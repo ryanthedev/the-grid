@@ -861,7 +861,9 @@ class StateManager {
             if self.state.metadata.focusedWindowID == windowID {
                 self.logger.debug("Clearing focus (focused window destroyed)")
                 self.state.metadata.focusedWindowID = nil
-                // Note: activeDisplayUUID remains until new window is focused
+                self.state.metadata.activeDisplayUUID = nil
+                // Try to recover activeDisplayUUID from current active space
+                self.updateActiveDisplayFromSpaces()
             }
 
             // Remove from state
@@ -990,6 +992,9 @@ class StateManager {
             self.logger.info("Space changed - refreshing spaces and window assignments")
             self.refreshSpaces()
 
+            // Update activeDisplayUUID based on which display has the new active space
+            self.updateActiveDisplayFromSpaces()
+
             // Re-query space assignments for all visible windows
             for windowKey in self.state.windows.keys {
                 if let windowID = UInt32(windowKey),
@@ -1001,6 +1006,27 @@ class StateManager {
 
             self.state.metadata.update()
         }
+    }
+
+    /// Update activeDisplayUUID based on which display has the focused/active space
+    private func updateActiveDisplayFromSpaces() {
+        // Find the display that has the currently active space
+        for display in state.displays {
+            let spaceKey = String(display.currentSpaceID)
+            if let space = state.spaces[spaceKey], space.isActive {
+                let oldUUID = state.metadata.activeDisplayUUID
+                state.metadata.activeDisplayUUID = display.uuid
+                if oldUUID != display.uuid {
+                    logger.info("🖥️  Updated activeDisplayUUID from space change", metadata: [
+                        "displayUUID": "\(display.uuid)",
+                        "spaceID": "\(display.currentSpaceID)",
+                        "previousUUID": "\(oldUUID ?? "nil")"
+                    ])
+                }
+                return
+            }
+        }
+        logger.debug("No active space found on any display")
     }
 
     func handleDisplayConfigurationChanged() {
