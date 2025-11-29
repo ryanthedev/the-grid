@@ -390,11 +390,6 @@ Windows are categorized as:
 
 ## 8. Key Files
 
-### Feature Specification
-- `.features/layouts/Specification.md` - Full technical spec
-- `.features/layouts/phases/` - Phase-by-phase implementation specs
-- `.features/layouts/DEVIATIONS.md` - Implementation deviations from spec
-
 ### Implementation
 - `grid-cli/internal/types/layout_types.go` - Core type definitions
 - `grid-cli/internal/config/` - Configuration loading and parsing
