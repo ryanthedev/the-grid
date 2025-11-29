@@ -62,8 +62,8 @@ grid-cli/
 │   │   └── connection.go         # Unix socket connection
 │   ├── models/
 │   │   └── envelope.go           # Message protocol types
-│   ├── output/                   # Output formatting (TODO)
-│   └── config/                   # Configuration (TODO)
+│   ├── output/                   # Output formatting (tables.go)
+│   └── config/                   # Configuration loading and validation
 ├── go.mod
 ├── Makefile
 └── README.md
@@ -219,36 +219,39 @@ The following methods are available in the GridServer API:
 
 See the main GridServer README for complete API documentation.
 
-## Next Steps (TODO)
+## Implemented Features
 
-### Phase 2: Query Commands
-- [ ] `grid list spaces` - List all spaces with tables
-- [ ] `grid list windows` - List all windows
-- [ ] `grid list apps` - List all applications
-- [ ] `grid list displays` - List all displays
-- [ ] `grid window get <id>` - Get specific window
-- [ ] Add tablewriter formatting
-- [ ] Add filtering options
+### Query Commands
+- [x] `grid list spaces` - List all spaces with tables
+- [x] `grid list windows` - List windows (with yabai-style filtering, use `--all` for all)
+- [x] `grid list apps` - List all applications
+- [x] `grid list displays` - List all displays
+- [x] `grid window get <id>` - Get specific window details
+- [x] Table formatting via `internal/output/`
+- [x] Filtering options (`--all` flag)
 
-### Phase 3: Window Manipulation
-- [ ] `grid window move <id> --x X --y Y`
-- [ ] `grid window resize <id> --width W --height H`
-- [ ] `grid window to-space <id> <space-id>`
-- [ ] `grid window to-display <id> <uuid>`
-- [ ] Add interactive prompts (survey)
-- [ ] Add dry-run mode
+### Window Manipulation
+- [x] `grid window update <id> --x X --y Y --width W --height H` - Move/resize (unified command)
+- [x] `grid window to-space <id> <space-id>` - Move to specific space
+- [x] `grid window to-display <id> <uuid>` - Move to specific display
 
-### Phase 4: Configuration
+### Configuration
+- [x] `grid config show` - Display current configuration
+- [x] `grid config validate [path]` - Validate config file
+- [x] `grid config init` - Create default configuration
+
+## Remaining TODOs
+
+### Configuration Enhancements
 - [ ] Add Viper config support
-- [ ] Create `~/.gridrc` config file
+- [ ] Create `~/.gridrc` config file support
 - [ ] Support environment variables
-- [ ] Add config command
+- [ ] Add `grid config get/set/list` commands
 
-### Phase 5: Advanced Features
-- [ ] Event streaming (`grid watch`)
+### Advanced Features
 - [ ] Shell completion
 - [ ] Batch operations
-- [ ] Interactive mode (REPL)
+- [ ] Dry-run mode
 
 ## Development
 

@@ -1474,7 +1474,7 @@ var stateResetCmd = &cobra.Command{
 	},
 }
 
-// MARK: - GridWM Focus Commands (Stubs)
+// MARK: - the-grid Focus Commands
 
 // focusCmd is the parent command for focus subcommands
 var focusCmd = &cobra.Command{
@@ -1705,7 +1705,7 @@ var focusCellCmd = &cobra.Command{
 	},
 }
 
-// MARK: - GridWM Resize Commands (Stubs)
+// MARK: - the-grid Resize Commands
 
 // resizeCmd is the parent command for resize subcommands
 var gridResizeCmd = &cobra.Command{
@@ -1823,7 +1823,7 @@ var resizeResetCmd = &cobra.Command{
 	},
 }
 
-// MARK: - GridWM Cell Commands
+// MARK: - the-grid Cell Commands
 
 // cellCmd is the parent command for cell operations
 var cellCmd = &cobra.Command{
@@ -1889,7 +1889,7 @@ func formatTrackSizes(tracks []gridTypes.TrackSize) string {
 	return "[" + strings.Join(parts, ", ") + "]"
 }
 
-// MARK: - Render Command (POC)
+// MARK: - Render Command
 
 // RenderWindow represents a window with normalized coordinates
 type RenderWindow struct {
@@ -2074,7 +2074,7 @@ func init() {
 	rootCmd.AddCommand(spaceCmd)
 	rootCmd.AddCommand(renderCmd)
 
-	// Add GridWM layout commands
+	// Add the-grid layout commands
 	rootCmd.AddCommand(gridLayoutCmd)
 	gridLayoutCmd.AddCommand(layoutListCmd)
 	gridLayoutCmd.AddCommand(layoutShowCmd)
@@ -2088,18 +2088,18 @@ func init() {
 	layoutCycleCmd.Flags().String("space", "", "Space ID to cycle layout for")
 	layoutCurrentCmd.Flags().String("space", "", "Space ID to check")
 
-	// Add GridWM config commands
+	// Add the-grid config commands
 	rootCmd.AddCommand(gridConfigCmd)
 	gridConfigCmd.AddCommand(configShowCmd)
 	gridConfigCmd.AddCommand(configValidateCmd)
 	gridConfigCmd.AddCommand(configInitCmd)
 
-	// Add GridWM state commands
+	// Add the-grid state commands
 	rootCmd.AddCommand(gridStateCmd)
 	gridStateCmd.AddCommand(stateShowCmd)
 	gridStateCmd.AddCommand(stateResetCmd)
 
-	// Add GridWM focus commands
+	// Add the-grid focus commands
 	rootCmd.AddCommand(focusCmd)
 	focusCmd.AddCommand(focusLeftCmd)
 	focusCmd.AddCommand(focusRightCmd)
@@ -2115,7 +2115,7 @@ func init() {
 	focusUpCmd.Flags().Bool("wrap", true, "Wrap around to opposite edge")
 	focusDownCmd.Flags().Bool("wrap", true, "Wrap around to opposite edge")
 
-	// Add GridWM resize commands
+	// Add the-grid resize commands
 	rootCmd.AddCommand(gridResizeCmd)
 	gridResizeCmd.AddCommand(resizeAdjustCmd)
 	gridResizeCmd.AddCommand(resizeResetCmd)
@@ -2123,7 +2123,7 @@ func init() {
 	// Add resize command flags
 	resizeResetCmd.Flags().Bool("all", false, "Reset all cells, not just focused cell")
 
-	// Add GridWM cell commands
+	// Add the-grid cell commands
 	rootCmd.AddCommand(cellCmd)
 	cellCmd.AddCommand(cellSendCmd)
 
