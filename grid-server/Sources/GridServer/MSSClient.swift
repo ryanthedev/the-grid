@@ -10,6 +10,41 @@ import Foundation
 import Logging
 import mss
 
+// MARK: - WindowLayer
+
+/// Swift-native wrapper for mss_window_layer C enum
+enum WindowLayer: String, CustomStringConvertible {
+    case below
+    case normal
+    case above
+
+    var description: String { rawValue }
+
+    /// Convert to C enum value for MSS calls
+    var mssValue: mss_window_layer {
+        switch self {
+        case .below: return MSS_LAYER_BELOW
+        case .normal: return MSS_LAYER_NORMAL
+        case .above: return MSS_LAYER_ABOVE
+        }
+    }
+
+    /// Initialize from C enum value
+    init?(mssValue: mss_window_layer) {
+        switch mssValue {
+        case MSS_LAYER_BELOW: self = .below
+        case MSS_LAYER_NORMAL: self = .normal
+        case MSS_LAYER_ABOVE: self = .above
+        default: return nil
+        }
+    }
+
+    /// Initialize from string
+    init?(string: String) {
+        self.init(rawValue: string.lowercased())
+    }
+}
+
 /// Client for communicating with the MSS scripting addition payload
 class MSSClient {
     private var ctx: OpaquePointer?
@@ -192,26 +227,24 @@ class MSSClient {
     ///   - windowID: The window ID
     ///   - layer: The desired layer (below, normal, above)
     /// - Returns: true if successful
-    func setWindowLayer(windowID: UInt32, layer: mss_window_layer) -> Bool {
+    func setWindowLayer(windowID: UInt32, layer: WindowLayer) -> Bool {
         return queue.sync {
             guard let ctx = ctx else { return false }
 
-            let layerName = layer == MSS_LAYER_ABOVE ? "above" :
-                           layer == MSS_LAYER_BELOW ? "below" : "normal"
             logger.debug("Setting window layer", metadata: [
                 "windowID": "\(windowID)",
-                "layer": "\(layerName)"
+                "layer": "\(layer.description)"
             ])
 
-            return mss_window_set_layer(ctx, windowID, layer)
+            return mss_window_set_layer(ctx, windowID, layer.mssValue)
         }
     }
 
     /// Get current window layer
     /// - Parameter windowID: The window ID
     /// - Returns: Window layer or nil if query failed
-    func getWindowLayer(_ windowID: UInt32) -> mss_window_layer? {
-        var result: mss_window_layer? = nil
+    func getWindowLayer(_ windowID: UInt32) -> WindowLayer? {
+        var result: WindowLayer? = nil
         queue.sync {
             guard let ctx = ctx else { return }
 
@@ -219,7 +252,7 @@ class MSSClient {
             let success = mss_window_get_layer(ctx, windowID, &layer)
 
             if success {
-                result = layer
+                result = WindowLayer(mssValue: layer)
             }
         }
         return result
@@ -259,6 +292,44 @@ class MSSClient {
             }
         }
         return result
+    }
+
+    /// Focus a window (bring to front and give focus)
+    /// - Parameter windowID: The window ID
+    /// - Returns: true if successful
+    func focusWindow(_ windowID: UInt32) -> Bool {
+        return queue.sync {
+            guard let ctx = ctx else { return false }
+
+            logger.debug("Focusing window via MSS", metadata: ["windowID": "\(windowID)"])
+            return mss_window_focus(ctx, windowID)
+        }
+    }
+
+    /// Order a window to the front of the z-stack
+    /// - Parameter windowID: The window ID
+    /// - Returns: true if successful
+    func orderWindowToFront(_ windowID: UInt32) -> Bool {
+        return queue.sync {
+            guard let ctx = ctx else { return false }
+
+            logger.debug("Ordering window to front via MSS", metadata: ["windowID": "\(windowID)"])
+            var wid = windowID
+            return mss_window_order_in(ctx, &wid, 1)
+        }
+    }
+
+    /// Order multiple windows to the front of the z-stack
+    /// - Parameter windowIDs: Array of window IDs
+    /// - Returns: true if successful
+    func orderWindowsToFront(_ windowIDs: [UInt32]) -> Bool {
+        return queue.sync {
+            guard let ctx = ctx, !windowIDs.isEmpty else { return false }
+
+            logger.debug("Ordering \(windowIDs.count) windows to front via MSS")
+            var wids = windowIDs
+            return mss_window_order_in(ctx, &wids, Int32(windowIDs.count))
+        }
     }
 
     /// Set window shadow visibility
@@ -434,23 +505,6 @@ class MSSClient {
             }
 
             return result
-        }
-    }
-}
-
-// MARK: - Helper Extensions
-
-extension mss_window_layer: CustomStringConvertible {
-    public var description: String {
-        switch self {
-        case MSS_LAYER_BELOW:
-            return "below"
-        case MSS_LAYER_NORMAL:
-            return "normal"
-        case MSS_LAYER_ABOVE:
-            return "above"
-        default:
-            return "unknown"
         }
     }
 }

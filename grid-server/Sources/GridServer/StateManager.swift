@@ -35,6 +35,9 @@ class StateManager {
     // MSS client for window manipulation and sticky detection
     private let mssClient: MSSClient
 
+    // Polling timer for periodic state refresh
+    private var pollTimer: DispatchSourceTimer?
+
     // MARK: - Initialization
 
     private init() {
@@ -64,6 +67,9 @@ class StateManager {
 
             // Create AX observers for existing applications
             self.observeExistingApplications()
+
+            // Start periodic polling to catch windows that events miss
+            self.startPolling(interval: 3.0)
 
             self.logger.info("StateManager started successfully")
         }
@@ -269,9 +275,22 @@ class StateManager {
             .map { $0.id }
     }
 
-    /// Get AX role, subrole, and parent window ID for a window
-    /// Used for client-side filtering - server collects, client filters
-    private func getAXProperties(pid: pid_t, windowID: UInt32) -> (role: String?, subrole: String?, parent: UInt32?) {
+    /// Result of AX property collection for a window
+    struct AXWindowProperties {
+        var role: String?
+        var subrole: String?
+        var parent: UInt32?
+        var hasCloseButton: Bool = false
+        var hasFullscreenButton: Bool = false
+        var hasMinimizeButton: Bool = false
+        var hasZoomButton: Bool = false
+        var isModal: Bool = false
+    }
+
+    /// Get AX properties for a window (role, subrole, buttons, modal status)
+    /// Used for client-side floating/popup detection
+    private func getAXProperties(pid: pid_t, windowID: UInt32) -> AXWindowProperties {
+        var props = AXWindowProperties()
         let appElement = AXUIElementCreateApplication(pid)
 
         // Get windows for this application
@@ -284,8 +303,11 @@ class StateManager {
 
         guard windowsResult == .success,
               let windows = windowsValue as? [AXUIElement] else {
-            return (nil, nil, nil)
+            logger.debug("🔍 AX: Failed to get windows for pid \(pid), windowID \(windowID), error: \(windowsResult.rawValue)")
+            return props
         }
+
+        logger.debug("🔍 AX: pid \(pid) has \(windows.count) AX windows, looking for CGWindow \(windowID)")
 
         // Find the matching window element
         for windowElement in windows {
@@ -295,44 +317,58 @@ class StateManager {
             if result == .success && cgWindowID == windowID {
                 // Get role
                 var roleValue: CFTypeRef?
-                AXUIElementCopyAttributeValue(
-                    windowElement,
-                    kAXRoleAttribute as CFString,
-                    &roleValue
-                )
-                let role = roleValue as? String
+                AXUIElementCopyAttributeValue(windowElement, kAXRoleAttribute as CFString, &roleValue)
+                props.role = roleValue as? String
 
                 // Get subrole
                 var subroleValue: CFTypeRef?
-                AXUIElementCopyAttributeValue(
-                    windowElement,
-                    kAXSubroleAttribute as CFString,
-                    &subroleValue
-                )
-                let subrole = subroleValue as? String
+                AXUIElementCopyAttributeValue(windowElement, kAXSubroleAttribute as CFString, &subroleValue)
+                props.subrole = subroleValue as? String
 
                 // Get parent window (if any)
                 var parentValue: CFTypeRef?
-                AXUIElementCopyAttributeValue(
-                    windowElement,
-                    kAXParentAttribute as CFString,
-                    &parentValue
-                )
-
-                var parentID: UInt32? = nil
+                AXUIElementCopyAttributeValue(windowElement, kAXParentAttribute as CFString, &parentValue)
                 if let parentElement = parentValue {
-                    // Check if parent is also a window
                     var parentCGID: UInt32 = 0
                     if _AXUIElementGetWindow(parentElement as! AXUIElement, &parentCGID) == .success {
-                        parentID = parentCGID
+                        props.parent = parentCGID
                     }
                 }
 
-                return (role, subrole, parentID)
+                // Get button presence (for floating/popup detection)
+                var closeBtn: CFTypeRef?
+                if AXUIElementCopyAttributeValue(windowElement, kAXCloseButtonAttribute as CFString, &closeBtn) == .success {
+                    props.hasCloseButton = closeBtn != nil
+                }
+
+                var fullscreenBtn: CFTypeRef?
+                if AXUIElementCopyAttributeValue(windowElement, kAXFullScreenButtonAttribute as CFString, &fullscreenBtn) == .success {
+                    props.hasFullscreenButton = fullscreenBtn != nil
+                }
+
+                var minimizeBtn: CFTypeRef?
+                if AXUIElementCopyAttributeValue(windowElement, kAXMinimizeButtonAttribute as CFString, &minimizeBtn) == .success {
+                    props.hasMinimizeButton = minimizeBtn != nil
+                }
+
+                var zoomBtn: CFTypeRef?
+                if AXUIElementCopyAttributeValue(windowElement, kAXZoomButtonAttribute as CFString, &zoomBtn) == .success {
+                    props.hasZoomButton = zoomBtn != nil
+                }
+
+                // Get modal status
+                var modalValue: CFTypeRef?
+                if AXUIElementCopyAttributeValue(windowElement, kAXModalAttribute as CFString, &modalValue) == .success {
+                    props.isModal = (modalValue as? Bool) ?? false
+                }
+
+                logger.debug("🔍 AX: Matched windowID \(windowID): role=\(props.role ?? "nil"), subrole=\(props.subrole ?? "nil"), buttons=[\(props.hasCloseButton ? "close" : "")|\(props.hasFullscreenButton ? "fs" : "")|\(props.hasMinimizeButton ? "min" : "")|\(props.hasZoomButton ? "zoom" : "")], modal=\(props.isModal)")
+                return props
             }
         }
 
-        return (nil, nil, nil)
+        logger.debug("🔍 AX: No AX window matched CGWindow \(windowID) in pid \(pid) (checked \(windows.count) windows)")
+        return props
     }
 
     /// Public method to update window spaces (for WindowManipulator)
@@ -442,10 +478,15 @@ class StateManager {
                 }
 
                 // Get AX properties for client-side filtering
-                let (role, subrole, parent) = getAXProperties(pid: pid, windowID: windowID)
-                windowState.role = role
-                windowState.subrole = subrole
-                windowState.parent = parent
+                let axProps = getAXProperties(pid: pid, windowID: windowID)
+                windowState.role = axProps.role
+                windowState.subrole = axProps.subrole
+                windowState.parent = axProps.parent
+                windowState.hasCloseButton = axProps.hasCloseButton
+                windowState.hasFullscreenButton = axProps.hasFullscreenButton
+                windowState.hasMinimizeButton = axProps.hasMinimizeButton
+                windowState.hasZoomButton = axProps.hasZoomButton
+                windowState.isModal = axProps.isModal
             }
 
             // Window is on-screen if it's in the list (we filtered for on-screen only)
@@ -597,6 +638,154 @@ class StateManager {
         logger.debug("AX observer removed", metadata: ["pid": "\(pid)"])
     }
 
+    // MARK: - Polling
+
+    /// Start periodic window state polling
+    func startPolling(interval: TimeInterval = 3.0) {
+        stopPolling()
+
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + interval, repeating: interval)
+        timer.setEventHandler { [weak self] in
+            self?.pollWindowState()
+        }
+        timer.resume()
+        pollTimer = timer
+        logger.info("Started window polling", metadata: ["interval": "\(interval)s"])
+    }
+
+    /// Stop periodic window state polling
+    func stopPolling() {
+        pollTimer?.cancel()
+        pollTimer = nil
+    }
+
+    /// Poll window state from CGWindowList
+    private func pollWindowState() {
+        let pollTimestamp = Date()
+
+        let options: CGWindowListOption = [.optionAll, .excludeDesktopElements]
+        guard let windowList = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
+            return
+        }
+
+        var seenWindowIDs = Set<UInt32>()
+
+        for windowInfo in windowList {
+            guard let windowID = windowInfo[kCGWindowNumber as String] as? UInt32 else { continue }
+            seenWindowIDs.insert(windowID)
+
+            if let existing = state.windows[String(windowID)] {
+                // Window exists - only update if our data is newer
+                if existing.lastUpdated < pollTimestamp {
+                    updateWindowFromPoll(windowID: windowID, windowInfo: windowInfo, timestamp: pollTimestamp)
+                }
+                // else: skip - event data is fresher
+            } else {
+                // New window discovered by poll
+                addWindowFromPoll(windowID: windowID, windowInfo: windowInfo, timestamp: pollTimestamp)
+            }
+        }
+
+        // Remove windows no longer in CGWindowList
+        for windowKey in state.windows.keys {
+            if let windowID = UInt32(windowKey), !seenWindowIDs.contains(windowID) {
+                logger.info("📡 Poll: removing stale window", metadata: ["windowID": "\(windowID)"])
+                // Inline removal logic (don't call handleWindowDestroyed to avoid log confusion)
+                let pid = state.windows[windowKey]?.pid
+                if state.metadata.focusedWindowID == windowID {
+                    state.metadata.focusedWindowID = nil
+                }
+                state.windows.removeValue(forKey: windowKey)
+                if let pid = pid {
+                    state.applications[String(pid)]?.windows.removeAll { $0 == windowID }
+                }
+                for spaceKey in state.spaces.keys {
+                    state.spaces[spaceKey]?.windows.removeAll { $0 == windowID }
+                }
+            }
+        }
+
+        state.metadata.update()
+    }
+
+    /// Update existing window from poll data
+    private func updateWindowFromPoll(windowID: UInt32, windowInfo: [String: Any], timestamp: Date) {
+        guard var window = state.windows[String(windowID)] else { return }
+
+        // Update frame
+        if let boundsDict = windowInfo[kCGWindowBounds as String] as? [String: CGFloat] {
+            window.frame = CGRect(
+                x: boundsDict["X"] ?? 0, y: boundsDict["Y"] ?? 0,
+                width: boundsDict["Width"] ?? 0, height: boundsDict["Height"] ?? 0
+            )
+        }
+
+        // Update title
+        if let name = windowInfo[kCGWindowName as String] as? String {
+            window.title = name
+        }
+
+        window.lastUpdated = timestamp
+        state.windows[String(windowID)] = window
+
+        // Refresh space assignment
+        updateWindowSpaces(windowID)
+    }
+
+    /// Add new window discovered by poll
+    private func addWindowFromPoll(windowID: UInt32, windowInfo: [String: Any], timestamp: Date) {
+        var window = WindowState(id: windowID)
+
+        if let pid = windowInfo[kCGWindowOwnerPID as String] as? pid_t {
+            window.pid = pid
+            window.appName = getAppNameForPID(pid)
+
+            // Add to app's window list
+            let pidKey = String(pid)
+            if state.applications[pidKey] != nil {
+                if !state.applications[pidKey]!.windows.contains(windowID) {
+                    state.applications[pidKey]!.windows.append(windowID)
+                }
+            }
+        }
+
+        if let boundsDict = windowInfo[kCGWindowBounds as String] as? [String: CGFloat] {
+            window.frame = CGRect(
+                x: boundsDict["X"] ?? 0, y: boundsDict["Y"] ?? 0,
+                width: boundsDict["Width"] ?? 0, height: boundsDict["Height"] ?? 0
+            )
+        }
+
+        if let name = windowInfo[kCGWindowName as String] as? String {
+            window.title = name
+        } else if let ownerName = windowInfo[kCGWindowOwnerName as String] as? String {
+            window.title = ownerName
+        }
+
+        window.isOrderedIn = true
+        window.lastUpdated = timestamp
+
+        // Get AX properties
+        let axProps = getAXProperties(pid: window.pid, windowID: windowID)
+        window.role = axProps.role
+        window.subrole = axProps.subrole
+        window.parent = axProps.parent
+        window.hasCloseButton = axProps.hasCloseButton
+        window.hasFullscreenButton = axProps.hasFullscreenButton
+        window.hasMinimizeButton = axProps.hasMinimizeButton
+        window.hasZoomButton = axProps.hasZoomButton
+        window.isModal = axProps.isModal
+
+        state.windows[String(windowID)] = window
+        updateWindowSpaces(windowID)
+
+        logger.info("📡 Poll discovered window", metadata: [
+            "windowID": "\(windowID)",
+            "app": "\(window.appName ?? "unknown")"
+        ])
+    }
+
     // MARK: - AX Event Handlers (Per-Window Events)
 
     func handleWindowCreated(_ windowID: UInt32, pid: pid_t) {
@@ -612,9 +801,42 @@ class StateManager {
             window.appName = getAppNameForPID(pid)
             window.isOrderedIn = true
 
-            // TODO: Query initial window properties via AX
-            // For now, just add it to state
+            // Query window properties from CGWindowList
+            let options: CGWindowListOption = [.optionIncludingWindow]
+            if let windowList = CGWindowListCopyWindowInfo(options, windowID) as? [[String: Any]],
+               let windowInfo = windowList.first {
+                // Get frame
+                if let boundsDict = windowInfo[kCGWindowBounds as String] as? [String: CGFloat] {
+                    window.frame = CGRect(
+                        x: boundsDict["X"] ?? 0,
+                        y: boundsDict["Y"] ?? 0,
+                        width: boundsDict["Width"] ?? 0,
+                        height: boundsDict["Height"] ?? 0
+                    )
+                }
+                // Get title
+                if let name = windowInfo[kCGWindowName as String] as? String {
+                    window.title = name
+                } else if let ownerName = windowInfo[kCGWindowOwnerName as String] as? String {
+                    window.title = ownerName
+                }
+            }
+
+            // Get AX properties
+            let axProps = self.getAXProperties(pid: pid, windowID: windowID)
+            window.role = axProps.role
+            window.subrole = axProps.subrole
+            window.parent = axProps.parent
+            window.hasCloseButton = axProps.hasCloseButton
+            window.hasFullscreenButton = axProps.hasFullscreenButton
+            window.hasMinimizeButton = axProps.hasMinimizeButton
+            window.hasZoomButton = axProps.hasZoomButton
+            window.isModal = axProps.isModal
+
             self.state.windows[String(windowID)] = window
+
+            // Query space assignment
+            self.updateWindowSpaces(windowID)
 
             // Add window to app's window list
             let pidKey = String(pid)
@@ -639,7 +861,9 @@ class StateManager {
             if self.state.metadata.focusedWindowID == windowID {
                 self.logger.debug("Clearing focus (focused window destroyed)")
                 self.state.metadata.focusedWindowID = nil
-                // Note: activeDisplayUUID remains until new window is focused
+                self.state.metadata.activeDisplayUUID = nil
+                // Try to recover activeDisplayUUID from current active space
+                self.updateActiveDisplayFromSpaces()
             }
 
             // Remove from state
@@ -669,6 +893,7 @@ class StateManager {
 
             guard var window = self.state.windows[String(windowID)] else { return }
             window.frame = frame
+            window.lastUpdated = Date()
             self.state.windows[String(windowID)] = window
 
             // Re-query space assignment after move
@@ -687,6 +912,7 @@ class StateManager {
 
             guard var window = self.state.windows[String(windowID)] else { return }
             window.frame = frame
+            window.lastUpdated = Date()
             self.state.windows[String(windowID)] = window
             self.state.metadata.update()
         }
@@ -725,6 +951,7 @@ class StateManager {
             guard var window = self.state.windows[String(windowID)] else { return }
             window.isMinimized = true
             window.isOrderedIn = false
+            window.lastUpdated = Date()
             self.state.windows[String(windowID)] = window
             self.state.metadata.update()
         }
@@ -737,6 +964,7 @@ class StateManager {
             guard var window = self.state.windows[String(windowID)] else { return }
             window.isMinimized = false
             window.isOrderedIn = true
+            window.lastUpdated = Date()
             self.state.windows[String(windowID)] = window
             self.state.metadata.update()
         }
@@ -751,6 +979,7 @@ class StateManager {
 
             guard var window = self.state.windows[String(windowID)] else { return }
             window.title = title
+            window.lastUpdated = Date()
             self.state.windows[String(windowID)] = window
             self.state.metadata.update()
         }
@@ -763,6 +992,9 @@ class StateManager {
             self.logger.info("Space changed - refreshing spaces and window assignments")
             self.refreshSpaces()
 
+            // Update activeDisplayUUID based on which display has the new active space
+            self.updateActiveDisplayFromSpaces()
+
             // Re-query space assignments for all visible windows
             for windowKey in self.state.windows.keys {
                 if let windowID = UInt32(windowKey),
@@ -774,6 +1006,27 @@ class StateManager {
 
             self.state.metadata.update()
         }
+    }
+
+    /// Update activeDisplayUUID based on which display has the focused/active space
+    private func updateActiveDisplayFromSpaces() {
+        // Find the display that has the currently active space
+        for display in state.displays {
+            let spaceKey = String(display.currentSpaceID)
+            if let space = state.spaces[spaceKey], space.isActive {
+                let oldUUID = state.metadata.activeDisplayUUID
+                state.metadata.activeDisplayUUID = display.uuid
+                if oldUUID != display.uuid {
+                    logger.info("🖥️  Updated activeDisplayUUID from space change", metadata: [
+                        "displayUUID": "\(display.uuid)",
+                        "spaceID": "\(display.currentSpaceID)",
+                        "previousUUID": "\(oldUUID ?? "nil")"
+                    ])
+                }
+                return
+            }
+        }
+        logger.debug("No active space found on any display")
     }
 
     func handleDisplayConfigurationChanged() {
@@ -844,7 +1097,52 @@ class StateManager {
                 self.state.applications[key] = appState
             }
 
+            // Query the app's focused window and update focusedWindowID
+            // This is needed because not all apps send kAXFocusedWindowChangedNotification reliably
+            self.updateFocusedWindowForApp(pid: pid)
+
             self.state.metadata.update()
+        }
+    }
+
+    /// Query an app's focused window via AX API and update focusedWindowID
+    /// This provides a fallback when AX notifications don't fire reliably
+    private func updateFocusedWindowForApp(pid: pid_t) {
+        let appElement = AXUIElementCreateApplication(pid)
+
+        var focusedWindow: CFTypeRef?
+        let result = AXUIElementCopyAttributeValue(
+            appElement,
+            kAXFocusedWindowAttribute as CFString,
+            &focusedWindow
+        )
+
+        guard result == .success,
+              let windowElement = focusedWindow else {
+            logger.debug("Could not get focused window for app", metadata: ["pid": "\(pid)"])
+            return
+        }
+
+        // Get CGWindowID from AX element
+        var windowID: UInt32 = 0
+        let windowResult = _AXUIElementGetWindow(windowElement as! AXUIElement, &windowID)
+
+        guard windowResult == .success, windowID != 0 else {
+            logger.debug("Could not get window ID from focused window", metadata: ["pid": "\(pid)"])
+            return
+        }
+
+        // Update focused window state
+        logger.info("🎯 Window focused (from app activation)", metadata: [
+            "windowID": "\(windowID)",
+            "pid": "\(pid)"
+        ])
+
+        self.state.metadata.focusedWindowID = windowID
+
+        // Also update active display
+        if let displayUUID = SLSCopyManagedDisplayForWindow(self.connectionID, windowID) {
+            self.state.metadata.activeDisplayUUID = displayUUID as String
         }
     }
 

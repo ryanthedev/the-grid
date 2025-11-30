@@ -79,29 +79,6 @@ class EventBroadcaster {
         sendEvent(type: "heartbeat", data: data)
     }
 
-    /// Send a space changed event (placeholder for future implementation)
-    func sendSpaceChanged(from: Int, to: Int) {
-        let data: [String: Any] = [
-            "from": from,
-            "to": to,
-            "timestamp": Date().timeIntervalSince1970
-        ]
-
-        sendEvent(type: "spaceChanged", data: data)
-    }
-
-    /// Send a window event (placeholder for future implementation)
-    func sendWindowEvent(action: String, windowId: Int, windowTitle: String) {
-        let data: [String: Any] = [
-            "action": action,
-            "windowId": windowId,
-            "windowTitle": windowTitle,
-            "timestamp": Date().timeIntervalSince1970
-        ]
-
-        sendEvent(type: "windowEvent", data: data)
-    }
-
     /// Send a custom event
     func sendCustomEvent(type: String, payload: [String: Any]) {
         sendEvent(type: type, data: payload)

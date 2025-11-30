@@ -48,6 +48,7 @@ class WindowManipulator {
             "pid": "\(pid)",
             "windowID": "\(windowID)"
         ])
+        StateManager.shared.handleWindowDestroyed(windowID)
         return nil
     }
 
@@ -361,6 +362,95 @@ class WindowManipulator {
 
             return verified
         }
+    }
+
+    // MARK: - Window Focus
+
+    /// Synthesize key window events using yabai's byte pattern
+    /// This sends two events to make the window the key window
+    private func makeKeyWindow(psn: UnsafePointer<ProcessSerialNumber>, windowID: UInt32) {
+        // 0xf8 (248) byte event buffer - yabai pattern
+        var eventBytes = [UInt8](repeating: 0, count: 0xf8)
+
+        eventBytes[0x04] = 0xf8                      // Size field
+        eventBytes[0x3a] = 0x10                      // Event type marker
+
+        // Window ID at offset 0x3c (4 bytes, little-endian)
+        withUnsafeBytes(of: windowID.littleEndian) { idBytes in
+            for i in 0..<4 { eventBytes[0x3c + i] = idBytes[i] }
+        }
+
+        // Fill 0x20-0x2f with 0xff (identity/session marker)
+        for i in 0x20...0x2f { eventBytes[i] = 0xff }
+
+        // Post event type 0x01
+        eventBytes[0x08] = 0x01
+        eventBytes.withUnsafeMutableBufferPointer { buf in
+            _ = SLPSPostEventRecordTo(psn, buf.baseAddress!)
+        }
+
+        // Post event type 0x02
+        eventBytes[0x08] = 0x02
+        eventBytes.withUnsafeMutableBufferPointer { buf in
+            _ = SLPSPostEventRecordTo(psn, buf.baseAddress!)
+        }
+    }
+
+    /// Focus window with yabai-style raise (handles same-app windows properly)
+    /// Uses: _SLPSSetFrontProcessWithOptions + event synthesis + AXRaise
+    private func focusWindowWithRaise(pid: pid_t, windowID: UInt32) -> Bool {
+        // 1. Get PSN from PID
+        var psn = ProcessSerialNumber(highLongOfPSN: 0, lowLongOfPSN: 0)
+        guard GetProcessForPID(pid, &psn) == 0 else {
+            logger.warning("GetProcessForPID failed, using fallback", metadata: ["pid": "\(pid)"])
+            return focusWindowFallback(pid: pid, windowID: windowID)
+        }
+
+        // 2. Set front process with window context
+        withUnsafePointer(to: psn) { psnPtr in
+            _ = SLPSSetFrontProcessWithOptions(psnPtr, windowID, kCPSUserGenerated)
+        }
+
+        // 3. Synthesize key window events
+        withUnsafePointer(to: psn) { psnPtr in
+            makeKeyWindow(psn: psnPtr, windowID: windowID)
+        }
+
+        // 4. AX raise as final step (same order as yabai)
+        if let element = getAXElement(pid: pid, windowID: windowID) {
+            AXUIElementPerformAction(element, kAXRaiseAction as CFString)
+        }
+
+        return true
+    }
+
+    /// Fallback focus method (MSS + NSRunningApplication + AX)
+    private func focusWindowFallback(pid: pid_t, windowID: UInt32) -> Bool {
+        if mssClient.isAvailable() {
+            _ = mssClient.orderWindowToFront(windowID)
+            _ = mssClient.focusWindow(windowID)
+        }
+        if let app = NSRunningApplication(processIdentifier: pid) {
+            app.activate(options: [.activateIgnoringOtherApps])
+        }
+        if let element = getAXElement(pid: pid, windowID: windowID) {
+            AXUIElementPerformAction(element, kAXRaiseAction as CFString)
+        }
+        return true
+    }
+
+    /// Focus a window by raising it and activating its app
+    /// Uses yabai-style event synthesis for reliable same-app window focus
+    func focusWindow(pid: pid_t, windowID: UInt32) -> Bool {
+        logger.info("Focusing window", metadata: [
+            "pid": "\(pid)",
+            "windowID": "\(windowID)"
+        ])
+
+        let result = focusWindowWithRaise(pid: pid, windowID: windowID)
+
+        logger.info("Window focused", metadata: ["windowID": "\(windowID)", "success": "\(result)"])
+        return result
     }
 
     // MARK: - Display Manipulation

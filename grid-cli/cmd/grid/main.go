@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -12,8 +13,18 @@ import (
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 	"github.com/yourusername/grid-cli/internal/client"
+	gridCell "github.com/yourusername/grid-cli/internal/cell"
+	gridConfig "github.com/yourusername/grid-cli/internal/config"
+	gridFocus "github.com/yourusername/grid-cli/internal/focus"
+	gridLayout "github.com/yourusername/grid-cli/internal/layout"
+	"github.com/yourusername/grid-cli/internal/logging"
 	"github.com/yourusername/grid-cli/internal/models"
 	"github.com/yourusername/grid-cli/internal/output"
+	gridReconcile "github.com/yourusername/grid-cli/internal/reconcile"
+	gridServer "github.com/yourusername/grid-cli/internal/server"
+	gridState "github.com/yourusername/grid-cli/internal/state"
+	gridTypes "github.com/yourusername/grid-cli/internal/types"
+	gridWindow "github.com/yourusername/grid-cli/internal/window"
 )
 
 var (
@@ -21,6 +32,7 @@ var (
 	timeout    time.Duration
 	jsonOutput bool
 	noColor    bool
+	debugMode  bool
 
 	// Color functions
 	successColor = color.New(color.FgGreen, color.Bold)
@@ -419,89 +431,10 @@ var windowFindCmd = &cobra.Command{
 
 // Window manipulation command variables
 var (
-	moveX, moveY         float64
-	resizeWidth, resizeHeight float64
 	updateX, updateY, updateWidth, updateHeight float64
-	toSpace              string
-	toDisplay            string
-	centerWindow         bool
+	toSpace                                     string
+	toDisplay                                   string
 )
-
-// windowMoveCmd moves a window to a specific position
-var windowMoveCmd = &cobra.Command{
-	Use:   "move <window-id>",
-	Short: "Move a window to a specific position",
-	Long:  `Moves a window to the specified X and Y coordinates.`,
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		windowID, err := strconv.Atoi(args[0])
-		if err != nil {
-			return fmt.Errorf("invalid window ID: %v", err)
-		}
-
-		updates := map[string]interface{}{
-			"x": moveX,
-			"y": moveY,
-		}
-
-		c := client.NewClient(socketPath, timeout)
-		defer c.Close()
-
-		result, err := c.UpdateWindow(context.Background(), windowID, updates)
-		if err != nil {
-			printError(fmt.Sprintf("Failed to move window: %v", err))
-			return err
-		}
-
-		if jsonOutput {
-			return printJSON(result)
-		}
-
-		successColor.Printf("✓ Window %d moved to (%.0f, %.0f)\n", windowID, moveX, moveY)
-		if updates, ok := result["updatesApplied"].([]interface{}); ok && len(updates) > 0 {
-			fmt.Printf("  Applied: %v\n", updates)
-		}
-		return nil
-	},
-}
-
-// windowResizeCmd resizes a window
-var windowResizeCmd = &cobra.Command{
-	Use:   "resize <window-id>",
-	Short: "Resize a window",
-	Long:  `Resizes a window to the specified width and height.`,
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		windowID, err := strconv.Atoi(args[0])
-		if err != nil {
-			return fmt.Errorf("invalid window ID: %v", err)
-		}
-
-		updates := map[string]interface{}{
-			"width":  resizeWidth,
-			"height": resizeHeight,
-		}
-
-		c := client.NewClient(socketPath, timeout)
-		defer c.Close()
-
-		result, err := c.UpdateWindow(context.Background(), windowID, updates)
-		if err != nil {
-			printError(fmt.Sprintf("Failed to resize window: %v", err))
-			return err
-		}
-
-		if jsonOutput {
-			return printJSON(result)
-		}
-
-		successColor.Printf("✓ Window %d resized to %.0fx%.0f\n", windowID, resizeWidth, resizeHeight)
-		if updates, ok := result["updatesApplied"].([]interface{}); ok && len(updates) > 0 {
-			fmt.Printf("  Applied: %v\n", updates)
-		}
-		return nil
-	},
-}
 
 // windowUpdateCmd updates multiple window properties at once
 var windowUpdateCmd = &cobra.Command{
@@ -626,94 +559,6 @@ var windowToDisplayCmd = &cobra.Command{
 		}
 
 		successColor.Printf("✓ Window %d moved to display %s\n", windowID, displayUUID)
-		if updates, ok := result["updatesApplied"].([]interface{}); ok && len(updates) > 0 {
-			fmt.Printf("  Applied: %v\n", updates)
-		}
-		return nil
-	},
-}
-
-// windowCenterCmd centers a window on its current display
-var windowCenterCmd = &cobra.Command{
-	Use:   "center <window-id>",
-	Short: "Center a window on its display",
-	Long:  `Centers a window on its current display. Calculates the center position based on display size.`,
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		windowID, err := strconv.Atoi(args[0])
-		if err != nil {
-			return fmt.Errorf("invalid window ID: %v", err)
-		}
-
-		// Get current state to calculate center position
-		state, err := getState()
-		if err != nil {
-			return err
-		}
-
-		window := state.FindWindowByID(windowID)
-		if window == nil {
-			return fmt.Errorf("window %d not found", windowID)
-		}
-
-		// Find the display containing this window's primary space
-		if len(state.Displays) == 0 {
-			return fmt.Errorf("no displays found")
-		}
-
-		// Find the display for this window based on its primary space
-		var targetDisplay *models.Display
-		primarySpace := window.GetPrimarySpace()
-		for _, display := range state.Displays {
-			for _, spaceID := range display.GetSpaceIDs() {
-				if spaceID == primarySpace {
-					targetDisplay = display
-					break
-				}
-			}
-			if targetDisplay != nil {
-				break
-			}
-		}
-
-		// Fall back to first display if we can't find the window's display
-		if targetDisplay == nil {
-			targetDisplay = state.Displays[0]
-		}
-
-		// Use actual display dimensions
-		displayWidth := 1920.0  // Default fallback
-		displayHeight := 1080.0 // Default fallback
-		if targetDisplay.PixelWidth != nil && targetDisplay.PixelHeight != nil {
-			displayWidth = float64(*targetDisplay.PixelWidth)
-			displayHeight = float64(*targetDisplay.PixelHeight)
-		}
-
-		winWidth := window.GetWidth()
-		winHeight := window.GetHeight()
-
-		centerX := (displayWidth - winWidth) / 2
-		centerY := (displayHeight - winHeight) / 2
-
-		updates := map[string]interface{}{
-			"x": centerX,
-			"y": centerY,
-		}
-
-		c := client.NewClient(socketPath, timeout)
-		defer c.Close()
-
-		result, err := c.UpdateWindow(context.Background(), windowID, updates)
-		if err != nil {
-			printError(fmt.Sprintf("Failed to center window: %v", err))
-			return err
-		}
-
-		if jsonOutput {
-			return printJSON(result)
-		}
-
-		successColor.Printf("✓ Window %d centered at (%.0f, %.0f)\n", windowID, centerX, centerY)
 		if updates, ok := result["updatesApplied"].([]interface{}); ok && len(updates) > 0 {
 			fmt.Printf("  Applied: %v\n", updates)
 		}
@@ -1164,7 +1009,1022 @@ var spaceFocusCmd = &cobra.Command{
 	},
 }
 
-// MARK: - Render Command (POC)
+// MARK: - Layout Commands
+
+// layoutCmd is the parent command for layout subcommands
+var gridLayoutCmd = &cobra.Command{
+	Use:   "layout",
+	Short: "Manage window layouts",
+	Long:  `Commands for listing, applying, and cycling window layouts.`,
+}
+
+// layoutListCmd lists available layouts
+var layoutListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List available layouts",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cfg, err := gridConfig.LoadConfig("")
+		if err != nil {
+			return fmt.Errorf("failed to load config: %w", err)
+		}
+
+		if jsonOutput {
+			return printJSON(cfg.Layouts)
+		}
+
+		fmt.Println("Available Layouts:")
+		fmt.Println()
+		for _, l := range cfg.Layouts {
+			keyColor.Printf("  %s\n", l.ID)
+			if l.Name != "" {
+				fmt.Printf("    Name: %s\n", l.Name)
+			}
+			if l.Description != "" {
+				fmt.Printf("    Description: %s\n", l.Description)
+			}
+			fmt.Printf("    Grid: %dx%d\n", len(l.Grid.Columns), len(l.Grid.Rows))
+			fmt.Printf("    Cells: %d\n", len(l.Cells))
+			fmt.Println()
+		}
+
+		return nil
+	},
+}
+
+// layoutShowCmd shows layout details
+var layoutShowCmd = &cobra.Command{
+	Use:   "show <layout-id>",
+	Short: "Show layout details",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		layoutID := args[0]
+
+		cfg, err := gridConfig.LoadConfig("")
+		if err != nil {
+			return fmt.Errorf("failed to load config: %w", err)
+		}
+
+		l, err := cfg.GetLayout(layoutID)
+		if err != nil {
+			return err
+		}
+
+		if jsonOutput {
+			return printJSON(l)
+		}
+
+		keyColor.Printf("Layout: %s\n", l.ID)
+		if l.Name != "" {
+			fmt.Printf("Name: %s\n", l.Name)
+		}
+		if l.Description != "" {
+			fmt.Printf("Description: %s\n", l.Description)
+		}
+		fmt.Println()
+
+		fmt.Println("Grid:")
+		fmt.Printf("  Columns: %s\n", formatTrackSizes(l.Columns))
+		fmt.Printf("  Rows: %s\n", formatTrackSizes(l.Rows))
+		fmt.Println()
+
+		fmt.Println("Cells:")
+		for _, cell := range l.Cells {
+			fmt.Printf("  %s: col %d-%d, row %d-%d\n",
+				cell.ID, cell.ColumnStart, cell.ColumnEnd, cell.RowStart, cell.RowEnd)
+		}
+
+		return nil
+	},
+}
+
+// layoutApplyCmd applies a layout
+var layoutApplyCmd = &cobra.Command{
+	Use:   "apply <layout-id>",
+	Short: "Apply a layout to the current space",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		layoutID := args[0]
+
+		cfg, err := gridConfig.LoadConfig("")
+		if err != nil {
+			return fmt.Errorf("failed to load config: %w", err)
+		}
+
+		runtimeState, err := gridState.LoadState()
+		if err != nil {
+			return fmt.Errorf("failed to load state: %w", err)
+		}
+
+		c := client.NewClient(socketPath, timeout)
+		defer c.Close()
+
+		ctx := context.Background()
+
+		// 1. Fetch server state ONCE
+		snap, err := gridServer.Fetch(ctx, c)
+		if err != nil {
+			return fmt.Errorf("failed to fetch server state: %w", err)
+		}
+
+		// 2. Reconcile local state with server
+		if err := gridReconcile.Sync(snap, runtimeState); err != nil {
+			return fmt.Errorf("failed to reconcile state: %w", err)
+		}
+
+		// 3. Apply layout using snapshot
+		opts := gridLayout.DefaultApplyOptions()
+		opts.Gap = float64(cfg.Settings.CellPadding)
+
+		if err := gridLayout.ApplyLayout(ctx, c, snap, cfg, runtimeState, layoutID, opts); err != nil {
+			return fmt.Errorf("failed to apply layout: %w", err)
+		}
+
+		successColor.Printf("✓ Applied layout: %s\n", layoutID)
+		return nil
+	},
+}
+
+// layoutCycleCmd cycles to the next layout
+var layoutCycleCmd = &cobra.Command{
+	Use:   "cycle",
+	Short: "Cycle to the next layout",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cfg, err := gridConfig.LoadConfig("")
+		if err != nil {
+			return fmt.Errorf("failed to load config: %w", err)
+		}
+
+		runtimeState, err := gridState.LoadState()
+		if err != nil {
+			return fmt.Errorf("failed to load state: %w", err)
+		}
+
+		c := client.NewClient(socketPath, timeout)
+		defer c.Close()
+
+		ctx := context.Background()
+
+		// 1. Fetch server state ONCE
+		snap, err := gridServer.Fetch(ctx, c)
+		if err != nil {
+			return fmt.Errorf("failed to fetch server state: %w", err)
+		}
+
+		// 2. Reconcile local state with server
+		if err := gridReconcile.Sync(snap, runtimeState); err != nil {
+			return fmt.Errorf("failed to reconcile state: %w", err)
+		}
+
+		// 3. Cycle layout
+		opts := gridLayout.DefaultApplyOptions()
+		opts.Gap = float64(cfg.Settings.CellPadding)
+
+		newLayout, err := gridLayout.CycleLayout(ctx, c, snap, cfg, runtimeState, opts)
+		if err != nil {
+			return fmt.Errorf("failed to cycle layout: %w", err)
+		}
+
+		successColor.Printf("✓ Cycled to layout: %s\n", newLayout)
+		return nil
+	},
+}
+
+// layoutCurrentCmd shows the current layout
+var layoutCurrentCmd = &cobra.Command{
+	Use:   "current",
+	Short: "Show current layout for space",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		spaceID, _ := cmd.Flags().GetString("space")
+
+		runtimeState, err := gridState.LoadState()
+		if err != nil {
+			return fmt.Errorf("failed to load state: %w", err)
+		}
+
+		// If no space specified, get current from server using proper snapshot
+		if spaceID == "" {
+			c := client.NewClient(socketPath, timeout)
+			defer c.Close()
+			snap, err := gridServer.Fetch(context.Background(), c)
+			if err != nil {
+				return fmt.Errorf("failed to get current space: %w", err)
+			}
+			spaceID = snap.SpaceID
+		}
+
+		layoutID := runtimeState.GetCurrentLayoutForSpace(spaceID)
+		if layoutID == "" {
+			fmt.Println("No layout currently applied")
+			return nil
+		}
+
+		if jsonOutput {
+			return printJSON(map[string]string{
+				"spaceId":  spaceID,
+				"layoutId": layoutID,
+			})
+		}
+
+		fmt.Printf("Current layout for space %s: %s\n", spaceID, layoutID)
+		return nil
+	},
+}
+
+// layoutReapplyCmd reapplies the current layout
+var layoutReapplyCmd = &cobra.Command{
+	Use:   "reapply",
+	Short: "Reapply the current layout",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cfg, err := gridConfig.LoadConfig("")
+		if err != nil {
+			return fmt.Errorf("failed to load config: %w", err)
+		}
+
+		runtimeState, err := gridState.LoadState()
+		if err != nil {
+			return fmt.Errorf("failed to load state: %w", err)
+		}
+
+		c := client.NewClient(socketPath, timeout)
+		defer c.Close()
+
+		ctx := context.Background()
+
+		// 1. Fetch server state ONCE
+		snap, err := gridServer.Fetch(ctx, c)
+		if err != nil {
+			return fmt.Errorf("failed to fetch server state: %w", err)
+		}
+
+		// 2. Reconcile local state with server
+		if err := gridReconcile.Sync(snap, runtimeState); err != nil {
+			return fmt.Errorf("failed to reconcile state: %w", err)
+		}
+
+		// 3. Reapply layout
+		opts := gridLayout.DefaultApplyOptions()
+		opts.Gap = float64(cfg.Settings.CellPadding)
+
+		if err := gridLayout.ReapplyLayout(ctx, c, snap, cfg, runtimeState, opts); err != nil {
+			return fmt.Errorf("failed to reapply layout: %w", err)
+		}
+
+		successColor.Println("✓ Layout reapplied")
+		return nil
+	},
+}
+
+// MARK: - Config Commands
+
+// gridConfigCmd is the parent command for config subcommands
+var gridConfigCmd = &cobra.Command{
+	Use:   "config",
+	Short: "Manage configuration",
+	Long:  `Commands for showing and validating grid configuration.`,
+}
+
+// configShowCmd shows current config
+var configShowCmd = &cobra.Command{
+	Use:   "show",
+	Short: "Show current configuration",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cfg, err := gridConfig.LoadConfig("")
+		if err != nil {
+			return fmt.Errorf("failed to load config: %w", err)
+		}
+
+		return printJSON(cfg)
+	},
+}
+
+// configValidateCmd validates config file
+var configValidateCmd = &cobra.Command{
+	Use:   "validate [path]",
+	Short: "Validate configuration file",
+	Args:  cobra.MaximumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		path := ""
+		if len(args) > 0 {
+			path = args[0]
+		}
+
+		cfg, err := gridConfig.LoadConfig(path)
+		if err != nil {
+			return fmt.Errorf("validation failed: %w", err)
+		}
+
+		if err := cfg.Validate(); err != nil {
+			return fmt.Errorf("validation failed: %w", err)
+		}
+
+		successColor.Println("✓ Configuration is valid")
+		fmt.Printf("  Layouts: %d\n", len(cfg.Layouts))
+		fmt.Printf("  Spaces: %d\n", len(cfg.Spaces))
+		fmt.Printf("  App Rules: %d\n", len(cfg.AppRules))
+
+		return nil
+	},
+}
+
+// configInitCmd creates default config
+var configInitCmd = &cobra.Command{
+	Use:   "init",
+	Short: "Create default configuration file",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		path := gridConfig.GetConfigPath()
+
+		// Check if file exists
+		if _, err := os.Stat(path); err == nil {
+			return fmt.Errorf("config file already exists at %s", path)
+		}
+
+		defaultConfig := `# Grid Layout Configuration
+settings:
+  defaultStackMode: vertical
+  cellPadding: 8
+  animationDuration: 0.2
+  focusFollowsMouse: false
+
+layouts:
+  - id: two-column
+    name: Two Column
+    description: Equal two-column split
+    grid:
+      columns: ["1fr", "1fr"]
+      rows: ["1fr"]
+    cells:
+      - id: left
+        column: "1/2"
+        row: "1/2"
+      - id: right
+        column: "2/3"
+        row: "1/2"
+
+  - id: main-side
+    name: Main + Sidebar
+    description: Large main area with sidebar
+    grid:
+      columns: ["2fr", "1fr"]
+      rows: ["1fr"]
+    cells:
+      - id: main
+        column: "1/2"
+        row: "1/2"
+      - id: side
+        column: "2/3"
+        row: "1/2"
+
+spaces:
+  "1":
+    name: Main
+    layouts: [two-column, main-side]
+    defaultLayout: two-column
+    autoApply: false
+
+appRules:
+  - app: Finder
+    float: true
+`
+
+		// Create directory
+		dir := filepath.Dir(path)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return fmt.Errorf("failed to create config directory: %w", err)
+		}
+
+		// Write file
+		if err := os.WriteFile(path, []byte(defaultConfig), 0644); err != nil {
+			return fmt.Errorf("failed to write config file: %w", err)
+		}
+
+		successColor.Printf("✓ Created default config at: %s\n", path)
+		return nil
+	},
+}
+
+// MARK: - State Commands
+
+// gridStateCmd is the parent command for state subcommands
+var gridStateCmd = &cobra.Command{
+	Use:   "state",
+	Short: "Manage runtime state",
+	Long:  `Commands for showing and resetting grid runtime state.`,
+}
+
+// stateShowCmd shows runtime state
+var stateShowCmd = &cobra.Command{
+	Use:   "show",
+	Short: "Show runtime state",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		runtimeState, err := gridState.LoadState()
+		if err != nil {
+			return fmt.Errorf("failed to load state: %w", err)
+		}
+
+		if jsonOutput {
+			return printJSON(runtimeState)
+		}
+
+		summary := runtimeState.Summary()
+		keyColor.Print("State Version: ")
+		fmt.Printf("%v\n", summary["version"])
+		keyColor.Print("Last Updated: ")
+		fmt.Printf("%v\n", summary["lastUpdated"])
+		keyColor.Print("Spaces: ")
+		fmt.Printf("%v\n", summary["spaceCount"])
+		fmt.Println()
+
+		if spaces, ok := summary["spaces"].(map[string]interface{}); ok {
+			for spaceID, spaceInfo := range spaces {
+				info := spaceInfo.(map[string]interface{})
+				keyColor.Printf("Space %s:\n", spaceID)
+				fmt.Printf("  Current Layout: %v\n", info["currentLayout"])
+				fmt.Printf("  Cells: %v\n", info["cellCount"])
+				fmt.Printf("  Windows: %v\n", info["windowCount"])
+				fmt.Printf("  Focused Cell: %v\n", info["focusedCell"])
+				fmt.Println()
+			}
+		}
+
+		return nil
+	},
+}
+
+// stateResetCmd resets runtime state
+var stateResetCmd = &cobra.Command{
+	Use:   "reset",
+	Short: "Clear all runtime state",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		runtimeState, err := gridState.LoadState()
+		if err != nil {
+			return fmt.Errorf("failed to load state: %w", err)
+		}
+
+		if err := runtimeState.Reset(); err != nil {
+			return fmt.Errorf("failed to reset state: %w", err)
+		}
+
+		successColor.Println("✓ State has been reset")
+		return nil
+	},
+}
+
+// MARK: - the-grid Focus Commands
+
+// focusCmd is the parent command for focus subcommands
+var focusCmd = &cobra.Command{
+	Use:   "focus",
+	Short: "Manage window focus",
+	Long:  `Commands for moving focus between cells and windows.`,
+}
+
+// focusDirectionHelper is a helper function for directional focus commands
+func focusDirectionHelper(direction gridTypes.Direction, wrapAround bool, extend bool) error {
+	cfg, err := gridConfig.LoadConfig("")
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	runtimeState, err := gridState.LoadState()
+	if err != nil {
+		return fmt.Errorf("failed to load state: %w", err)
+	}
+
+	c := client.NewClient(socketPath, timeout)
+	defer c.Close()
+
+	ctx := context.Background()
+
+	// 1. Fetch server state ONCE
+	snap, err := gridServer.Fetch(ctx, c)
+	if err != nil {
+		return fmt.Errorf("failed to fetch server state: %w", err)
+	}
+
+	// 2. Reconcile local state with server
+	if err := gridReconcile.Sync(snap, runtimeState); err != nil {
+		return fmt.Errorf("failed to reconcile state: %w", err)
+	}
+
+	// 3. Move focus
+	opts := gridFocus.MoveFocusOpts{
+		WrapAround: wrapAround,
+		Extend:     extend,
+	}
+	windowID, err := gridFocus.MoveFocus(ctx, c, snap, cfg, runtimeState, direction, opts)
+	if err != nil {
+		return fmt.Errorf("failed to move focus: %w", err)
+	}
+
+	successColor.Printf("✓ Focused window: %d\n", windowID)
+	return nil
+}
+
+// focusLeftCmd moves focus to the left cell
+var focusLeftCmd = &cobra.Command{
+	Use:   "left",
+	Short: "Move focus to left cell",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		wrap, _ := cmd.Flags().GetBool("wrap")
+		extend, _ := cmd.Flags().GetBool("extend")
+		if extend {
+			logging.Debug().Bool("extend", extend).Msg("cross-monitor focus enabled")
+		}
+		return focusDirectionHelper(gridTypes.DirLeft, wrap, extend)
+	},
+}
+
+// focusRightCmd moves focus to the right cell
+var focusRightCmd = &cobra.Command{
+	Use:   "right",
+	Short: "Move focus to right cell",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		wrap, _ := cmd.Flags().GetBool("wrap")
+		extend, _ := cmd.Flags().GetBool("extend")
+		if extend {
+			logging.Debug().Bool("extend", extend).Msg("cross-monitor focus enabled")
+		}
+		return focusDirectionHelper(gridTypes.DirRight, wrap, extend)
+	},
+}
+
+// focusUpCmd moves focus to the cell above
+var focusUpCmd = &cobra.Command{
+	Use:   "up",
+	Short: "Move focus to cell above",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		wrap, _ := cmd.Flags().GetBool("wrap")
+		extend, _ := cmd.Flags().GetBool("extend")
+		if extend {
+			logging.Debug().Bool("extend", extend).Msg("cross-monitor focus enabled")
+		}
+		return focusDirectionHelper(gridTypes.DirUp, wrap, extend)
+	},
+}
+
+// focusDownCmd moves focus to the cell below
+var focusDownCmd = &cobra.Command{
+	Use:   "down",
+	Short: "Move focus to cell below",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		wrap, _ := cmd.Flags().GetBool("wrap")
+		extend, _ := cmd.Flags().GetBool("extend")
+		if extend {
+			logging.Debug().Bool("extend", extend).Msg("cross-monitor focus enabled")
+		}
+		return focusDirectionHelper(gridTypes.DirDown, wrap, extend)
+	},
+}
+
+// moveWindowDirectionHelper is a helper function for directional window move commands
+func moveWindowDirectionHelper(direction gridTypes.Direction, wrapAround bool, extend bool, windowID uint32) error {
+	cfg, err := gridConfig.LoadConfig("")
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	runtimeState, err := gridState.LoadState()
+	if err != nil {
+		return fmt.Errorf("failed to load state: %w", err)
+	}
+
+	c := client.NewClient(socketPath, timeout)
+	defer c.Close()
+
+	ctx := context.Background()
+
+	// 1. Fetch server state ONCE
+	snap, err := gridServer.Fetch(ctx, c)
+	if err != nil {
+		return fmt.Errorf("failed to fetch server state: %w", err)
+	}
+
+	// 2. Reconcile local state with server
+	if err := gridReconcile.Sync(snap, runtimeState); err != nil {
+		return fmt.Errorf("failed to reconcile state: %w", err)
+	}
+
+	// 3. Move window
+	opts := gridWindow.MoveWindowOpts{
+		WrapAround: wrapAround,
+		Extend:     extend,
+		WindowID:   windowID,
+	}
+	result, err := gridWindow.MoveWindow(ctx, c, snap, cfg, runtimeState, direction, opts)
+	if err != nil {
+		return fmt.Errorf("failed to move window: %w", err)
+	}
+
+	if result.CrossDisplay {
+		successColor.Printf("Moved window %d: %s -> %s (cross-display to space %s)\n",
+			result.WindowID, result.SourceCell, result.TargetCell, result.TargetSpace)
+	} else {
+		successColor.Printf("Moved window %d: %s -> %s\n",
+			result.WindowID, result.SourceCell, result.TargetCell)
+	}
+	return nil
+}
+
+// windowMoveCmd is the parent command for window move operations
+var windowMoveCmd = &cobra.Command{
+	Use:   "move",
+	Short: "Move window to adjacent cell",
+	Long:  `Commands for moving windows between cells in the layout grid.`,
+}
+
+// windowMoveLeftCmd moves window to the left cell
+var windowMoveLeftCmd = &cobra.Command{
+	Use:   "left",
+	Short: "Move window to left cell",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		wrap, _ := cmd.Flags().GetBool("wrap")
+		extend, _ := cmd.Flags().GetBool("extend")
+		windowID, _ := cmd.Flags().GetUint32("window-id")
+		if extend {
+			logging.Debug().Bool("extend", extend).Msg("cross-monitor window move enabled")
+		}
+		return moveWindowDirectionHelper(gridTypes.DirLeft, wrap, extend, windowID)
+	},
+}
+
+// windowMoveRightCmd moves window to the right cell
+var windowMoveRightCmd = &cobra.Command{
+	Use:   "right",
+	Short: "Move window to right cell",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		wrap, _ := cmd.Flags().GetBool("wrap")
+		extend, _ := cmd.Flags().GetBool("extend")
+		windowID, _ := cmd.Flags().GetUint32("window-id")
+		if extend {
+			logging.Debug().Bool("extend", extend).Msg("cross-monitor window move enabled")
+		}
+		return moveWindowDirectionHelper(gridTypes.DirRight, wrap, extend, windowID)
+	},
+}
+
+// windowMoveUpCmd moves window to the cell above
+var windowMoveUpCmd = &cobra.Command{
+	Use:   "up",
+	Short: "Move window to cell above",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		wrap, _ := cmd.Flags().GetBool("wrap")
+		extend, _ := cmd.Flags().GetBool("extend")
+		windowID, _ := cmd.Flags().GetUint32("window-id")
+		if extend {
+			logging.Debug().Bool("extend", extend).Msg("cross-monitor window move enabled")
+		}
+		return moveWindowDirectionHelper(gridTypes.DirUp, wrap, extend, windowID)
+	},
+}
+
+// windowMoveDownCmd moves window to the cell below
+var windowMoveDownCmd = &cobra.Command{
+	Use:   "down",
+	Short: "Move window to cell below",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		wrap, _ := cmd.Flags().GetBool("wrap")
+		extend, _ := cmd.Flags().GetBool("extend")
+		windowID, _ := cmd.Flags().GetUint32("window-id")
+		if extend {
+			logging.Debug().Bool("extend", extend).Msg("cross-monitor window move enabled")
+		}
+		return moveWindowDirectionHelper(gridTypes.DirDown, wrap, extend, windowID)
+	},
+}
+
+// focusNextCmd cycles focus to next window in cell
+var focusNextCmd = &cobra.Command{
+	Use:   "next",
+	Short: "Cycle focus to next window in current cell",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		logging.Info().Str("cmd", "focus-next").Msg("starting")
+
+		runtimeState, err := gridState.LoadState()
+		if err != nil {
+			logging.Error().Str("cmd", "focus-next").Err(err).Msg("failed to load state")
+			return fmt.Errorf("failed to load state: %w", err)
+		}
+
+		c := client.NewClient(socketPath, timeout)
+		defer c.Close()
+
+		ctx := context.Background()
+
+		// 1. Fetch server state ONCE
+		snap, err := gridServer.Fetch(ctx, c)
+		if err != nil {
+			logging.Error().Str("cmd", "focus-next").Err(err).Msg("failed to fetch server state")
+			return fmt.Errorf("failed to fetch server state: %w", err)
+		}
+
+		// 2. Reconcile local state with server
+		if err := gridReconcile.Sync(snap, runtimeState); err != nil {
+			logging.Error().Str("cmd", "focus-next").Err(err).Msg("failed to reconcile")
+			return fmt.Errorf("failed to reconcile state: %w", err)
+		}
+
+		// 3. Cycle focus using local state
+		windowID, err := gridFocus.CycleFocus(ctx, c, runtimeState, snap.SpaceID, true)
+		if err != nil {
+			logging.Error().Str("cmd", "focus-next").Err(err).Msg("failed to cycle")
+			return fmt.Errorf("failed to cycle focus: %w", err)
+		}
+
+		if windowID == 0 {
+			logging.Info().Str("cmd", "focus-next").Msg("no windows in cell")
+			fmt.Println("No windows in current cell")
+		} else {
+			logging.Info().Str("cmd", "focus-next").Int("window_id", int(windowID)).Msg("focused window")
+			successColor.Printf("✓ Focused window: %d\n", windowID)
+		}
+		return nil
+	},
+}
+
+// focusPrevCmd cycles focus to previous window in cell
+var focusPrevCmd = &cobra.Command{
+	Use:   "prev",
+	Short: "Cycle focus to previous window in current cell",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		logging.Info().Str("cmd", "focus-prev").Msg("starting")
+
+		runtimeState, err := gridState.LoadState()
+		if err != nil {
+			logging.Error().Str("cmd", "focus-prev").Err(err).Msg("failed to load state")
+			return fmt.Errorf("failed to load state: %w", err)
+		}
+
+		c := client.NewClient(socketPath, timeout)
+		defer c.Close()
+
+		ctx := context.Background()
+
+		// 1. Fetch server state ONCE
+		snap, err := gridServer.Fetch(ctx, c)
+		if err != nil {
+			logging.Error().Str("cmd", "focus-prev").Err(err).Msg("failed to fetch server state")
+			return fmt.Errorf("failed to fetch server state: %w", err)
+		}
+
+		// 2. Reconcile local state with server
+		if err := gridReconcile.Sync(snap, runtimeState); err != nil {
+			logging.Error().Str("cmd", "focus-prev").Err(err).Msg("failed to reconcile")
+			return fmt.Errorf("failed to reconcile state: %w", err)
+		}
+
+		// 3. Cycle focus using local state
+		windowID, err := gridFocus.CycleFocus(ctx, c, runtimeState, snap.SpaceID, false)
+		if err != nil {
+			logging.Error().Str("cmd", "focus-prev").Err(err).Msg("failed to cycle")
+			return fmt.Errorf("failed to cycle focus: %w", err)
+		}
+
+		if windowID == 0 {
+			logging.Info().Str("cmd", "focus-prev").Msg("no windows in cell")
+			fmt.Println("No windows in current cell")
+		} else {
+			logging.Info().Str("cmd", "focus-prev").Int("window_id", int(windowID)).Msg("focused window")
+			successColor.Printf("✓ Focused window: %d\n", windowID)
+		}
+		return nil
+	},
+}
+
+// focusCellCmd jumps to specific cell
+var focusCellCmd = &cobra.Command{
+	Use:   "cell <id>",
+	Short: "Jump focus to specific cell",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cellID := args[0]
+
+		runtimeState, err := gridState.LoadState()
+		if err != nil {
+			return fmt.Errorf("failed to load state: %w", err)
+		}
+
+		c := client.NewClient(socketPath, timeout)
+		defer c.Close()
+
+		ctx := context.Background()
+
+		// 1. Fetch server state ONCE
+		snap, err := gridServer.Fetch(ctx, c)
+		if err != nil {
+			return fmt.Errorf("failed to fetch server state: %w", err)
+		}
+
+		// 2. Reconcile local state with server
+		if err := gridReconcile.Sync(snap, runtimeState); err != nil {
+			return fmt.Errorf("failed to reconcile state: %w", err)
+		}
+
+		// 3. Focus the cell
+		windowID, err := gridFocus.FocusCell(ctx, c, runtimeState, snap.SpaceID, cellID)
+		if err != nil {
+			return fmt.Errorf("failed to focus cell: %w", err)
+		}
+
+		successColor.Printf("✓ Focused cell %s (window: %d)\n", cellID, windowID)
+		return nil
+	},
+}
+
+// MARK: - the-grid Resize Commands
+
+// resizeCmd is the parent command for resize subcommands
+var gridResizeCmd = &cobra.Command{
+	Use:   "resize",
+	Short: "Resize windows in layout",
+	Long:  `Commands for growing, shrinking, or resetting window splits.`,
+}
+
+// resizeAdjustCmd grows or shrinks focused window
+var resizeAdjustCmd = &cobra.Command{
+	Use:       "grow|shrink [amount]",
+	Short:     "Grow or shrink focused window",
+	Args:      cobra.RangeArgs(1, 2),
+	ValidArgs: []string{"grow", "shrink"},
+	RunE: func(cmd *cobra.Command, args []string) error {
+		action := args[0]
+		if action != "grow" && action != "shrink" {
+			return fmt.Errorf("invalid action: %s (use 'grow' or 'shrink')", action)
+		}
+
+		delta := gridLayout.DefaultResizeAmount
+		if len(args) > 1 {
+			parsed, err := strconv.ParseFloat(args[1], 64)
+			if err != nil {
+				return fmt.Errorf("invalid amount: %w", err)
+			}
+			delta = parsed
+		}
+		if action == "shrink" {
+			delta = -delta
+		}
+
+		cfg, err := gridConfig.LoadConfig("")
+		if err != nil {
+			return fmt.Errorf("failed to load config: %w", err)
+		}
+
+		runtimeState, err := gridState.LoadState()
+		if err != nil {
+			return fmt.Errorf("failed to load state: %w", err)
+		}
+
+		c := client.NewClient(socketPath, timeout)
+		defer c.Close()
+
+		ctx := context.Background()
+
+		// 1. Fetch server state ONCE
+		snap, err := gridServer.Fetch(ctx, c)
+		if err != nil {
+			return fmt.Errorf("failed to fetch server state: %w", err)
+		}
+
+		// 2. Reconcile local state with server
+		if err := gridReconcile.Sync(snap, runtimeState); err != nil {
+			return fmt.Errorf("failed to reconcile state: %w", err)
+		}
+
+		// 3. Adjust split
+		if err := gridLayout.AdjustFocusedSplit(ctx, c, snap, cfg, runtimeState, delta); err != nil {
+			return fmt.Errorf("failed to resize: %w", err)
+		}
+
+		successColor.Printf("✓ Resized window (%s)\n", action)
+		return nil
+	},
+}
+
+// resizeResetCmd resets splits to equal
+var resizeResetCmd = &cobra.Command{
+	Use:   "reset",
+	Short: "Reset splits to equal",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cfg, err := gridConfig.LoadConfig("")
+		if err != nil {
+			return fmt.Errorf("failed to load config: %w", err)
+		}
+
+		runtimeState, err := gridState.LoadState()
+		if err != nil {
+			return fmt.Errorf("failed to load state: %w", err)
+		}
+
+		c := client.NewClient(socketPath, timeout)
+		defer c.Close()
+
+		ctx := context.Background()
+
+		// 1. Fetch server state ONCE
+		snap, err := gridServer.Fetch(ctx, c)
+		if err != nil {
+			return fmt.Errorf("failed to fetch server state: %w", err)
+		}
+
+		// 2. Reconcile local state with server
+		if err := gridReconcile.Sync(snap, runtimeState); err != nil {
+			return fmt.Errorf("failed to reconcile state: %w", err)
+		}
+
+		// 3. Reset splits
+		resetAll, _ := cmd.Flags().GetBool("all")
+		if resetAll {
+			if err := gridLayout.ResetAllSplits(ctx, c, snap, cfg, runtimeState); err != nil {
+				return fmt.Errorf("failed to reset all splits: %w", err)
+			}
+			successColor.Println("✓ Reset all splits to equal")
+		} else {
+			if err := gridLayout.ResetFocusedSplits(ctx, c, snap, cfg, runtimeState); err != nil {
+				return fmt.Errorf("failed to reset splits: %w", err)
+			}
+			successColor.Println("✓ Reset focused cell splits to equal")
+		}
+
+		return nil
+	},
+}
+
+// MARK: - the-grid Cell Commands
+
+// cellCmd is the parent command for cell operations
+var cellCmd = &cobra.Command{
+	Use:   "cell",
+	Short: "Cell operations",
+	Long:  `Commands for managing windows within layout cells.`,
+}
+
+// cellSendCmd sends focused window to adjacent cell
+var cellSendCmd = &cobra.Command{
+	Use:   "send <direction>",
+	Short: "Send focused window to adjacent cell",
+	Long:  `Move the focused window to an adjacent cell in the specified direction (left, right, up, down).`,
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		direction, ok := gridTypes.ParseDirection(args[0])
+		if !ok {
+			return fmt.Errorf("invalid direction: %s (use left, right, up, or down)", args[0])
+		}
+
+		cfg, err := gridConfig.LoadConfig("")
+		if err != nil {
+			return fmt.Errorf("failed to load config: %w", err)
+		}
+
+		runtimeState, err := gridState.LoadState()
+		if err != nil {
+			return fmt.Errorf("failed to load state: %w", err)
+		}
+
+		c := client.NewClient(socketPath, timeout)
+		defer c.Close()
+
+		ctx := context.Background()
+
+		// 1. Fetch server state ONCE
+		snap, err := gridServer.Fetch(ctx, c)
+		if err != nil {
+			return fmt.Errorf("failed to fetch server state: %w", err)
+		}
+
+		// 2. Reconcile local state with server
+		if err := gridReconcile.Sync(snap, runtimeState); err != nil {
+			return fmt.Errorf("failed to reconcile state: %w", err)
+		}
+
+		// 3. Send window
+		if err := gridCell.SendWindow(ctx, c, snap, cfg, runtimeState, direction); err != nil {
+			return fmt.Errorf("failed to send window: %w", err)
+		}
+
+		successColor.Printf("✓ Sent window %s\n", direction.String())
+		return nil
+	},
+}
+
+// Helper function for formatting track sizes
+func formatTrackSizes(tracks []gridTypes.TrackSize) string {
+	var parts []string
+	for _, t := range tracks {
+		parts = append(parts, gridConfig.FormatTrackSize(t))
+	}
+	return "[" + strings.Join(parts, ", ") + "]"
+}
+
+// MARK: - Render Command
 
 // RenderWindow represents a window with normalized coordinates
 type RenderWindow struct {
@@ -1337,6 +2197,7 @@ func init() {
 	rootCmd.PersistentFlags().DurationVar(&timeout, "timeout", client.DefaultTimeout, "Request timeout")
 	rootCmd.PersistentFlags().BoolVar(&jsonOutput, "json", false, "Output in JSON format")
 	rootCmd.PersistentFlags().BoolVar(&noColor, "no-color", false, "Disable colored output")
+	rootCmd.PersistentFlags().BoolVar(&debugMode, "debug", false, "Enable debug logging")
 
 	// Add top-level commands
 	rootCmd.AddCommand(pingCmd)
@@ -1347,6 +2208,64 @@ func init() {
 	rootCmd.AddCommand(windowCmd)
 	rootCmd.AddCommand(spaceCmd)
 	rootCmd.AddCommand(renderCmd)
+
+	// Add the-grid layout commands
+	rootCmd.AddCommand(gridLayoutCmd)
+	gridLayoutCmd.AddCommand(layoutListCmd)
+	gridLayoutCmd.AddCommand(layoutShowCmd)
+	gridLayoutCmd.AddCommand(layoutApplyCmd)
+	gridLayoutCmd.AddCommand(layoutCycleCmd)
+	gridLayoutCmd.AddCommand(layoutCurrentCmd)
+	gridLayoutCmd.AddCommand(layoutReapplyCmd)
+
+	// Add layout command flags
+	layoutApplyCmd.Flags().String("space", "", "Space ID to apply layout to")
+	layoutCycleCmd.Flags().String("space", "", "Space ID to cycle layout for")
+	layoutCurrentCmd.Flags().String("space", "", "Space ID to check")
+
+	// Add the-grid config commands
+	rootCmd.AddCommand(gridConfigCmd)
+	gridConfigCmd.AddCommand(configShowCmd)
+	gridConfigCmd.AddCommand(configValidateCmd)
+	gridConfigCmd.AddCommand(configInitCmd)
+
+	// Add the-grid state commands
+	rootCmd.AddCommand(gridStateCmd)
+	gridStateCmd.AddCommand(stateShowCmd)
+	gridStateCmd.AddCommand(stateResetCmd)
+
+	// Add the-grid focus commands
+	rootCmd.AddCommand(focusCmd)
+	focusCmd.AddCommand(focusLeftCmd)
+	focusCmd.AddCommand(focusRightCmd)
+	focusCmd.AddCommand(focusUpCmd)
+	focusCmd.AddCommand(focusDownCmd)
+	focusCmd.AddCommand(focusNextCmd)
+	focusCmd.AddCommand(focusPrevCmd)
+	focusCmd.AddCommand(focusCellCmd)
+
+	// Add focus command flags
+	focusLeftCmd.Flags().Bool("wrap", true, "Wrap around to opposite edge")
+	focusRightCmd.Flags().Bool("wrap", true, "Wrap around to opposite edge")
+	focusUpCmd.Flags().Bool("wrap", true, "Wrap around to opposite edge")
+	focusDownCmd.Flags().Bool("wrap", true, "Wrap around to opposite edge")
+
+	focusLeftCmd.Flags().Bool("extend", false, "Extend focus to adjacent monitors when no cell exists in direction")
+	focusRightCmd.Flags().Bool("extend", false, "Extend focus to adjacent monitors when no cell exists in direction")
+	focusUpCmd.Flags().Bool("extend", false, "Extend focus to adjacent monitors when no cell exists in direction")
+	focusDownCmd.Flags().Bool("extend", false, "Extend focus to adjacent monitors when no cell exists in direction")
+
+	// Add the-grid resize commands
+	rootCmd.AddCommand(gridResizeCmd)
+	gridResizeCmd.AddCommand(resizeAdjustCmd)
+	gridResizeCmd.AddCommand(resizeResetCmd)
+
+	// Add resize command flags
+	resizeResetCmd.Flags().Bool("all", false, "Reset all cells, not just focused cell")
+
+	// Add the-grid cell commands
+	rootCmd.AddCommand(cellCmd)
+	cellCmd.AddCommand(cellSendCmd)
 
 	// Add show subcommands
 	showCmd.AddCommand(showLayoutCmd)
@@ -1371,12 +2290,9 @@ func init() {
 	// Add window subcommands
 	windowCmd.AddCommand(windowGetCmd)
 	windowCmd.AddCommand(windowFindCmd)
-	windowCmd.AddCommand(windowMoveCmd)
-	windowCmd.AddCommand(windowResizeCmd)
 	windowCmd.AddCommand(windowUpdateCmd)
 	windowCmd.AddCommand(windowToSpaceCmd)
 	windowCmd.AddCommand(windowToDisplayCmd)
-	windowCmd.AddCommand(windowCenterCmd)
 	windowCmd.AddCommand(windowSetOpacityCmd)
 	windowCmd.AddCommand(windowFadeOpacityCmd)
 	windowCmd.AddCommand(windowGetOpacityCmd)
@@ -1387,37 +2303,48 @@ func init() {
 	windowCmd.AddCommand(windowMinimizeCmd)
 	windowCmd.AddCommand(windowUnminimizeCmd)
 	windowCmd.AddCommand(windowIsMinimizedCmd)
+	windowCmd.AddCommand(windowMoveCmd)
+
+	// Add window move subcommands
+	windowMoveCmd.AddCommand(windowMoveLeftCmd)
+	windowMoveCmd.AddCommand(windowMoveRightCmd)
+	windowMoveCmd.AddCommand(windowMoveUpCmd)
+	windowMoveCmd.AddCommand(windowMoveDownCmd)
+
+	// Add flags for window move commands
+	for _, cmd := range []*cobra.Command{windowMoveLeftCmd, windowMoveRightCmd, windowMoveUpCmd, windowMoveDownCmd} {
+		cmd.Flags().Bool("wrap", true, "Wrap around to opposite edge")
+		cmd.Flags().Bool("extend", false, "Extend to adjacent monitors")
+		cmd.Flags().Uint32("window-id", 0, "Window ID to move (default: focused window)")
+	}
 
 	// Add space subcommands
 	spaceCmd.AddCommand(spaceCreateCmd)
 	spaceCmd.AddCommand(spaceDestroyCmd)
 	spaceCmd.AddCommand(spaceFocusCmd)
 
-	// Add flags for manipulation commands
-	windowMoveCmd.Flags().Float64Var(&moveX, "x", 0, "X position")
-	windowMoveCmd.Flags().Float64Var(&moveY, "y", 0, "Y position")
-	windowMoveCmd.MarkFlagRequired("x")
-	windowMoveCmd.MarkFlagRequired("y")
-
-	windowResizeCmd.Flags().Float64Var(&resizeWidth, "width", 0, "Width in pixels")
-	windowResizeCmd.Flags().Float64Var(&resizeHeight, "height", 0, "Height in pixels")
-	windowResizeCmd.MarkFlagRequired("width")
-	windowResizeCmd.MarkFlagRequired("height")
-
+	// Add flags for window update command
 	windowUpdateCmd.Flags().Float64Var(&updateX, "x", 0, "X position (optional)")
 	windowUpdateCmd.Flags().Float64Var(&updateY, "y", 0, "Y position (optional)")
 	windowUpdateCmd.Flags().Float64Var(&updateWidth, "width", 0, "Width in pixels (optional)")
 	windowUpdateCmd.Flags().Float64Var(&updateHeight, "height", 0, "Height in pixels (optional)")
 
-	// Disable color if requested
+	// Disable color if requested, enable debug logging if requested
 	cobra.OnInitialize(func() {
 		if noColor {
 			color.NoColor = true
+		}
+		if debugMode {
+			logging.SetDebug(true)
 		}
 	})
 }
 
 func main() {
+	// Initialize logging
+	logging.Init()
+	defer logging.Close()
+
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}

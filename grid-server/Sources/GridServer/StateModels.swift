@@ -176,10 +176,20 @@ struct WindowState: Codable {
     var hasTransform: Bool
     var metadata: [String: String]  // Custom metadata
 
-    // Properties for client-side filtering
+    // Properties for client-side filtering (from AX API)
     var role: String?       // AX role (e.g., "AXWindow", "AXButton")
     var subrole: String?    // AX subrole (e.g., "AXStandardWindow", "AXDialog")
     var parent: UInt32?     // Parent window ID (nil if root window)
+
+    // Window button presence (for floating/popup detection)
+    var hasCloseButton: Bool
+    var hasFullscreenButton: Bool
+    var hasMinimizeButton: Bool
+    var hasZoomButton: Bool
+    var isModal: Bool
+
+    // Timestamp for conflict resolution between events and polling
+    var lastUpdated: Date
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -198,6 +208,12 @@ struct WindowState: Codable {
         case role
         case subrole
         case parent
+        case hasCloseButton
+        case hasFullscreenButton
+        case hasMinimizeButton
+        case hasZoomButton
+        case isModal
+        case lastUpdated
     }
 
     init(id: UInt32) {
@@ -217,6 +233,12 @@ struct WindowState: Codable {
         self.role = nil
         self.subrole = nil
         self.parent = nil
+        self.hasCloseButton = false
+        self.hasFullscreenButton = false
+        self.hasMinimizeButton = false
+        self.hasZoomButton = false
+        self.isModal = false
+        self.lastUpdated = Date()
     }
 }
 
@@ -239,30 +261,5 @@ struct StateMetadata: Codable {
 
     mutating func update() {
         self.lastUpdate = Date()
-    }
-}
-
-// MARK: - CGRect Codable Extension
-
-extension CGRect: Codable {
-    enum CodingKeys: String, CodingKey {
-        case x, y, width, height
-    }
-
-    public func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(origin.x, forKey: .x)
-        try container.encode(origin.y, forKey: .y)
-        try container.encode(size.width, forKey: .width)
-        try container.encode(size.height, forKey: .height)
-    }
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        let x = try container.decode(CGFloat.self, forKey: .x)
-        let y = try container.decode(CGFloat.self, forKey: .y)
-        let width = try container.decode(CGFloat.self, forKey: .width)
-        let height = try container.decode(CGFloat.self, forKey: .height)
-        self.init(x: x, y: y, width: width, height: height)
     }
 }

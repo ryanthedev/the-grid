@@ -62,51 +62,6 @@ class MessageHandler {
             completion(response)
         }
 
-        // Get spaces - placeholder for future macOS Spaces API integration
-        register(method: "getSpaces") { [weak self] request, completion in
-            self?.logger.info("getSpaces called (placeholder)")
-
-            let mockSpaces = [
-                ["id": 1, "name": "Space 1", "index": 0],
-                ["id": 2, "name": "Space 2", "index": 1],
-                ["id": 3, "name": "Space 3", "index": 2]
-            ]
-
-            let response = Response(
-                id: request.id,
-                result: AnyCodable(["spaces": mockSpaces])
-            )
-            completion(response)
-        }
-
-        // Get windows - placeholder for future macOS Windows API integration
-        register(method: "getWindows") { [weak self] request, completion in
-            self?.logger.info("getWindows called (placeholder)")
-
-            let mockWindows = [
-                ["id": 101, "title": "Terminal", "app": "Terminal", "space": 1],
-                ["id": 102, "title": "Safari", "app": "Safari", "space": 1],
-                ["id": 103, "title": "VSCode", "app": "Code", "space": 2]
-            ]
-
-            let response = Response(
-                id: request.id,
-                result: AnyCodable(["windows": mockWindows])
-            )
-            completion(response)
-        }
-
-        // Subscribe - placeholder for event subscriptions
-        register(method: "subscribe") { [weak self] request, completion in
-            self?.logger.info("Subscribe called", metadata: ["params": "\(request.params ?? [:])"])
-
-            let response = Response(
-                id: request.id,
-                result: AnyCodable(["subscribed": true])
-            )
-            completion(response)
-        }
-
         // Get server info
         register(method: "getServerInfo") { request, completion in
             let info: [String: Any] = [
@@ -379,15 +334,7 @@ class MessageHandler {
                 return
             }
 
-            let layer: mss_window_layer
-            switch layerStr.lowercased() {
-            case "below":
-                layer = MSS_LAYER_BELOW
-            case "above":
-                layer = MSS_LAYER_ABOVE
-            case "normal":
-                layer = MSS_LAYER_NORMAL
-            default:
+            guard let layer = WindowLayer(string: layerStr) else {
                 completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid layer. Must be 'below', 'normal', or 'above'")))
                 return
             }
@@ -396,7 +343,7 @@ class MessageHandler {
             let manipulator = WindowManipulator(connectionID: state.metadata.connectionID, logger: self.logger)
 
             if manipulator.mssClient.setWindowLayer(windowID: windowID, layer: layer) {
-                completion(Response(id: request.id, result: AnyCodable(["success": true, "windowId": windowId, "layer": layerStr])))
+                completion(Response(id: request.id, result: AnyCodable(["success": true, "windowId": windowId, "layer": layer.description])))
             } else {
                 completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to set window layer. MSS may not be available.")))
             }
@@ -547,6 +494,48 @@ class MessageHandler {
                 completion(Response(id: request.id, result: AnyCodable(["windowId": windowId, "minimized": minimized])))
             } else {
                 completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to get window minimized status")))
+            }
+        }
+
+        // MARK: - Window Focus Methods
+
+        // Focus window (raise and activate)
+        register(method: "window.focus") { [weak self] request, completion in
+            guard let self = self else { return }
+            guard let params = request.params else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
+                return
+            }
+
+            // Accept windowId as either string or int
+            var windowID: UInt32?
+            if let windowIdInt = params["windowId"]?.value as? Int {
+                windowID = UInt32(windowIdInt)
+            } else if let windowIdStr = params["windowId"]?.value as? String,
+                      let parsed = UInt32(windowIdStr) {
+                windowID = parsed
+            }
+
+            guard let wid = windowID else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Missing or invalid windowId")))
+                return
+            }
+
+            // Get window state to find PID
+            let state = StateManager.shared.getState()
+            guard let windowState = state.windows[String(wid)] else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32001, message: "Window not found: \(wid)")))
+                return
+            }
+
+            let manipulator = WindowManipulator(connectionID: state.metadata.connectionID, logger: self.logger)
+
+            if manipulator.focusWindow(pid: windowState.pid, windowID: wid) {
+                // Immediately update focus state (don't wait for AX notification)
+                StateManager.shared.handleWindowFocused(wid)
+                completion(Response(id: request.id, result: AnyCodable(["success": true, "windowId": wid])))
+            } else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to focus window")))
             }
         }
 

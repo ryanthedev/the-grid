@@ -8,6 +8,7 @@
 import Foundation
 import CoreGraphics
 import AppKit
+import Carbon.HIToolbox  // For ProcessSerialNumber (deprecated but still functional)
 
 // MARK: - Dynamic Library Loading
 
@@ -46,6 +47,24 @@ typealias SLSSpaceSetCompatID_t = @convention(c) (Int32, UInt64, Int32) -> CGErr
 typealias SLSSetWindowListWorkspace_t = @convention(c) (Int32, UnsafePointer<UInt32>, Int32, Int32) -> CGError
 typealias SLSMoveWindowsToManagedSpace_t = @convention(c) (Int32, CFArray, UInt64) -> Void
 
+// MARK: - Process Serial Number APIs (for yabai-style focus)
+// Note: ProcessSerialNumber is imported from Carbon.HIToolbox
+
+typealias SLPSSetFrontProcessWithOptions_t = @convention(c) (
+    UnsafePointer<ProcessSerialNumber>, UInt32, UInt32
+) -> CGError
+
+typealias SLPSPostEventRecordTo_t = @convention(c) (
+    UnsafePointer<ProcessSerialNumber>, UnsafeMutablePointer<UInt8>
+) -> CGError
+
+typealias GetProcessForPID_t = @convention(c) (
+    pid_t, UnsafeMutablePointer<ProcessSerialNumber>
+) -> OSStatus
+
+/// kCPSUserGenerated - mode flag for user-initiated focus
+let kCPSUserGenerated: UInt32 = 0x200
+
 // MARK: - Loaded Functions
 
 private let _SLSMainConnectionID: SLSMainConnectionID_t? = loadSymbol("SLSMainConnectionID")
@@ -69,6 +88,23 @@ private let _SLSConnectionGetPID: SLSConnectionGetPID_t? = loadSymbol("SLSConnec
 private let _SLSSpaceSetCompatID: SLSSpaceSetCompatID_t? = loadSymbol("SLSSpaceSetCompatID")
 private let _SLSSetWindowListWorkspace: SLSSetWindowListWorkspace_t? = loadSymbol("SLSSetWindowListWorkspace")
 private let _SLSMoveWindowsToManagedSpace: SLSMoveWindowsToManagedSpace_t? = loadSymbol("SLSMoveWindowsToManagedSpace")
+
+// SLPS APIs for yabai-style focus
+private let _SLPSSetFrontProcessWithOptions: SLPSSetFrontProcessWithOptions_t? =
+    loadSymbol("_SLPSSetFrontProcessWithOptions")
+private let _SLPSPostEventRecordTo: SLPSPostEventRecordTo_t? =
+    loadSymbol("SLPSPostEventRecordTo")
+
+// GetProcessForPID from HIServices/Carbon
+private let HIServicesFramework: UnsafeMutableRawPointer? = {
+    dlopen("/System/Library/Frameworks/ApplicationServices.framework/Frameworks/HIServices.framework/HIServices", RTLD_LAZY)
+}()
+
+private let _GetProcessForPID: GetProcessForPID_t? = {
+    guard let handle = HIServicesFramework else { return nil }
+    guard let sym = dlsym(handle, "GetProcessForPID") else { return nil }
+    return unsafeBitCast(sym, to: GetProcessForPID_t.self)
+}()
 
 // MARK: - Wrapper Functions
 
@@ -154,6 +190,23 @@ func SLSSetWindowListWorkspace(_ cid: Int32, _ windowList: UnsafePointer<UInt32>
 
 func SLSMoveWindowsToManagedSpace(_ cid: Int32, _ windowList: CFArray, _ spaceID: UInt64) {
     _SLSMoveWindowsToManagedSpace?(cid, windowList, spaceID)
+}
+
+// MARK: - SLPS Focus API Wrappers
+
+/// Get ProcessSerialNumber from PID (deprecated but still functional)
+func GetProcessForPID(_ pid: pid_t, _ psn: UnsafeMutablePointer<ProcessSerialNumber>) -> OSStatus {
+    _GetProcessForPID?(pid, psn) ?? -1
+}
+
+/// Set front process with window context (yabai-style)
+func SLPSSetFrontProcessWithOptions(_ psn: UnsafePointer<ProcessSerialNumber>, _ wid: UInt32, _ mode: UInt32) -> CGError {
+    _SLPSSetFrontProcessWithOptions?(psn, wid, mode) ?? .failure
+}
+
+/// Post event record to process for focus events (yabai-style)
+func SLPSPostEventRecordTo(_ psn: UnsafePointer<ProcessSerialNumber>, _ bytes: UnsafeMutablePointer<UInt8>) -> CGError {
+    _SLPSPostEventRecordTo?(psn, bytes) ?? .failure
 }
 
 // MARK: - Event Type Constants

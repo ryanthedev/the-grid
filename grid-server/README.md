@@ -24,7 +24,7 @@ Grid Server is a high-performance server that:
 - **`WorkspaceObserver.swift`**: Observes workspace and space changes
 - **`DisplayInfo.swift`**: Display and screen information
 - **`MacOSAPIs.swift`**: macOS private API bindings
-- **`ScriptingAdditionClient.swift`**: Communication with the scripting addition
+- **`MSSClient.swift`**: Communication with the MSS library for window/space manipulation
 - **`PermissionChecker.swift`**: Accessibility permission verification
 
 ### Data Models
@@ -233,6 +233,7 @@ Managed via Swift Package Manager:
 
 - **swift-argument-parser**: Command-line argument parsing
 - **swift-log**: Structured logging
+- **mss**: System library for macOS private API bindings (window/space manipulation)
 
 ## Requirements
 

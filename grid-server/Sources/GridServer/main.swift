@@ -27,8 +27,13 @@ struct GridServerCommand: ParsableCommand {
     var heartbeatInterval: Double = 10.0
 
     func run() throws {
+        // Build log directory path: ~/.local/state/thegrid/
+        let homeDir = FileManager.default.homeDirectoryForCurrentUser.path
+        let logDir = "\(homeDir)/.local/state/thegrid"
+        try? FileManager.default.createDirectory(atPath: logDir, withIntermediateDirectories: true)
+
         // Delete old log file to start fresh
-        let logFilePath = "grid-server.log"
+        let logFilePath = "\(logDir)/grid-server.log"
         try? FileManager.default.removeItem(atPath: logFilePath)
 
         // Set up logging with both console and file output
