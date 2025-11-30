@@ -248,6 +248,18 @@ grid focus prev                  # Cycle to previous window in cell
 grid focus cell <id>             # Jump focus to specific cell
 ```
 
+### Window Movement
+
+```bash
+grid window move left              # Move focused window to cell on left
+grid window move right             # Move focused window to cell on right
+grid window move up                # Move focused window to cell above
+grid window move down              # Move focused window to cell below
+grid window move left --extend     # Move to adjacent monitor if at edge
+grid window move right --wrap      # Wrap to opposite edge of display
+grid window move left --window-id 12345  # Move specific window
+```
+
 ### Resize / Split Adjustment
 
 ```bash
@@ -346,6 +358,13 @@ Persist state to ~/.local/state/thegrid/state.json
 3. Select closest cell using weighted distance (primary + perpendicular×2)
 4. Support wrap-around at screen edges
 
+**Window Movement:**
+1. Uses same adjacency logic as focus navigation
+2. Moves window from source cell to target cell
+3. Window becomes top of stack in target cell
+4. Focus follows the moved window
+5. With `--extend`, crosses to adjacent monitors at screen edges
+
 ---
 
 ## 7. Data Model Reference
@@ -396,6 +415,7 @@ Windows are categorized as:
 - `grid-cli/internal/layout/` - Grid engine, assignment, splits
 - `grid-cli/internal/state/` - Runtime state persistence
 - `grid-cli/internal/focus/` - Focus navigation
+- `grid-cli/internal/window/move.go` - Window movement between cells
 - `grid-cli/cmd/grid/main.go` - CLI commands
 
 ### Runtime Files
@@ -412,6 +432,8 @@ Windows are categorized as:
 | Cycle layout | `grid layout cycle` |
 | Focus left/right/up/down | `grid focus <direction>` |
 | Focus next window in cell | `grid focus next` |
+| Move window left/right/up/down | `grid window move <direction>` |
+| Move window to adjacent monitor | `grid window move <direction> --extend` |
 | Grow focused window | `grid resize grow` |
 | Reset splits | `grid resize reset` |
 | Show current layout | `grid layout current` |

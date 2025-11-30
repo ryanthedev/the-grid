@@ -51,7 +51,7 @@ func CycleFocus(
 	if len(cell.Windows) == 1 {
 		// Only one window, just ensure it's focused
 		windowID := cell.Windows[0]
-		if err := focusWindow(ctx, c, windowID); err != nil {
+		if err := FocusWindow(ctx, c, windowID); err != nil {
 			return 0, err
 		}
 		// Update state
@@ -72,7 +72,7 @@ func CycleFocus(
 	windowID := cell.Windows[idx]
 
 	// Focus via server
-	if err := focusWindow(ctx, c, windowID); err != nil {
+	if err := FocusWindow(ctx, c, windowID); err != nil {
 		return 0, err
 	}
 
@@ -95,8 +95,8 @@ func findFirstCellWithWindows(spaceState *state.SpaceState) string {
 	return ""
 }
 
-// focusWindow requests the server to focus a window.
-func focusWindow(ctx context.Context, c *client.Client, windowID uint32) error {
+// FocusWindow requests the server to focus a window.
+func FocusWindow(ctx context.Context, c *client.Client, windowID uint32) error {
 	// Try window.focus first
 	_, err := c.CallMethod(ctx, "window.focus", map[string]interface{}{
 		"windowId": windowID,
@@ -170,14 +170,14 @@ func MoveFocus(
 			return 0, fmt.Errorf("no cell in direction %s", direction.String())
 		}
 		// Wrap: find cell on opposite edge of current display
-		candidates = findWrapTarget(direction, currentCell, calculated.CellBounds)
+		candidates = FindWrapTarget(direction, currentCell, calculated.CellBounds)
 		if len(candidates) == 0 {
 			return 0, fmt.Errorf("no cell in direction %s (wrap)", direction.String())
 		}
 	}
 
 	// Pick closest candidate
-	targetCell := pickClosestCell(currentCell, candidates, calculated.CellBounds)
+	targetCell := PickClosestCell(currentCell, candidates, calculated.CellBounds)
 
 	// Focus the target cell
 	return focusCellByID(ctx, c, rs, snap.SpaceID, targetCell)
@@ -209,11 +209,11 @@ func moveFocusCrossDisplay(
 	}
 
 	// Find adjacent display in direction
-	adjacentDisplay := findAdjacentDisplay(currentDisplayUUID, direction, snap.AllDisplays)
+	adjacentDisplay := FindAdjacentDisplay(currentDisplayUUID, direction, snap.AllDisplays)
 	if adjacentDisplay == nil {
 		if wrapAround {
 			// Try to find display on opposite edge
-			adjacentDisplay = findOppositeDisplay(currentDisplayUUID, direction, snap.AllDisplays)
+			adjacentDisplay = FindOppositeDisplay(currentDisplayUUID, direction, snap.AllDisplays)
 		}
 		if adjacentDisplay == nil {
 			return 0, fmt.Errorf("no display in direction %s", direction.String())
@@ -221,7 +221,7 @@ func moveFocusCrossDisplay(
 	}
 
 	// Get cells on the target display
-	targetCellBounds, targetSpaceID, err := getDisplayCells(*adjacentDisplay, cfg, rs)
+	targetCellBounds, targetSpaceID, err := GetDisplayCells(*adjacentDisplay, cfg, rs)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get cells on adjacent display: %w", err)
 	}
@@ -245,10 +245,10 @@ func moveFocusCrossDisplay(
 		targetDisplayBounds = adjacentDisplay.Frame
 	}
 
-	targetPoint := matchVisualPosition(currentBounds, currentDisplayBounds, targetDisplayBounds)
+	targetPoint := MatchVisualPosition(currentBounds, currentDisplayBounds, targetDisplayBounds)
 
 	// Find closest cell to target point
-	targetCell := findClosestCellToPoint(targetPoint, targetCellBounds)
+	targetCell := FindClosestCellToPoint(targetPoint, targetCellBounds)
 	if targetCell == "" {
 		return 0, fmt.Errorf("no cells on adjacent display")
 	}
@@ -258,8 +258,8 @@ func moveFocusCrossDisplay(
 	return focusCellByID(ctx, c, rs, targetSpaceIDStr, targetCell)
 }
 
-// findOppositeDisplay finds a display on the opposite edge for wrap-around.
-func findOppositeDisplay(currentDisplayUUID string, direction types.Direction, allDisplays []server.DisplayInfo) *server.DisplayInfo {
+// FindOppositeDisplay finds a display on the opposite edge for wrap-around.
+func FindOppositeDisplay(currentDisplayUUID string, direction types.Direction, allDisplays []server.DisplayInfo) *server.DisplayInfo {
 	if len(allDisplays) < 2 {
 		return nil
 	}
@@ -366,7 +366,7 @@ func focusCellByID(ctx context.Context, c *client.Client, rs *state.RuntimeState
 	}
 
 	windowID := cell.Windows[idx]
-	if err := focusWindow(ctx, c, windowID); err != nil {
+	if err := FocusWindow(ctx, c, windowID); err != nil {
 		return 0, err
 	}
 	mutableSpace.SetFocus(cellID, idx)
@@ -375,8 +375,8 @@ func focusCellByID(ctx context.Context, c *client.Client, rs *state.RuntimeState
 	return windowID, nil
 }
 
-// findWrapTarget finds cells on the opposite edge for wrap-around navigation.
-func findWrapTarget(direction types.Direction, currentCell string, cellBounds map[string]types.Rect) []string {
+// FindWrapTarget finds cells on the opposite edge for wrap-around navigation.
+func FindWrapTarget(direction types.Direction, currentCell string, cellBounds map[string]types.Rect) []string {
 	current, ok := cellBounds[currentCell]
 	if !ok {
 		return nil
@@ -478,8 +478,8 @@ func filterByEdge(cells []string, cellBounds map[string]types.Rect, better func(
 	return result
 }
 
-// pickClosestCell picks the cell closest to the current cell's center.
-func pickClosestCell(currentCell string, candidates []string, cellBounds map[string]types.Rect) string {
+// PickClosestCell picks the cell closest to the current cell's center.
+func PickClosestCell(currentCell string, candidates []string, cellBounds map[string]types.Rect) string {
 	if len(candidates) == 0 {
 		return ""
 	}
@@ -525,10 +525,10 @@ type MoveFocusOpts struct {
 	Extend     bool // Allow crossing to adjacent monitors
 }
 
-// findAdjacentDisplay finds the display adjacent to the current one in the given direction.
+// FindAdjacentDisplay finds the display adjacent to the current one in the given direction.
 // Returns nil if no display exists in that direction.
 // Uses ~5px tolerance for edge matching to handle minor alignment differences.
-func findAdjacentDisplay(currentDisplayUUID string, direction types.Direction, allDisplays []server.DisplayInfo) *server.DisplayInfo {
+func FindAdjacentDisplay(currentDisplayUUID string, direction types.Direction, allDisplays []server.DisplayInfo) *server.DisplayInfo {
 	const edgeTolerance = 5.0
 
 	// Find current display
@@ -602,9 +602,9 @@ func findAdjacentDisplay(currentDisplayUUID string, direction types.Direction, a
 	return nil
 }
 
-// matchVisualPosition maps a position from source display to equivalent position on target display.
+// MatchVisualPosition maps a position from source display to equivalent position on target display.
 // Uses normalized coordinates to preserve visual position.
-func matchVisualPosition(sourceCell types.Rect, sourceDisplay, targetDisplay types.Rect) types.Point {
+func MatchVisualPosition(sourceCell types.Rect, sourceDisplay, targetDisplay types.Rect) types.Point {
 	// Get cell center in source display
 	cellCenter := sourceCell.Center()
 
@@ -619,9 +619,9 @@ func matchVisualPosition(sourceCell types.Rect, sourceDisplay, targetDisplay typ
 	return types.Point{X: targetX, Y: targetY}
 }
 
-// findClosestCellToPoint finds the cell whose center is closest to the given point.
+// FindClosestCellToPoint finds the cell whose center is closest to the given point.
 // Returns empty string if cellBounds is empty.
-func findClosestCellToPoint(point types.Point, cellBounds map[string]types.Rect) string {
+func FindClosestCellToPoint(point types.Point, cellBounds map[string]types.Rect) string {
 	if len(cellBounds) == 0 {
 		return ""
 	}
@@ -644,9 +644,9 @@ func findClosestCellToPoint(point types.Point, cellBounds map[string]types.Rect)
 	return closestCell
 }
 
-// getDisplayCells calculates cell bounds for a specific display's active space.
+// GetDisplayCells calculates cell bounds for a specific display's active space.
 // Returns the calculated cell bounds, space ID, and any error encountered.
-func getDisplayCells(displayInfo server.DisplayInfo, cfg *config.Config, rs *state.RuntimeState) (cellBounds map[string]types.Rect, spaceID interface{}, err error) {
+func GetDisplayCells(displayInfo server.DisplayInfo, cfg *config.Config, rs *state.RuntimeState) (cellBounds map[string]types.Rect, spaceID interface{}, err error) {
 	// Get space ID for this display (handle interface{} type)
 	currentSpaceID := displayInfo.CurrentSpaceID
 	spaceIDStr := fmt.Sprintf("%v", currentSpaceID)

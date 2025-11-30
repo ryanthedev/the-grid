@@ -24,6 +24,7 @@ import (
 	gridServer "github.com/yourusername/grid-cli/internal/server"
 	gridState "github.com/yourusername/grid-cli/internal/state"
 	gridTypes "github.com/yourusername/grid-cli/internal/types"
+	gridWindow "github.com/yourusername/grid-cli/internal/window"
 )
 
 var (
@@ -1579,6 +1580,126 @@ var focusDownCmd = &cobra.Command{
 	},
 }
 
+// moveWindowDirectionHelper is a helper function for directional window move commands
+func moveWindowDirectionHelper(direction gridTypes.Direction, wrapAround bool, extend bool, windowID uint32) error {
+	cfg, err := gridConfig.LoadConfig("")
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	runtimeState, err := gridState.LoadState()
+	if err != nil {
+		return fmt.Errorf("failed to load state: %w", err)
+	}
+
+	c := client.NewClient(socketPath, timeout)
+	defer c.Close()
+
+	ctx := context.Background()
+
+	// 1. Fetch server state ONCE
+	snap, err := gridServer.Fetch(ctx, c)
+	if err != nil {
+		return fmt.Errorf("failed to fetch server state: %w", err)
+	}
+
+	// 2. Reconcile local state with server
+	if err := gridReconcile.Sync(snap, runtimeState); err != nil {
+		return fmt.Errorf("failed to reconcile state: %w", err)
+	}
+
+	// 3. Move window
+	opts := gridWindow.MoveWindowOpts{
+		WrapAround: wrapAround,
+		Extend:     extend,
+		WindowID:   windowID,
+	}
+	result, err := gridWindow.MoveWindow(ctx, c, snap, cfg, runtimeState, direction, opts)
+	if err != nil {
+		return fmt.Errorf("failed to move window: %w", err)
+	}
+
+	if result.CrossDisplay {
+		successColor.Printf("Moved window %d: %s -> %s (cross-display to space %s)\n",
+			result.WindowID, result.SourceCell, result.TargetCell, result.TargetSpace)
+	} else {
+		successColor.Printf("Moved window %d: %s -> %s\n",
+			result.WindowID, result.SourceCell, result.TargetCell)
+	}
+	return nil
+}
+
+// windowMoveCmd is the parent command for window move operations
+var windowMoveCmd = &cobra.Command{
+	Use:   "move",
+	Short: "Move window to adjacent cell",
+	Long:  `Commands for moving windows between cells in the layout grid.`,
+}
+
+// windowMoveLeftCmd moves window to the left cell
+var windowMoveLeftCmd = &cobra.Command{
+	Use:   "left",
+	Short: "Move window to left cell",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		wrap, _ := cmd.Flags().GetBool("wrap")
+		extend, _ := cmd.Flags().GetBool("extend")
+		windowID, _ := cmd.Flags().GetUint32("window-id")
+		if extend {
+			logging.Debug().Bool("extend", extend).Msg("cross-monitor window move enabled")
+		}
+		return moveWindowDirectionHelper(gridTypes.DirLeft, wrap, extend, windowID)
+	},
+}
+
+// windowMoveRightCmd moves window to the right cell
+var windowMoveRightCmd = &cobra.Command{
+	Use:   "right",
+	Short: "Move window to right cell",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		wrap, _ := cmd.Flags().GetBool("wrap")
+		extend, _ := cmd.Flags().GetBool("extend")
+		windowID, _ := cmd.Flags().GetUint32("window-id")
+		if extend {
+			logging.Debug().Bool("extend", extend).Msg("cross-monitor window move enabled")
+		}
+		return moveWindowDirectionHelper(gridTypes.DirRight, wrap, extend, windowID)
+	},
+}
+
+// windowMoveUpCmd moves window to the cell above
+var windowMoveUpCmd = &cobra.Command{
+	Use:   "up",
+	Short: "Move window to cell above",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		wrap, _ := cmd.Flags().GetBool("wrap")
+		extend, _ := cmd.Flags().GetBool("extend")
+		windowID, _ := cmd.Flags().GetUint32("window-id")
+		if extend {
+			logging.Debug().Bool("extend", extend).Msg("cross-monitor window move enabled")
+		}
+		return moveWindowDirectionHelper(gridTypes.DirUp, wrap, extend, windowID)
+	},
+}
+
+// windowMoveDownCmd moves window to the cell below
+var windowMoveDownCmd = &cobra.Command{
+	Use:   "down",
+	Short: "Move window to cell below",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		wrap, _ := cmd.Flags().GetBool("wrap")
+		extend, _ := cmd.Flags().GetBool("extend")
+		windowID, _ := cmd.Flags().GetUint32("window-id")
+		if extend {
+			logging.Debug().Bool("extend", extend).Msg("cross-monitor window move enabled")
+		}
+		return moveWindowDirectionHelper(gridTypes.DirDown, wrap, extend, windowID)
+	},
+}
+
 // focusNextCmd cycles focus to next window in cell
 var focusNextCmd = &cobra.Command{
 	Use:   "next",
@@ -2182,6 +2303,20 @@ func init() {
 	windowCmd.AddCommand(windowMinimizeCmd)
 	windowCmd.AddCommand(windowUnminimizeCmd)
 	windowCmd.AddCommand(windowIsMinimizedCmd)
+	windowCmd.AddCommand(windowMoveCmd)
+
+	// Add window move subcommands
+	windowMoveCmd.AddCommand(windowMoveLeftCmd)
+	windowMoveCmd.AddCommand(windowMoveRightCmd)
+	windowMoveCmd.AddCommand(windowMoveUpCmd)
+	windowMoveCmd.AddCommand(windowMoveDownCmd)
+
+	// Add flags for window move commands
+	for _, cmd := range []*cobra.Command{windowMoveLeftCmd, windowMoveRightCmd, windowMoveUpCmd, windowMoveDownCmd} {
+		cmd.Flags().Bool("wrap", true, "Wrap around to opposite edge")
+		cmd.Flags().Bool("extend", false, "Extend to adjacent monitors")
+		cmd.Flags().Uint32("window-id", 0, "Window ID to move (default: focused window)")
+	}
 
 	// Add space subcommands
 	spaceCmd.AddCommand(spaceCreateCmd)
