@@ -138,7 +138,7 @@ func MoveFocus(
 	if err != nil {
 		return 0, fmt.Errorf("layout not found: %w", err)
 	}
-	calculated := layout.CalculateLayout(layoutDef, snap.DisplayBounds, float64(cfg.Settings.CellPadding))
+	calculated := layout.CalculateLayout(layoutDef, snap.DisplayBounds, 0)
 
 	// Find current cell
 	currentCell := spaceState.FocusedCell
@@ -678,7 +678,7 @@ func GetDisplayCells(displayInfo server.DisplayInfo, cfg *config.Config, rs *sta
 	}
 
 	// Calculate layout bounds
-	calculated := layout.CalculateLayout(layoutDef, displayBounds, float64(cfg.Settings.CellPadding))
+	calculated := layout.CalculateLayout(layoutDef, displayBounds, 0)
 	if calculated == nil {
 		return nil, currentSpaceID, fmt.Errorf("failed to calculate layout for space %s", spaceIDStr)
 	}

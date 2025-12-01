@@ -1133,7 +1133,13 @@ var layoutApplyCmd = &cobra.Command{
 
 		// 3. Apply layout using snapshot
 		opts := gridLayout.DefaultApplyOptions()
-		opts.Gap = float64(cfg.Settings.CellPadding)
+		opts.BaseSpacing = cfg.GetBaseSpacing()
+		if settingsPadding, err := cfg.GetSettingsPadding(); err == nil {
+			opts.SettingsPadding = settingsPadding
+		}
+		if settingsWindowSpacing, err := cfg.GetSettingsWindowSpacing(); err == nil {
+			opts.SettingsWindowSpacing = settingsWindowSpacing
+		}
 
 		if err := gridLayout.ApplyLayout(ctx, c, snap, cfg, runtimeState, layoutID, opts); err != nil {
 			return fmt.Errorf("failed to apply layout: %w", err)
@@ -1177,7 +1183,13 @@ var layoutCycleCmd = &cobra.Command{
 
 		// 3. Cycle layout
 		opts := gridLayout.DefaultApplyOptions()
-		opts.Gap = float64(cfg.Settings.CellPadding)
+		opts.BaseSpacing = cfg.GetBaseSpacing()
+		if settingsPadding, err := cfg.GetSettingsPadding(); err == nil {
+			opts.SettingsPadding = settingsPadding
+		}
+		if settingsWindowSpacing, err := cfg.GetSettingsWindowSpacing(); err == nil {
+			opts.SettingsWindowSpacing = settingsWindowSpacing
+		}
 
 		newLayout, err := gridLayout.CycleLayout(ctx, c, snap, cfg, runtimeState, opts)
 		if err != nil {
@@ -1263,7 +1275,13 @@ var layoutReapplyCmd = &cobra.Command{
 
 		// 3. Reapply layout
 		opts := gridLayout.DefaultApplyOptions()
-		opts.Gap = float64(cfg.Settings.CellPadding)
+		opts.BaseSpacing = cfg.GetBaseSpacing()
+		if settingsPadding, err := cfg.GetSettingsPadding(); err == nil {
+			opts.SettingsPadding = settingsPadding
+		}
+		if settingsWindowSpacing, err := cfg.GetSettingsWindowSpacing(); err == nil {
+			opts.SettingsWindowSpacing = settingsWindowSpacing
+		}
 
 		if err := gridLayout.ReapplyLayout(ctx, c, snap, cfg, runtimeState, opts); err != nil {
 			return fmt.Errorf("failed to reapply layout: %w", err)

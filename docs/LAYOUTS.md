@@ -96,6 +96,61 @@ How windows are distributed to cells:
 | **Pinned** | Use app rules to assign specific apps to preferred cells |
 | **Preserve** | Keep previous cell assignments when switching layouts |
 
+### Padding
+
+Padding controls the inset from cell boundaries to window edges. theGrid uses a **3-level hierarchy** where more specific settings override general ones:
+
+| Level | Config Location | Priority |
+|-------|-----------------|----------|
+| Cell | `cells[].padding` | Highest |
+| Layout | `layouts[].padding` | Medium |
+| Settings | `settings.padding` | Lowest |
+
+**Padding Value Formats:**
+
+| Format | Example | Result |
+|--------|---------|--------|
+| Number | `10` | 10px all sides |
+| Pixel string | `"10px"` | 10px all sides |
+| Relative | `"2x"` | `baseSpacing × 2` all sides |
+| 2-value array | `[10, 5]` | vertical=10px, horizontal=5px |
+| 4-value array | `[10, 5, 8, 5]` | top, right, bottom, left (CSS order) |
+| Object | `{top: 10, left: 5}` | Explicit per-direction |
+
+**Base Spacing:**
+The `baseSpacing` setting (default: 8) defines the unit for relative values. With `baseSpacing: 8`:
+- `"1x"` → 8px
+- `"2x"` → 16px
+- `"0.5x"` → 4px
+
+### Window Spacing
+
+Window spacing controls the gap between stacked windows **within** a cell. It only applies when a cell has multiple windows in `vertical` or `horizontal` stack mode (not `tabs`).
+
+```
+┌─────────────────────┐
+│     padding         │  ← cell padding (top)
+├─────────────────────┤
+│     Window 1        │
+├─────────────────────┤
+│   windowSpacing     │  ← gap between windows
+├─────────────────────┤
+│     Window 2        │
+├─────────────────────┤
+│     padding         │  ← cell padding (bottom)
+└─────────────────────┘
+```
+
+Uses the same 3-level hierarchy and value formats as padding:
+
+| Level | Config Location | Priority |
+|-------|-----------------|----------|
+| Cell | `cells[].windowSpacing` | Highest |
+| Layout | `layouts[].windowSpacing` | Medium |
+| Settings | `settings.windowSpacing` | Lowest |
+
+Supports the same syntax: numbers (`8`), pixel strings (`"8px"`), or relative values (`"1x"`).
+
 ---
 
 ## 4. Configuration Reference
@@ -118,7 +173,9 @@ appRules:       # Application-specific rules
 ```yaml
 settings:
   defaultStackMode: vertical    # vertical | horizontal | tabs
-  cellPadding: 8                # Pixels between windows in a cell
+  baseSpacing: 8                # Base unit for "Nx" syntax (default: 8)
+  padding: "2x"                 # Cell padding - inset from cell edges
+  windowSpacing: "1x"           # Gap between stacked windows within a cell
 ```
 
 ### Layout Definition
@@ -128,6 +185,8 @@ layouts:
   - id: ide                      # Unique identifier (required)
     name: "IDE Layout"           # Display name (required)
     description: "For coding"    # Optional
+    padding: "1x"                # Layout-level padding (overrides settings)
+    windowSpacing: "0.5x"        # Layout-level window spacing (overrides settings)
 
     grid:
       columns: ["300px", "1fr", "1fr"]
@@ -138,11 +197,13 @@ layouts:
       - [sidebar, editor, editor]
       - [sidebar, terminal, preview]
 
-    # Option B: Explicit cell definitions
+    # Option B: Explicit cell definitions (required for per-cell overrides)
     cells:
       - id: sidebar
         column: "1/2"            # Column start/end (1-indexed)
         row: "1/3"               # Row start/end
+        padding: [0, 8, 0, 0]    # Per-cell padding override
+        windowSpacing: 0         # Per-cell window spacing override
 
     # Per-cell stack mode overrides
     cellModes:
@@ -181,11 +242,15 @@ appRules:
 ```yaml
 settings:
   defaultStackMode: vertical
-  cellPadding: 8
+  baseSpacing: 8
+  padding: "1x"                  # 8px cell inset
+  windowSpacing: "1x"            # 8px between stacked windows
 
 layouts:
   - id: focus
     name: "Focus"
+    padding: 0                   # No padding for fullscreen focus
+    windowSpacing: 0             # No spacing needed (single window)
     grid:
       columns: ["1fr"]
       rows: ["1fr"]
@@ -194,6 +259,8 @@ layouts:
 
   - id: ide
     name: "IDE Layout"
+    padding: "1x"
+    windowSpacing: "0.5x"        # 4px between windows in stacks
     grid:
       columns: ["300px", "1fr", "1fr"]
       rows: ["2fr", "1fr"]
@@ -376,6 +443,8 @@ Defines a grid structure:
 - **Columns/Rows**: Track size definitions
 - **Cells**: Named regions with grid positions
 - **CellModes**: Per-cell stack mode overrides
+- **Padding**: Layout-level default padding (overrides settings)
+- **WindowSpacing**: Layout-level window spacing (overrides settings)
 
 ### Cell
 
@@ -383,6 +452,8 @@ A rectangular region in the grid:
 - **ID**: Unique identifier
 - **Grid position**: Column/row start and end (1-indexed, exclusive end)
 - **StackMode**: How windows are arranged (inherited from layout default or overridden)
+- **Padding**: Per-cell padding override (overrides layout and settings)
+- **WindowSpacing**: Per-cell window spacing override (overrides layout and settings)
 
 ### TrackSize
 

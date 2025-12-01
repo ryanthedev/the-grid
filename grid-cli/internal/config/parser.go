@@ -145,3 +145,147 @@ func FormatTrackSize(ts types.TrackSize) string {
 		return ""
 	}
 }
+
+// ParsePadding parses a padding value from various shorthand formats
+// Supported formats:
+//   - 10 or 10.5 (number) -> all sides in pixels
+//   - "10px" (string) -> all sides in pixels
+//   - "2x" (string) -> all sides as 2 * baseSpacing
+//   - [10, 5] (array) -> vertical=10, horizontal=5
+//   - [10, 5, 8, 5] (array) -> top=10, right=5, bottom=8, left=5 (CSS order)
+//   - {top: 10, right: 5, bottom: 8, left: 5} (object) -> explicit per-direction
+func ParsePadding(raw interface{}) (*types.Padding, error) {
+	if raw == nil {
+		return nil, nil
+	}
+
+	switch v := raw.(type) {
+	case int:
+		pv := types.PaddingValue{Pixels: float64(v)}
+		return &types.Padding{Top: pv, Right: pv, Bottom: pv, Left: pv}, nil
+
+	case float64:
+		pv := types.PaddingValue{Pixels: v}
+		return &types.Padding{Top: pv, Right: pv, Bottom: pv, Left: pv}, nil
+
+	case string:
+		pv, err := parsePaddingValue(v)
+		if err != nil {
+			return nil, err
+		}
+		return &types.Padding{Top: pv, Right: pv, Bottom: pv, Left: pv}, nil
+
+	case []interface{}:
+		return parsePaddingArray(v)
+
+	case map[string]interface{}:
+		return parsePaddingObject(v)
+	}
+
+	return nil, fmt.Errorf("invalid padding format: %T", raw)
+}
+
+// parsePaddingValue parses a single padding value string
+// Formats: "10", "10px", "2x", "1.5x"
+func parsePaddingValue(s string) (types.PaddingValue, error) {
+	s = strings.TrimSpace(s)
+
+	// Check for "Nx" pattern (base-relative)
+	if strings.HasSuffix(s, "x") {
+		numStr := strings.TrimSuffix(s, "x")
+		mult, err := strconv.ParseFloat(numStr, 64)
+		if err != nil {
+			return types.PaddingValue{}, fmt.Errorf("invalid base multiplier: %s", s)
+		}
+		return types.PaddingValue{BaseMultiple: mult, IsRelative: true}, nil
+	}
+
+	// Check for "Npx" pattern (explicit pixels)
+	if strings.HasSuffix(s, "px") {
+		numStr := strings.TrimSuffix(s, "px")
+		px, err := strconv.ParseFloat(numStr, 64)
+		if err != nil {
+			return types.PaddingValue{}, fmt.Errorf("invalid pixel value: %s", s)
+		}
+		return types.PaddingValue{Pixels: px}, nil
+	}
+
+	// Plain number string
+	px, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return types.PaddingValue{}, fmt.Errorf("invalid padding value: %s", s)
+	}
+	return types.PaddingValue{Pixels: px}, nil
+}
+
+// parseSinglePaddingValue handles int, float64, or string
+func parseSinglePaddingValue(v interface{}) (types.PaddingValue, error) {
+	switch val := v.(type) {
+	case int:
+		return types.PaddingValue{Pixels: float64(val)}, nil
+	case float64:
+		return types.PaddingValue{Pixels: val}, nil
+	case string:
+		return parsePaddingValue(val)
+	default:
+		return types.PaddingValue{}, fmt.Errorf("invalid padding value type: %T", v)
+	}
+}
+
+// parsePaddingArray handles [vert, horiz] or [top, right, bottom, left]
+func parsePaddingArray(arr []interface{}) (*types.Padding, error) {
+	values := make([]types.PaddingValue, len(arr))
+	for i, v := range arr {
+		pv, err := parseSinglePaddingValue(v)
+		if err != nil {
+			return nil, fmt.Errorf("padding array index %d: %w", i, err)
+		}
+		values[i] = pv
+	}
+
+	switch len(values) {
+	case 2: // [vertical, horizontal]
+		return &types.Padding{
+			Top:    values[0],
+			Bottom: values[0],
+			Left:   values[1],
+			Right:  values[1],
+		}, nil
+	case 4: // [top, right, bottom, left] (CSS order)
+		return &types.Padding{
+			Top:    values[0],
+			Right:  values[1],
+			Bottom: values[2],
+			Left:   values[3],
+		}, nil
+	default:
+		return nil, fmt.Errorf("padding array must have 2 or 4 values, got %d", len(values))
+	}
+}
+
+// parsePaddingObject handles {top: N, right: N, bottom: N, left: N}
+func parsePaddingObject(obj map[string]interface{}) (*types.Padding, error) {
+	padding := &types.Padding{}
+
+	for key, val := range obj {
+		pv, err := parseSinglePaddingValue(val)
+		if err != nil {
+			return nil, fmt.Errorf("padding.%s: %w", key, err)
+		}
+
+		switch key {
+		case "top":
+			padding.Top = pv
+		case "right":
+			padding.Right = pv
+		case "bottom":
+			padding.Bottom = pv
+		case "left":
+			padding.Left = pv
+		default:
+			return nil, fmt.Errorf("unknown padding key: %s", key)
+		}
+	}
+
+	return padding, nil
+}

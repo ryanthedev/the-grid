@@ -67,7 +67,10 @@ func AdjustFocusedSplit(
 
 	// Reapply layout to update window positions
 	opts := DefaultApplyOptions()
-	opts.Gap = float64(cfg.Settings.CellPadding)
+	opts.BaseSpacing = cfg.GetBaseSpacing()
+	if settingsPadding, err := cfg.GetSettingsPadding(); err == nil {
+		opts.SettingsPadding = settingsPadding
+	}
 	return ReapplyLayout(ctx, c, snap, cfg, rs, opts)
 }
 
@@ -103,7 +106,10 @@ func ResetFocusedSplits(
 	}
 
 	opts := DefaultApplyOptions()
-	opts.Gap = float64(cfg.Settings.CellPadding)
+	opts.BaseSpacing = cfg.GetBaseSpacing()
+	if settingsPadding, err := cfg.GetSettingsPadding(); err == nil {
+		opts.SettingsPadding = settingsPadding
+	}
 	return ReapplyLayout(ctx, c, snap, cfg, rs, opts)
 }
 
@@ -131,6 +137,9 @@ func ResetAllSplits(
 	}
 
 	opts := DefaultApplyOptions()
-	opts.Gap = float64(cfg.Settings.CellPadding)
+	opts.BaseSpacing = cfg.GetBaseSpacing()
+	if settingsPadding, err := cfg.GetSettingsPadding(); err == nil {
+		opts.SettingsPadding = settingsPadding
+	}
 	return ReapplyLayout(ctx, c, snap, cfg, rs, opts)
 }

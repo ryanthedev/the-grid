@@ -14,17 +14,17 @@ import (
 
 // ApplyLayoutOptions configures layout application
 type ApplyLayoutOptions struct {
-	Strategy types.AssignmentStrategy // Window assignment strategy
-	Gap      float64                  // Gap between cells in pixels
-	Padding  float64                  // Padding between windows in same cell
+	Strategy              types.AssignmentStrategy // Window assignment strategy
+	BaseSpacing           float64                  // Base unit for "Nx" padding syntax
+	SettingsPadding       *types.Padding           // Global default padding from settings
+	SettingsWindowSpacing *types.PaddingValue      // Global default window spacing from settings
 }
 
 // DefaultApplyOptions returns sensible default options
 func DefaultApplyOptions() ApplyLayoutOptions {
 	return ApplyLayoutOptions{
-		Strategy: types.AssignPosition,
-		Gap:      8,
-		Padding:  4,
+		Strategy:    types.AssignPosition,
+		BaseSpacing: 8, // Default base spacing unit
 	}
 }
 
@@ -50,8 +50,8 @@ func ApplyLayout(
 
 	logging.Info().Str("layout", layoutID).Str("space", snap.SpaceID).Msg("applying layout")
 
-	// 2. Calculate grid layout using snapshot's display bounds
-	calculatedLayout := CalculateLayout(layout, snap.DisplayBounds, opts.Gap)
+	// 2. Calculate grid layout using snapshot's display bounds (gap=0, padding handles spacing)
+	calculatedLayout := CalculateLayout(layout, snap.DisplayBounds, 0)
 
 	// 3. Convert snapshot windows to layout windows
 	windows := convertWindows(snap.Windows)
@@ -105,11 +105,14 @@ func ApplyLayout(
 	// 7. Calculate window placements
 	placements := CalculateAllWindowPlacements(
 		calculatedLayout,
+		layout,
 		assignment.Assignments,
 		cellModes,
 		cellRatios,
 		cfg.Settings.DefaultStackMode,
-		opts.Padding,
+		opts.BaseSpacing,
+		opts.SettingsPadding,
+		opts.SettingsWindowSpacing,
 	)
 
 	// 8. Apply placements via server

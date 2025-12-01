@@ -42,7 +42,7 @@ func SendWindow(
 	if err != nil {
 		return fmt.Errorf("layout not found: %w", err)
 	}
-	calculated := layout.CalculateLayout(layoutDef, snap.DisplayBounds, float64(cfg.Settings.CellPadding))
+	calculated := layout.CalculateLayout(layoutDef, snap.DisplayBounds, 0)
 
 	// Find target cell
 	adjacentMap := layout.GetAdjacentCells(currentCell, calculated.CellBounds)
@@ -69,7 +69,13 @@ func SendWindow(
 
 	// Reapply layout
 	opts := layout.DefaultApplyOptions()
-	opts.Gap = float64(cfg.Settings.CellPadding)
+	opts.BaseSpacing = cfg.GetBaseSpacing()
+	if settingsPadding, err := cfg.GetSettingsPadding(); err == nil {
+		opts.SettingsPadding = settingsPadding
+	}
+	if settingsWindowSpacing, err := cfg.GetSettingsWindowSpacing(); err == nil {
+		opts.SettingsWindowSpacing = settingsWindowSpacing
+	}
 	return layout.ReapplyLayout(ctx, c, snap, cfg, rs, opts)
 }
 

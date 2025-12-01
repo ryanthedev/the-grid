@@ -74,7 +74,7 @@ func MoveWindow(
 	if err != nil {
 		return nil, fmt.Errorf("layout not found: %w", err)
 	}
-	calculated := layout.CalculateLayout(layoutDef, snap.DisplayBounds, float64(cfg.Settings.CellPadding))
+	calculated := layout.CalculateLayout(layoutDef, snap.DisplayBounds, 0)
 
 	// Find adjacent cells on current display
 	adjacentMap := layout.GetAdjacentCells(sourceCell, calculated.CellBounds)
@@ -141,7 +141,7 @@ func moveWindowToCell(
 	if err != nil {
 		return nil, fmt.Errorf("layout not found: %w", err)
 	}
-	calculated := layout.CalculateLayout(layoutDef, snap.DisplayBounds, float64(cfg.Settings.CellPadding))
+	calculated := layout.CalculateLayout(layoutDef, snap.DisplayBounds, 0)
 
 	// Build assignments for just the affected cells
 	affectedAssignments := make(map[string][]uint32)
@@ -183,13 +183,18 @@ func moveWindowToCell(
 	}
 
 	// Calculate and apply placements for affected cells only
+	settingsPadding, _ := cfg.GetSettingsPadding()
+	settingsWindowSpacing, _ := cfg.GetSettingsWindowSpacing()
 	placements := layout.CalculateAllWindowPlacements(
 		calculated,
+		layoutDef,
 		affectedAssignments,
 		cellModes,
 		cellRatios,
 		cfg.Settings.DefaultStackMode,
-		4, // padding
+		cfg.GetBaseSpacing(),
+		settingsPadding,
+		settingsWindowSpacing,
 	)
 
 	if err := layout.ApplyPlacements(ctx, c, placements); err != nil {
@@ -325,7 +330,7 @@ func moveWindowCrossDisplay(
 		if targetDisplayBounds == (types.Rect{}) {
 			targetDisplayBounds = adjacentDisplay.Frame
 		}
-		calculated := layout.CalculateLayout(layoutDef, targetDisplayBounds, float64(cfg.Settings.CellPadding))
+		calculated := layout.CalculateLayout(layoutDef, targetDisplayBounds, 0)
 
 		// Build assignments for just the target cell
 		affectedAssignments := make(map[string][]uint32)
@@ -360,13 +365,18 @@ func moveWindowCrossDisplay(
 		}
 
 		// Calculate and apply placements for target cell only
+		settingsPadding, _ := cfg.GetSettingsPadding()
+		settingsWindowSpacing, _ := cfg.GetSettingsWindowSpacing()
 		placements := layout.CalculateAllWindowPlacements(
 			calculated,
+			layoutDef,
 			affectedAssignments,
 			cellModes,
 			cellRatios,
 			cfg.Settings.DefaultStackMode,
-			4, // padding
+			cfg.GetBaseSpacing(),
+			settingsPadding,
+			settingsWindowSpacing,
 		)
 
 		if err := layout.ApplyPlacements(ctx, c, placements); err != nil {

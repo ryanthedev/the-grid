@@ -202,8 +202,8 @@ func validateSettings(s *Settings) error {
 	if s.AnimationDuration < 0 {
 		return fmt.Errorf("animation duration cannot be negative")
 	}
-	if s.CellPadding < 0 {
-		return fmt.Errorf("cell padding cannot be negative")
+	if s.BaseSpacing < 0 {
+		return fmt.Errorf("base spacing cannot be negative")
 	}
 	return nil
 }

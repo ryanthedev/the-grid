@@ -165,7 +165,7 @@ func TestLoadConfigFromBytes_YAML(t *testing.T) {
 	yamlConfig := `
 settings:
   defaultStackMode: vertical
-  cellPadding: 8
+  baseSpacing: 8
 
 layouts:
   - id: two-column
@@ -189,8 +189,8 @@ layouts:
 	if cfg.Settings.DefaultStackMode != types.StackVertical {
 		t.Errorf("Settings.DefaultStackMode = %q, want %q", cfg.Settings.DefaultStackMode, types.StackVertical)
 	}
-	if cfg.Settings.CellPadding != 8 {
-		t.Errorf("Settings.CellPadding = %d, want 8", cfg.Settings.CellPadding)
+	if cfg.Settings.BaseSpacing != 8 {
+		t.Errorf("Settings.BaseSpacing = %f, want 8", cfg.Settings.BaseSpacing)
 	}
 	if len(cfg.Layouts) != 1 {
 		t.Errorf("len(Layouts) = %d, want 1", len(cfg.Layouts))

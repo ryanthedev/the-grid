@@ -157,10 +157,32 @@ func (lc *LayoutConfig) ToLayout() (*types.Layout, error) {
 		rows[i] = ts
 	}
 
+	// Parse layout-level padding
+	var layoutPadding *types.Padding
+	if lc.Padding != nil {
+		var err error
+		layoutPadding, err = ParsePadding(lc.Padding)
+		if err != nil {
+			return nil, fmt.Errorf("invalid layout padding: %w", err)
+		}
+	}
+
+	// Parse layout-level windowSpacing
+	var layoutWindowSpacing *types.PaddingValue
+	if lc.WindowSpacing != nil {
+		pv, err := parseSinglePaddingValue(lc.WindowSpacing)
+		if err != nil {
+			return nil, fmt.Errorf("invalid layout windowSpacing: %w", err)
+		}
+		layoutWindowSpacing = &pv
+	}
+
 	// Parse cells (either from explicit cells or areas)
 	var cells []types.Cell
 	if len(lc.Areas) > 0 {
 		cells = AreasToCell(lc.Areas)
+		// Note: areas syntax doesn't support per-cell padding directly
+		// Users must use explicit cells for per-cell padding
 	} else {
 		cells = make([]types.Cell, len(lc.Cells))
 		for i, cc := range lc.Cells {
@@ -173,13 +195,15 @@ func (lc *LayoutConfig) ToLayout() (*types.Layout, error) {
 	}
 
 	return &types.Layout{
-		ID:          lc.ID,
-		Name:        lc.Name,
-		Description: lc.Description,
-		Columns:     columns,
-		Rows:        rows,
-		Cells:       cells,
-		CellModes:   lc.CellModes,
+		ID:            lc.ID,
+		Name:          lc.Name,
+		Description:   lc.Description,
+		Columns:       columns,
+		Rows:          rows,
+		Cells:         cells,
+		CellModes:     lc.CellModes,
+		Padding:       layoutPadding,
+		WindowSpacing: layoutWindowSpacing,
 	}, nil
 }
 
@@ -195,12 +219,62 @@ func (cc *CellConfig) ToCell() (types.Cell, error) {
 		return types.Cell{}, fmt.Errorf("invalid row span: %w", err)
 	}
 
+	// Parse cell-level padding
+	var cellPadding *types.Padding
+	if cc.Padding != nil {
+		cellPadding, err = ParsePadding(cc.Padding)
+		if err != nil {
+			return types.Cell{}, fmt.Errorf("invalid cell padding: %w", err)
+		}
+	}
+
+	// Parse cell-level windowSpacing
+	var cellWindowSpacing *types.PaddingValue
+	if cc.WindowSpacing != nil {
+		pv, err := parseSinglePaddingValue(cc.WindowSpacing)
+		if err != nil {
+			return types.Cell{}, fmt.Errorf("invalid cell windowSpacing: %w", err)
+		}
+		cellWindowSpacing = &pv
+	}
+
 	return types.Cell{
-		ID:          cc.ID,
-		ColumnStart: colStart,
-		ColumnEnd:   colEnd,
-		RowStart:    rowStart,
-		RowEnd:      rowEnd,
-		StackMode:   cc.StackMode,
+		ID:            cc.ID,
+		ColumnStart:   colStart,
+		ColumnEnd:     colEnd,
+		RowStart:      rowStart,
+		RowEnd:        rowEnd,
+		StackMode:     cc.StackMode,
+		Padding:       cellPadding,
+		WindowSpacing: cellWindowSpacing,
 	}, nil
+}
+
+// GetSettingsPadding parses and returns the global settings padding
+func (c *Config) GetSettingsPadding() (*types.Padding, error) {
+	if c.Settings.Padding == nil {
+		return nil, nil
+	}
+	return ParsePadding(c.Settings.Padding)
+}
+
+// GetBaseSpacing returns the base spacing value from settings
+// Returns 8 as default if not configured
+func (c *Config) GetBaseSpacing() float64 {
+	if c.Settings.BaseSpacing > 0 {
+		return c.Settings.BaseSpacing
+	}
+	return 8 // Default base spacing
+}
+
+// GetSettingsWindowSpacing parses and returns the global settings window spacing
+func (c *Config) GetSettingsWindowSpacing() (*types.PaddingValue, error) {
+	if c.Settings.WindowSpacing == nil {
+		return nil, nil
+	}
+	pv, err := parseSinglePaddingValue(c.Settings.WindowSpacing)
+	if err != nil {
+		return nil, err
+	}
+	return &pv, nil
 }
