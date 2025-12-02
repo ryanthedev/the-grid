@@ -65,12 +65,17 @@ func parseSnapshot(raw map[string]interface{}) (*Snapshot, error) {
 		return nil, fmt.Errorf("failed to get active display: %w", err)
 	}
 
-	// 2. Find current active space using the display UUID
-	spaceID, err := findActiveSpaceID(raw, activeDisplayUUID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to determine active space: %w", err)
+	// 2. Find current active space - prefer metadata.activeSpaceID, fallback to display lookup
+	if spaceID := getActiveSpaceIDFromMetadata(raw); spaceID != "" {
+		snap.SpaceID = spaceID
+	} else {
+		// Fallback: derive from activeDisplayUUID -> display.currentSpaceID
+		spaceID, err := findActiveSpaceID(raw, activeDisplayUUID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to determine active space: %w", err)
+		}
+		snap.SpaceID = spaceID
 	}
-	snap.SpaceID = spaceID
 
 	// 3. Get display bounds for the ACTIVE display (not first display!)
 	bounds, err := findDisplayBounds(raw, activeDisplayUUID)
@@ -104,6 +109,20 @@ func parseFocusedWindowID(raw map[string]interface{}) uint32 {
 		return 0
 	}
 	return uint32(toFloat64(metadata["focusedWindowID"]))
+}
+
+// getActiveSpaceIDFromMetadata extracts activeSpaceID directly from server metadata
+// This is the preferred way to get the active space as it's derived from space change detection
+func getActiveSpaceIDFromMetadata(raw map[string]interface{}) string {
+	metadata, ok := raw["metadata"].(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	activeSpaceID := metadata["activeSpaceID"]
+	if activeSpaceID == nil {
+		return ""
+	}
+	return fmt.Sprintf("%v", interfaceToInt(activeSpaceID))
 }
 
 // parseAllDisplays extracts information about all connected displays

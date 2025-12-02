@@ -173,6 +173,16 @@ class StateManager {
         ])
     }
 
+    /// Refresh currentSpaceID for all displays without doing a full display refresh
+    /// This is called on space change to get fresh space IDs
+    private func refreshDisplayCurrentSpaces() {
+        for i in 0..<state.displays.count {
+            let uuid = state.displays[i].uuid
+            let newSpaceID = SLSManagedDisplayGetCurrentSpace(connectionID, uuid as CFString)
+            state.displays[i].currentSpaceID = newSpaceID
+        }
+    }
+
     private func refreshSpaces() {
         let beforeCount = state.spaces.count
         logger.debug("Refreshing spaces...", metadata: ["current": "\(beforeCount)"])
@@ -213,6 +223,12 @@ class StateManager {
                     type: spaceType.description,
                     displayUUID: displayUUID
                 )
+
+                // Preserve lastFocusedWindowID from existing space if it exists
+                let spaceKey = String(spaceID)
+                if let existingSpace = state.spaces[spaceKey] {
+                    spaceState.lastFocusedWindowID = existingSpace.lastFocusedWindowID
+                }
 
                 // Check if this is the active space for its display
                 if let display = state.displays.first(where: { $0.uuid == displayUUID }) {
@@ -938,6 +954,22 @@ class StateManager {
                 }
 
                 self.state.metadata.activeDisplayUUID = displayStr
+
+                // Also update activeSpaceID from this display's current space
+                let spaceID = SLSManagedDisplayGetCurrentSpace(self.connectionID, displayUUID)
+                if spaceID != 0 {
+                    self.state.metadata.activeSpaceID = spaceID
+
+                    // Track this as the last focused window for this space
+                    let spaceKey = String(spaceID)
+                    if self.state.spaces[spaceKey] != nil {
+                        self.state.spaces[spaceKey]?.lastFocusedWindowID = windowID
+                        self.logger.debug("📝 Saved lastFocusedWindowID for space", metadata: [
+                            "spaceID": "\(spaceID)",
+                            "windowID": "\(windowID)"
+                        ])
+                    }
+                }
             }
 
             self.state.metadata.update()
@@ -990,10 +1022,41 @@ class StateManager {
     func handleSpaceChanged() {
         queue.async {
             self.logger.info("Space changed - refreshing spaces and window assignments")
-            self.refreshSpaces()
 
-            // Update activeDisplayUUID based on which display has the new active space
-            self.updateActiveDisplayFromSpaces()
+            // 1. Store OLD currentSpaceID for each display BEFORE refreshing
+            var oldSpaceIDs: [String: UInt64] = [:]
+            for display in self.state.displays {
+                oldSpaceIDs[display.uuid] = display.currentSpaceID
+            }
+
+            // 2. Refresh spaces and update currentSpaceID for each display
+            self.refreshSpaces()
+            self.refreshDisplayCurrentSpaces()
+
+            // 3. Find which display's space changed - that's the active one
+            var foundChangedDisplay = false
+            var newSpaceID: UInt64? = nil
+            for display in self.state.displays {
+                if let oldSpaceID = oldSpaceIDs[display.uuid],
+                   display.currentSpaceID != oldSpaceID {
+                    // This display's space changed!
+                    self.state.metadata.activeDisplayUUID = display.uuid
+                    self.state.metadata.activeSpaceID = display.currentSpaceID
+                    newSpaceID = display.currentSpaceID
+                    foundChangedDisplay = true
+                    self.logger.info("📍 Active space detected from change", metadata: [
+                        "displayUUID": "\(display.uuid)",
+                        "oldSpaceID": "\(oldSpaceID)",
+                        "newSpaceID": "\(display.currentSpaceID)"
+                    ])
+                    break
+                }
+            }
+
+            // Fallback: if no change detected, use the old method
+            if !foundChangedDisplay {
+                self.updateActiveDisplayFromSpaces()
+            }
 
             // Re-query space assignments for all visible windows
             for windowKey in self.state.windows.keys {
@@ -1002,6 +1065,11 @@ class StateManager {
                    window.isOrderedIn && !window.isMinimized {
                     self.updateWindowSpaces(windowID)
                 }
+            }
+
+            // Auto-focus the new space's last focused window
+            if let spaceID = newSpaceID {
+                self.restoreFocusForSpace(spaceID)
             }
 
             self.state.metadata.update()
@@ -1027,6 +1095,42 @@ class StateManager {
             }
         }
         logger.debug("No active space found on any display")
+    }
+
+    /// Restore focus to the last focused window on a space (if it still exists)
+    private func restoreFocusForSpace(_ spaceID: UInt64) {
+        let spaceKey = String(spaceID)
+        guard let space = state.spaces[spaceKey],
+              let windowID = space.lastFocusedWindowID else {
+            logger.debug("No lastFocusedWindowID for space \(spaceID)")
+            return
+        }
+
+        // Check if window still exists in our state
+        guard let window = state.windows[String(windowID)],
+              window.isOrderedIn && !window.isMinimized else {
+            logger.debug("Last focused window no longer exists or is minimized", metadata: [
+                "spaceID": "\(spaceID)",
+                "windowID": "\(windowID)"
+            ])
+            return
+        }
+
+        logger.info("🔄 Restoring focus to previous window", metadata: [
+            "spaceID": "\(spaceID)",
+            "windowID": "\(windowID)",
+            "app": "\(window.appName ?? "unknown")"
+        ])
+
+        // Focus the window using WindowManipulator
+        let manipulator = WindowManipulator(connectionID: connectionID, logger: logger)
+        let success = manipulator.focusWindow(pid: window.pid, windowID: windowID)
+
+        if success {
+            logger.info("✓ Focus restored", metadata: ["windowID": "\(windowID)"])
+        } else {
+            logger.warning("Failed to restore focus", metadata: ["windowID": "\(windowID)"])
+        }
     }
 
     func handleDisplayConfigurationChanged() {
