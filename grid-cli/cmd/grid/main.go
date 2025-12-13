@@ -1613,7 +1613,7 @@ var focusDownCmd = &cobra.Command{
 }
 
 // moveWindowDirectionHelper is a helper function for directional window move commands
-func moveWindowDirectionHelper(direction gridTypes.Direction, wrapAround bool, extend bool, windowID uint32) error {
+func moveWindowDirectionHelper(direction gridTypes.Direction, wrapAround bool, extend bool, windowID uint32, mouse bool) error {
 	cfg, err := gridConfig.LoadConfig("")
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
@@ -1658,6 +1658,14 @@ func moveWindowDirectionHelper(direction gridTypes.Direction, wrapAround bool, e
 		successColor.Printf("Moved window %d: %s -> %s\n",
 			result.WindowID, result.SourceCell, result.TargetCell)
 	}
+
+	// Optionally warp mouse to moved window
+	if mouse && result.WindowID != 0 {
+		if err := gridMouse.WarpToWindow(ctx, c, result.WindowID); err != nil {
+			errorColor.Printf("⚠ Mouse warp failed: %v\n", err)
+		}
+	}
+
 	return nil
 }
 
@@ -1714,10 +1722,11 @@ var windowMoveLeftCmd = &cobra.Command{
 		wrap, _ := cmd.Flags().GetBool("wrap")
 		extend, _ := cmd.Flags().GetBool("extend")
 		windowID, _ := cmd.Flags().GetUint32("window-id")
+		mouse, _ := cmd.Flags().GetBool("mouse")
 		if extend {
 			logging.Debug().Bool("extend", extend).Msg("cross-monitor window move enabled")
 		}
-		return moveWindowDirectionHelper(gridTypes.DirLeft, wrap, extend, windowID)
+		return moveWindowDirectionHelper(gridTypes.DirLeft, wrap, extend, windowID, mouse)
 	},
 }
 
@@ -1730,10 +1739,11 @@ var windowMoveRightCmd = &cobra.Command{
 		wrap, _ := cmd.Flags().GetBool("wrap")
 		extend, _ := cmd.Flags().GetBool("extend")
 		windowID, _ := cmd.Flags().GetUint32("window-id")
+		mouse, _ := cmd.Flags().GetBool("mouse")
 		if extend {
 			logging.Debug().Bool("extend", extend).Msg("cross-monitor window move enabled")
 		}
-		return moveWindowDirectionHelper(gridTypes.DirRight, wrap, extend, windowID)
+		return moveWindowDirectionHelper(gridTypes.DirRight, wrap, extend, windowID, mouse)
 	},
 }
 
@@ -1746,10 +1756,11 @@ var windowMoveUpCmd = &cobra.Command{
 		wrap, _ := cmd.Flags().GetBool("wrap")
 		extend, _ := cmd.Flags().GetBool("extend")
 		windowID, _ := cmd.Flags().GetUint32("window-id")
+		mouse, _ := cmd.Flags().GetBool("mouse")
 		if extend {
 			logging.Debug().Bool("extend", extend).Msg("cross-monitor window move enabled")
 		}
-		return moveWindowDirectionHelper(gridTypes.DirUp, wrap, extend, windowID)
+		return moveWindowDirectionHelper(gridTypes.DirUp, wrap, extend, windowID, mouse)
 	},
 }
 
@@ -1762,10 +1773,11 @@ var windowMoveDownCmd = &cobra.Command{
 		wrap, _ := cmd.Flags().GetBool("wrap")
 		extend, _ := cmd.Flags().GetBool("extend")
 		windowID, _ := cmd.Flags().GetUint32("window-id")
+		mouse, _ := cmd.Flags().GetBool("mouse")
 		if extend {
 			logging.Debug().Bool("extend", extend).Msg("cross-monitor window move enabled")
 		}
-		return moveWindowDirectionHelper(gridTypes.DirDown, wrap, extend, windowID)
+		return moveWindowDirectionHelper(gridTypes.DirDown, wrap, extend, windowID, mouse)
 	},
 }
 
@@ -2726,6 +2738,7 @@ func init() {
 		cmd.Flags().Bool("wrap", true, "Wrap around to opposite edge")
 		cmd.Flags().Bool("extend", false, "Extend to adjacent monitors")
 		cmd.Flags().Uint32("window-id", 0, "Window ID to move (default: focused window)")
+		cmd.Flags().BoolP("mouse", "m", false, "Move mouse cursor to moved window")
 	}
 
 	// Add window swap command and subcommands
