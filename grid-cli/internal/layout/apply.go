@@ -113,6 +113,16 @@ func ApplyLayout(
 		}
 	}
 
+	// 6b. Adjust ratios to match actual assignment counts
+	// This handles cases where windows disappeared between state save and now
+	for cellID, windowIDs := range assignment.Assignments {
+		if existingRatios, ok := cellRatios[cellID]; ok {
+			if len(existingRatios) != len(windowIDs) {
+				cellRatios[cellID] = AdjustRatiosForWindowCount(existingRatios, len(windowIDs))
+			}
+		}
+	}
+
 	// 7. Calculate window placements
 	placements := CalculateAllWindowPlacements(
 		calculatedLayout,
