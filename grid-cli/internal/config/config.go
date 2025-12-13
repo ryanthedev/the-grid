@@ -278,3 +278,57 @@ func (c *Config) GetSettingsWindowSpacing() (*types.PaddingValue, error) {
 	}
 	return &pv, nil
 }
+
+// DefaultWindowExclusions returns sensible defaults for window exclusion.
+// These filter out transient windows that shouldn't be tiled.
+var DefaultWindowExclusions = WindowExclusion{
+	Roles: []string{
+		"AXHelpTag",    // Tooltips
+		"AXGrowArea",   // Resize handles
+		"AXScrollArea", // Scroll indicators
+	},
+	Subroles: []string{}, // User can add specific subroles
+	Apps: []string{
+		"Dock",
+		"Control Center",
+		"Notification Center",
+	},
+}
+
+// GetWindowExclusions returns the configured window exclusions merged with defaults.
+// User config adds to defaults, doesn't replace them.
+func (c *Config) GetWindowExclusions() WindowExclusion {
+	result := WindowExclusion{
+		Roles:    append([]string{}, DefaultWindowExclusions.Roles...),
+		Subroles: append([]string{}, DefaultWindowExclusions.Subroles...),
+		Apps:     append([]string{}, DefaultWindowExclusions.Apps...),
+	}
+
+	// Merge user config (additive)
+	for _, r := range c.Settings.WindowExclusion.Roles {
+		if !containsString(result.Roles, r) {
+			result.Roles = append(result.Roles, r)
+		}
+	}
+	for _, s := range c.Settings.WindowExclusion.Subroles {
+		if !containsString(result.Subroles, s) {
+			result.Subroles = append(result.Subroles, s)
+		}
+	}
+	for _, a := range c.Settings.WindowExclusion.Apps {
+		if !containsString(result.Apps, a) {
+			result.Apps = append(result.Apps, a)
+		}
+	}
+
+	return result
+}
+
+func containsString(slice []string, s string) bool {
+	for _, item := range slice {
+		if item == s {
+			return true
+		}
+	}
+	return false
+}

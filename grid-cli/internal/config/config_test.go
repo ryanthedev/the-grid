@@ -495,3 +495,31 @@ layouts:
 		t.Errorf("expected apps [Dock], got %v", cfg.Settings.WindowExclusion.Apps)
 	}
 }
+
+func TestDefaultWindowExclusions(t *testing.T) {
+	// Config with NO windowExclusion specified
+	yaml := `
+settings:
+  defaultStackMode: vertical
+layouts:
+  - id: test
+    grid:
+      columns: ["1fr"]
+      rows: ["1fr"]
+    cells:
+      - id: main
+        column: "1/2"
+        row: "1/2"
+`
+	cfg, err := LoadConfigFromBytes([]byte(yaml), "yaml")
+	if err != nil {
+		t.Fatalf("failed to load config: %v", err)
+	}
+
+	exclusions := cfg.GetWindowExclusions()
+
+	// Should have sensible defaults
+	if !containsString(exclusions.Roles, "AXHelpTag") {
+		t.Error("expected default roles to include AXHelpTag")
+	}
+}
