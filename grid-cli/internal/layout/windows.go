@@ -193,11 +193,12 @@ func CalculateAllWindowPlacements(
 			}
 		}
 
-		// Get split ratios for this cell
+		// Get split ratios for this cell, adjusting for actual window count
 		var ratios []float64
 		if cellRatios != nil {
 			if r, ok := cellRatios[cellID]; ok {
-				ratios = r
+				// Adjust ratios if window count changed (e.g., transient window disappeared)
+				ratios = AdjustRatiosForWindowCount(r, len(windowIDs))
 			}
 		}
 
