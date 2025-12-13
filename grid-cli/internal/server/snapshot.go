@@ -30,14 +30,16 @@ type Snapshot struct {
 
 // WindowInfo contains window data needed for layout operations.
 type WindowInfo struct {
-	ID        uint32
-	AppName   string
-	BundleID  string
-	Title     string
-	Frame     types.Rect
-	Level     int
+	ID          uint32
+	AppName     string
+	BundleID    string
+	Title       string
+	Frame       types.Rect
+	Level       int
 	IsMinimized bool
 	IsHidden    bool
+	Role        string // AX role (e.g., "AXWindow", "AXHelpTag")
+	Subrole     string // AX subrole (e.g., "AXStandardWindow", "AXDialog")
 }
 
 // IsTileable returns true if the window should be included in tiling.
@@ -306,6 +308,8 @@ func parseWindow(w interface{}, spaceID string) *WindowInfo {
 		IsMinimized: toBool(win["isMinimized"]),
 		IsHidden:    toBool(win["isHidden"]),
 		Level:       int(toFloat64(win["level"])),
+		Role:        toString(win["role"]),
+		Subrole:     toString(win["subrole"]),
 	}
 
 	// Parse frame

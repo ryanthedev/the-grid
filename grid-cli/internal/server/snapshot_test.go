@@ -1,0 +1,78 @@
+package server
+
+import (
+	"testing"
+)
+
+func TestParseWindowWithRoleSubrole(t *testing.T) {
+	raw := map[string]interface{}{
+		"metadata": map[string]interface{}{
+			"activeSpaceID":     3,
+			"focusedWindowID":   100,
+			"activeDisplayUUID": "test-display",
+		},
+		"displays": []interface{}{
+			map[string]interface{}{
+				"uuid":           "test-display",
+				"currentSpaceID": 3,
+				"isMain":         true,
+				"frame":          []interface{}{[]interface{}{0, 0}, []interface{}{1920, 1080}},
+				"visibleFrame":   []interface{}{[]interface{}{0, 25}, []interface{}{1920, 1055}},
+			},
+		},
+		"spaces": map[string]interface{}{
+			"3": map[string]interface{}{
+				"id":          3,
+				"displayUUID": "test-display",
+				"type":        "user",
+			},
+		},
+		"windows": map[string]interface{}{
+			"100": map[string]interface{}{
+				"id":      100,
+				"appName": "Chrome",
+				"title":   "Test",
+				"frame":   []interface{}{[]interface{}{0, 0}, []interface{}{100, 100}},
+				"level":   0,
+				"spaces":  []interface{}{3},
+				"role":    "AXWindow",
+				"subrole": "AXStandardWindow",
+			},
+			"101": map[string]interface{}{
+				"id":      101,
+				"appName": "Chrome",
+				"title":   "Tooltip",
+				"frame":   []interface{}{[]interface{}{50, 50}, []interface{}{80, 20}},
+				"level":   0,
+				"spaces":  []interface{}{3},
+				"role":    "AXHelpTag",
+				"subrole": "AXUnknown",
+			},
+		},
+	}
+
+	snap, err := parseSnapshot(raw)
+	if err != nil {
+		t.Fatalf("parseSnapshot failed: %v", err)
+	}
+
+	// Find the tooltip window
+	var tooltipWindow *WindowInfo
+	for i := range snap.Windows {
+		if snap.Windows[i].ID == 101 {
+			tooltipWindow = &snap.Windows[i]
+			break
+		}
+	}
+
+	if tooltipWindow == nil {
+		t.Fatal("tooltip window not found")
+	}
+
+	if tooltipWindow.Role != "AXHelpTag" {
+		t.Errorf("expected role AXHelpTag, got %s", tooltipWindow.Role)
+	}
+	if tooltipWindow.Subrole != "AXUnknown" {
+		t.Errorf("expected subrole AXUnknown, got %s", tooltipWindow.Subrole)
+	}
+}
