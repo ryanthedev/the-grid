@@ -2256,108 +2256,6 @@ Examples:
 	},
 }
 
-// resizeModeCmd is the parent command for resize mode operations
-var resizeModeCmd = &cobra.Command{
-	Use:   "mode",
-	Short: "Control mouse-based resize mode",
-	Long:  `Commands for enabling, disabling, and checking the status of mouse-based resize mode.`,
-}
-
-// resizeModeStatusCmd shows current resize mode status
-var resizeModeStatusCmd = &cobra.Command{
-	Use:   "status",
-	Short: "Show resize mode status",
-	Long:  `Shows whether resize mode is active and current drag state if any.`,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		c := client.NewClient(socketPath, timeout)
-		defer c.Close()
-
-		ctx := context.Background()
-		result, err := c.CallMethod(ctx, "resize.status", nil)
-		if err != nil {
-			printError(fmt.Sprintf("Failed to get resize status: %v", err))
-			return err
-		}
-
-		if jsonOutput {
-			return printJSON(result)
-		}
-
-		active, _ := result["active"].(bool)
-		dragging, _ := result["dragging"].(bool)
-
-		if active {
-			successColor.Println("✓ Resize mode is ACTIVE")
-			if dragging {
-				infoColor.Println("  Currently dragging")
-				if dragState, ok := result["dragState"].(map[string]interface{}); ok {
-					if resizeType, ok := dragState["resizeType"].(string); ok {
-						fmt.Printf("  Type: %s\n", resizeType)
-					}
-					if edge, ok := dragState["edge"].(string); ok {
-						fmt.Printf("  Edge: %s\n", edge)
-					}
-				}
-			}
-		} else {
-			infoColor.Println("○ Resize mode is INACTIVE")
-		}
-
-		return nil
-	},
-}
-
-// resizeModeOnCmd enables resize mode
-var resizeModeOnCmd = &cobra.Command{
-	Use:   "on",
-	Short: "Enable resize mode",
-	Long:  `Enables mouse-based resize mode. Drag near cell/window boundaries to resize.`,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		c := client.NewClient(socketPath, timeout)
-		defer c.Close()
-
-		ctx := context.Background()
-		result, err := c.CallMethod(ctx, "resize.start", nil)
-		if err != nil {
-			printError(fmt.Sprintf("Failed to enable resize mode: %v", err))
-			return err
-		}
-
-		if jsonOutput {
-			return printJSON(result)
-		}
-
-		successColor.Println("✓ Resize mode enabled")
-		infoColor.Println("  Drag near cell/window boundaries to resize")
-		return nil
-	},
-}
-
-// resizeModeOffCmd disables resize mode
-var resizeModeOffCmd = &cobra.Command{
-	Use:   "off",
-	Short: "Disable resize mode",
-	Long:  `Disables mouse-based resize mode.`,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		c := client.NewClient(socketPath, timeout)
-		defer c.Close()
-
-		ctx := context.Background()
-		result, err := c.CallMethod(ctx, "resize.stop", nil)
-		if err != nil {
-			printError(fmt.Sprintf("Failed to disable resize mode: %v", err))
-			return err
-		}
-
-		if jsonOutput {
-			return printJSON(result)
-		}
-
-		successColor.Println("✓ Resize mode disabled")
-		return nil
-	},
-}
-
 // MARK: - the-grid Cell Commands
 
 // cellCmd is the parent command for cell operations
@@ -2674,12 +2572,6 @@ func init() {
 	gridResizeCmd.AddCommand(resizeAdjustCmd)
 	gridResizeCmd.AddCommand(resizeResetCmd)
 	gridResizeCmd.AddCommand(resizeCellCmd)
-	gridResizeCmd.AddCommand(resizeModeCmd)
-
-	// Add resize mode subcommands
-	resizeModeCmd.AddCommand(resizeModeStatusCmd)
-	resizeModeCmd.AddCommand(resizeModeOnCmd)
-	resizeModeCmd.AddCommand(resizeModeOffCmd)
 
 	// Add resize command flags
 	resizeResetCmd.Flags().Bool("all", false, "Reset all window splits, not just focused cell")
