@@ -21,6 +21,9 @@ class ResizeManager {
     private let logger: Logger
     private let queue = DispatchQueue(label: "com.grid.ResizeManager", qos: .userInitiated)
 
+    /// Visual overlay for resize mode
+    private let overlay: ResizeOverlay
+
     /// Event broadcaster for notifying clients of resize events
     weak var eventBroadcaster: EventBroadcaster?
 
@@ -39,6 +42,7 @@ class ResizeManager {
     private init() {
         self.logger = Logger(label: "com.grid.ResizeManager")
         self.mouseHandler = MouseHandler(logger: Logger(label: "com.grid.MouseHandler"))
+        self.overlay = ResizeOverlay(logger: Logger(label: "com.grid.ResizeOverlay"))
 
         setupCallbacks()
         logger.info("ResizeManager initialized")
@@ -116,6 +120,10 @@ class ResizeManager {
         accumulatedDeltaX = 0
         accumulatedDeltaY = 0
 
+        // Show overlay with resize type
+        let modeText = resizeType == .cell ? "RESIZE: CELL" : "RESIZE: WINDOW"
+        overlay.show(mode: modeText)
+
         // Broadcast event
         eventBroadcaster?.sendEvent(type: "resize.dragStart", data: [
             "resizeType": resizeType.rawValue,
@@ -159,6 +167,9 @@ class ResizeManager {
         // Reset accumulators
         accumulatedDeltaX = 0
         accumulatedDeltaY = 0
+
+        // Hide overlay
+        overlay.hide()
 
         // Broadcast event
         eventBroadcaster?.sendEvent(type: "resize.dragEnd", data: nil)
