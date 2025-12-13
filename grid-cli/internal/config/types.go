@@ -18,6 +18,15 @@ type Settings struct {
 	Padding           interface{}     `yaml:"padding,omitempty" json:"padding,omitempty"`             // Global default padding (supports shorthand)
 	WindowSpacing     interface{}     `yaml:"windowSpacing,omitempty" json:"windowSpacing,omitempty"` // Gap between stacked windows (supports shorthand)
 	FocusFollowsMouse bool            `yaml:"focusFollowsMouse" json:"focusFollowsMouse"`
+	Resize            ResizeSettings  `yaml:"resize,omitempty" json:"resize,omitempty"`
+}
+
+// ResizeSettings configures resize mode behavior
+type ResizeSettings struct {
+	EdgeThreshold float64 `yaml:"edgeThreshold,omitempty" json:"edgeThreshold,omitempty"` // Detection threshold in pixels (default 10)
+	MinRatio      float64 `yaml:"minRatio,omitempty" json:"minRatio,omitempty"`           // Minimum cell ratio (default 0.1)
+	MaxRatio      float64 `yaml:"maxRatio,omitempty" json:"maxRatio,omitempty"`           // Maximum cell ratio (default 0.9)
+	ModifierKey   string  `yaml:"modifierKey,omitempty" json:"modifierKey,omitempty"`     // Optional modifier key to require
 }
 
 // LayoutConfig is the configuration representation of a layout

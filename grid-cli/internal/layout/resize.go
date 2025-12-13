@@ -241,7 +241,17 @@ func AdjustCellBoundary(
 		adjustDelta = -delta
 	}
 
-	newRatios, err := AdjustSplitRatio(currentRatios, boundaryIdx, adjustDelta, MinimumRatio)
+	// Use config min/max ratio if set, otherwise use defaults
+	minRatio := MinimumRatio
+	maxRatio := 1.0 - MinimumRatio // Default max
+	if cfg.Settings.Resize.MinRatio > 0 {
+		minRatio = cfg.Settings.Resize.MinRatio
+	}
+	if cfg.Settings.Resize.MaxRatio > 0 {
+		maxRatio = cfg.Settings.Resize.MaxRatio
+	}
+
+	newRatios, err := AdjustSplitRatioWithMax(currentRatios, boundaryIdx, adjustDelta, minRatio, maxRatio)
 	if err != nil {
 		return err
 	}
