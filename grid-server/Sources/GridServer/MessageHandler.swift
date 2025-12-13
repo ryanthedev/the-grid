@@ -666,5 +666,47 @@ class MessageHandler {
                 completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to warp mouse cursor")))
             }
         }
+
+        // MARK: - Resize Mode Methods
+
+        // Start resize mode (enable mouse handling for resize)
+        register(method: "resize.start") { [weak self] request, completion in
+            guard let self = self else { return }
+
+            self.logger.info("resize.start called")
+
+            if ResizeManager.shared.start() {
+                completion(Response(id: request.id, result: AnyCodable([
+                    "success": true,
+                    "status": "started"
+                ])))
+            } else {
+                completion(Response(id: request.id, error: ErrorInfo(
+                    code: -32000,
+                    message: "Failed to start resize mode. Check Accessibility permissions."
+                )))
+            }
+        }
+
+        // Stop resize mode
+        register(method: "resize.stop") { [weak self] request, completion in
+            guard let self = self else { return }
+
+            self.logger.info("resize.stop called")
+
+            ResizeManager.shared.stop()
+            completion(Response(id: request.id, result: AnyCodable([
+                "success": true,
+                "status": "stopped"
+            ])))
+        }
+
+        // Get resize mode status
+        register(method: "resize.status") { [weak self] request, completion in
+            guard self != nil else { return }
+
+            let status = ResizeManager.shared.getStatus()
+            completion(Response(id: request.id, result: AnyCodable(status)))
+        }
     }
 }
