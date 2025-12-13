@@ -62,8 +62,10 @@ func ApplyLayout(
 	// 3. Calculate grid layout using snapshot's display bounds (gap=0, padding handles spacing)
 	calculatedLayout := CalculateLayoutWithRatios(layout, snap.DisplayBounds, 0, columnRatios, rowRatios)
 
-	// 3. Convert snapshot windows to layout windows
-	windows := convertWindows(snap.Windows)
+	// 4. Filter and convert windows (exclude transient windows)
+	exclusions := cfg.GetWindowExclusions()
+	tileableWindows := snap.FilterTileable(exclusions)
+	windows := convertWindows(tileableWindows)
 
 	// 4. Get previous assignments from local state
 	spaceState := rs.GetSpace(snap.SpaceID)
@@ -193,6 +195,8 @@ func convertWindows(windows []server.WindowInfo) []Window {
 			IsMinimized: w.IsMinimized,
 			IsHidden:    w.IsHidden,
 			Level:       w.Level,
+			Role:        w.Role,
+			Subrole:     w.Subrole,
 		})
 	}
 	return result
