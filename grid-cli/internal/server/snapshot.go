@@ -74,6 +74,17 @@ func (w WindowInfo) IsExcluded(exclusions config.WindowExclusion) bool {
 	return false
 }
 
+// FilterTileable returns windows that are tileable and not excluded.
+func (s *Snapshot) FilterTileable(exclusions config.WindowExclusion) []WindowInfo {
+	var result []WindowInfo
+	for _, w := range s.Windows {
+		if w.IsTileable() && !w.IsExcluded(exclusions) {
+			result = append(result, w)
+		}
+	}
+	return result
+}
+
 // Fetch calls dump ONCE and parses into a Snapshot.
 func Fetch(ctx context.Context, c *client.Client) (*Snapshot, error) {
 	raw, err := c.Dump(ctx)

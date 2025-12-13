@@ -121,3 +121,28 @@ func TestWindowInfoIsExcluded(t *testing.T) {
 		})
 	}
 }
+
+func TestSnapshotFilterTileable(t *testing.T) {
+	snap := &Snapshot{
+		Windows: []WindowInfo{
+			{ID: 1, Role: "AXWindow", Subrole: "AXStandardWindow", AppName: "Chrome"},
+			{ID: 2, Role: "AXHelpTag", Subrole: "AXUnknown", AppName: "Chrome"},                       // Tooltip
+			{ID: 3, Role: "AXWindow", Subrole: "AXStandardWindow", AppName: "Dock"},                   // Excluded app
+			{ID: 4, Role: "AXWindow", Subrole: "AXStandardWindow", AppName: "Code", IsMinimized: true}, // Minimized
+		},
+	}
+
+	exclusions := config.WindowExclusion{
+		Roles: []string{"AXHelpTag"},
+		Apps:  []string{"Dock"},
+	}
+
+	tileable := snap.FilterTileable(exclusions)
+
+	if len(tileable) != 1 {
+		t.Errorf("expected 1 tileable window, got %d", len(tileable))
+	}
+	if tileable[0].ID != 1 {
+		t.Errorf("expected window ID 1, got %d", tileable[0].ID)
+	}
+}
