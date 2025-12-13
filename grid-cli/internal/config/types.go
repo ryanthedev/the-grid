@@ -12,19 +12,28 @@ type Config struct {
 
 // Settings contains global application settings
 type Settings struct {
-	DefaultStackMode  types.StackMode `yaml:"defaultStackMode" json:"defaultStackMode"`
-	AnimationDuration float64         `yaml:"animationDuration" json:"animationDuration"`
-	BaseSpacing       float64         `yaml:"baseSpacing" json:"baseSpacing"`                         // Base unit for "Nx" padding syntax
-	Padding           interface{}     `yaml:"padding,omitempty" json:"padding,omitempty"`             // Global default padding (supports shorthand)
-	WindowSpacing     interface{}     `yaml:"windowSpacing,omitempty" json:"windowSpacing,omitempty"` // Gap between stacked windows (supports shorthand)
-	FocusFollowsMouse bool            `yaml:"focusFollowsMouse" json:"focusFollowsMouse"`
-	Resize            ResizeSettings  `yaml:"resize,omitempty" json:"resize,omitempty"`
+	DefaultStackMode  types.StackMode  `yaml:"defaultStackMode" json:"defaultStackMode"`
+	AnimationDuration float64          `yaml:"animationDuration" json:"animationDuration"`
+	BaseSpacing       float64          `yaml:"baseSpacing" json:"baseSpacing"`                         // Base unit for "Nx" padding syntax
+	Padding           interface{}      `yaml:"padding,omitempty" json:"padding,omitempty"`             // Global default padding (supports shorthand)
+	WindowSpacing     interface{}      `yaml:"windowSpacing,omitempty" json:"windowSpacing,omitempty"` // Gap between stacked windows (supports shorthand)
+	FocusFollowsMouse bool             `yaml:"focusFollowsMouse" json:"focusFollowsMouse"`
+	Resize            ResizeSettings   `yaml:"resize,omitempty" json:"resize,omitempty"`
+	WindowExclusion   WindowExclusion  `yaml:"windowExclusion,omitempty" json:"windowExclusion,omitempty"`
 }
 
 // ResizeSettings configures CLI resize behavior
 type ResizeSettings struct {
 	MinRatio float64 `yaml:"minRatio,omitempty" json:"minRatio,omitempty"` // Minimum cell ratio (default 0.1)
 	MaxRatio float64 `yaml:"maxRatio,omitempty" json:"maxRatio,omitempty"` // Maximum cell ratio (default 0.9)
+}
+
+// WindowExclusion configures which windows to exclude from cell assignment.
+// Windows matching ANY of these criteria are excluded from tiling.
+type WindowExclusion struct {
+	Roles    []string `yaml:"roles,omitempty" json:"roles,omitempty"`       // AX roles to exclude (e.g., "AXHelpTag")
+	Subroles []string `yaml:"subroles,omitempty" json:"subroles,omitempty"` // AX subroles to exclude
+	Apps     []string `yaml:"apps,omitempty" json:"apps,omitempty"`         // App names to exclude entirely
 }
 
 // LayoutConfig is the configuration representation of a layout

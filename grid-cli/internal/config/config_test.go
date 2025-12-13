@@ -458,3 +458,40 @@ func TestIsRectangular(t *testing.T) {
 		})
 	}
 }
+
+func TestWindowExclusionConfig(t *testing.T) {
+	yaml := `
+settings:
+  defaultStackMode: vertical
+  windowExclusion:
+    roles:
+      - AXHelpTag
+    subroles:
+      - AXUnknown
+    apps:
+      - Dock
+layouts:
+  - id: test
+    grid:
+      columns: ["1fr"]
+      rows: ["1fr"]
+    cells:
+      - id: main
+        column: "1/2"
+        row: "1/2"
+`
+	cfg, err := LoadConfigFromBytes([]byte(yaml), "yaml")
+	if err != nil {
+		t.Fatalf("failed to load config: %v", err)
+	}
+
+	if len(cfg.Settings.WindowExclusion.Roles) != 1 || cfg.Settings.WindowExclusion.Roles[0] != "AXHelpTag" {
+		t.Errorf("expected roles [AXHelpTag], got %v", cfg.Settings.WindowExclusion.Roles)
+	}
+	if len(cfg.Settings.WindowExclusion.Subroles) != 1 || cfg.Settings.WindowExclusion.Subroles[0] != "AXUnknown" {
+		t.Errorf("expected subroles [AXUnknown], got %v", cfg.Settings.WindowExclusion.Subroles)
+	}
+	if len(cfg.Settings.WindowExclusion.Apps) != 1 || cfg.Settings.WindowExclusion.Apps[0] != "Dock" {
+		t.Errorf("expected apps [Dock], got %v", cfg.Settings.WindowExclusion.Apps)
+	}
+}
