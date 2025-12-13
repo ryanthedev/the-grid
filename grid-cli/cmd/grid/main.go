@@ -2152,20 +2152,94 @@ var resizeResetCmd = &cobra.Command{
 			return fmt.Errorf("failed to reconcile state: %w", err)
 		}
 
-		// 3. Reset splits
+		// 3. Reset splits or cell ratios
 		resetAll, _ := cmd.Flags().GetBool("all")
-		if resetAll {
+		resetCells, _ := cmd.Flags().GetBool("cells")
+
+		if resetCells {
+			// Reset cell/track ratios
+			if err := gridLayout.ResetCellRatios(ctx, c, snap, cfg, runtimeState); err != nil {
+				return fmt.Errorf("failed to reset cell ratios: %w", err)
+			}
+			successColor.Println("✓ Reset cell ratios to layout defaults")
+		} else if resetAll {
 			if err := gridLayout.ResetAllSplits(ctx, c, snap, cfg, runtimeState); err != nil {
 				return fmt.Errorf("failed to reset all splits: %w", err)
 			}
-			successColor.Println("✓ Reset all splits to equal")
+			successColor.Println("✓ Reset all window splits to equal")
 		} else {
 			if err := gridLayout.ResetFocusedSplits(ctx, c, snap, cfg, runtimeState); err != nil {
 				return fmt.Errorf("failed to reset splits: %w", err)
 			}
-			successColor.Println("✓ Reset focused cell splits to equal")
+			successColor.Println("✓ Reset focused cell window splits to equal")
 		}
 
+		return nil
+	},
+}
+
+// resizeCellCmd adjusts cell boundaries
+var resizeCellCmd = &cobra.Command{
+	Use:   "cell <direction> [amount]",
+	Short: "Resize cell boundary in direction",
+	Long: `Resize the focused cell's boundary in the specified direction.
+
+Directions: left, right, up, down
+Amount: ratio change (default 0.1 = 10%)
+
+Examples:
+  grid resize cell right 0.1   # Grow cell rightward by 10%
+  grid resize cell left 0.05   # Grow cell leftward by 5%
+  grid resize cell up          # Grow cell upward by default amount`,
+	Args:      cobra.RangeArgs(1, 2),
+	ValidArgs: []string{"left", "right", "up", "down"},
+	RunE: func(cmd *cobra.Command, args []string) error {
+		direction := args[0]
+		if direction != "left" && direction != "right" && direction != "up" && direction != "down" {
+			return fmt.Errorf("invalid direction: %s (use left, right, up, or down)", direction)
+		}
+
+		delta := gridLayout.DefaultResizeAmount
+		if len(args) > 1 {
+			parsed, err := strconv.ParseFloat(args[1], 64)
+			if err != nil {
+				return fmt.Errorf("invalid amount: %w", err)
+			}
+			delta = parsed
+		}
+
+		cfg, err := gridConfig.LoadConfig("")
+		if err != nil {
+			return fmt.Errorf("failed to load config: %w", err)
+		}
+
+		runtimeState, err := gridState.LoadState()
+		if err != nil {
+			return fmt.Errorf("failed to load state: %w", err)
+		}
+
+		c := client.NewClient(socketPath, timeout)
+		defer c.Close()
+
+		ctx := context.Background()
+
+		// 1. Fetch server state ONCE
+		snap, err := gridServer.Fetch(ctx, c)
+		if err != nil {
+			return fmt.Errorf("failed to fetch server state: %w", err)
+		}
+
+		// 2. Reconcile local state with server
+		if err := gridReconcile.Sync(snap, runtimeState); err != nil {
+			return fmt.Errorf("failed to reconcile state: %w", err)
+		}
+
+		// 3. Adjust cell boundary
+		if err := gridLayout.AdjustCellBoundary(ctx, c, snap, cfg, runtimeState, direction, delta); err != nil {
+			return fmt.Errorf("failed to resize cell: %w", err)
+		}
+
+		successColor.Printf("✓ Resized cell (%s)\n", direction)
 		return nil
 	},
 }
@@ -2485,9 +2559,11 @@ func init() {
 	rootCmd.AddCommand(gridResizeCmd)
 	gridResizeCmd.AddCommand(resizeAdjustCmd)
 	gridResizeCmd.AddCommand(resizeResetCmd)
+	gridResizeCmd.AddCommand(resizeCellCmd)
 
 	// Add resize command flags
-	resizeResetCmd.Flags().Bool("all", false, "Reset all cells, not just focused cell")
+	resizeResetCmd.Flags().Bool("all", false, "Reset all window splits, not just focused cell")
+	resizeResetCmd.Flags().Bool("cells", false, "Reset cell/track ratios to layout defaults")
 
 	// Add the-grid cell commands
 	rootCmd.AddCommand(cellCmd)

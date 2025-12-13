@@ -50,8 +50,17 @@ func ApplyLayout(
 
 	logging.Info().Str("layout", layoutID).Str("space", snap.SpaceID).Msg("applying layout")
 
-	// 2. Calculate grid layout using snapshot's display bounds (gap=0, padding handles spacing)
-	calculatedLayout := CalculateLayout(layout, snap.DisplayBounds, 0)
+	// 2. Get existing track ratios if reapplying same layout
+	var columnRatios, rowRatios []float64
+	existingState := rs.GetSpaceReadOnly(snap.SpaceID)
+	if existingState != nil && existingState.CurrentLayoutID == layoutID {
+		// Preserve existing track ratios when reapplying same layout
+		columnRatios = existingState.ColumnRatios
+		rowRatios = existingState.RowRatios
+	}
+
+	// 3. Calculate grid layout using snapshot's display bounds (gap=0, padding handles spacing)
+	calculatedLayout := CalculateLayoutWithRatios(layout, snap.DisplayBounds, 0, columnRatios, rowRatios)
 
 	// 3. Convert snapshot windows to layout windows
 	windows := convertWindows(snap.Windows)
@@ -121,7 +130,14 @@ func ApplyLayout(
 	}
 
 	// 9. Update local state
-	spaceState.SetCurrentLayout(layoutID, findLayoutIndex(cfg, layoutID))
+	// Only call SetCurrentLayout (which clears ratios) if switching to a different layout
+	if existingState == nil || existingState.CurrentLayoutID != layoutID {
+		spaceState.SetCurrentLayout(layoutID, findLayoutIndex(cfg, layoutID))
+	} else {
+		// Same layout - preserve track ratios, just update other fields
+		spaceState.CurrentLayoutID = layoutID
+		spaceState.LayoutIndex = findLayoutIndex(cfg, layoutID)
+	}
 	rs.SetWindowAssignments(snap.SpaceID, assignment.Assignments)
 	rs.MarkUpdated()
 

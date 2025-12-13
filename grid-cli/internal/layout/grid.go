@@ -13,6 +13,20 @@ import (
 //
 // Returns: Array of pixel sizes for each track
 func CalculateTracks(tracks []types.TrackSize, available float64, gap float64) []float64 {
+	return CalculateTracksWithRatios(tracks, available, gap, nil)
+}
+
+// CalculateTracksWithRatios converts track definitions to pixel sizes,
+// optionally applying ratio overrides for flexible (fr) tracks.
+//
+// Parameters:
+//   - tracks: Track size definitions from layout
+//   - available: Total available space in pixels
+//   - gap: Gap between tracks in pixels
+//   - ratios: Optional ratio overrides for fr tracks (sum should be 1.0). If nil, uses original fr values.
+//
+// Returns: Array of pixel sizes for each track
+func CalculateTracksWithRatios(tracks []types.TrackSize, available float64, gap float64, ratios []float64) []float64 {
 	if len(tracks) == 0 {
 		return nil
 	}
@@ -51,17 +65,35 @@ func CalculateTracks(tracks []types.TrackSize, available float64, gap float64) [
 
 	// Second pass: distribute remaining space to fr tracks
 	if totalFr > 0 && remaining > 0 {
-		frUnit := remaining / totalFr
+		// Check if we have valid ratio overrides for fr tracks
+		useRatioOverrides := len(ratios) == len(frIndices) && len(ratios) > 0
 
-		for _, i := range frIndices {
-			track := tracks[i]
-			switch track.Type {
-			case types.TrackFr:
-				sizes[i] = frUnit * track.Value
-			case types.TrackMinMax:
-				// Add fr portion to minimum
-				frPortion := frUnit * track.Max
-				sizes[i] = track.Min + frPortion
+		if useRatioOverrides {
+			// Use provided ratios to distribute remaining space among fr tracks
+			for j, i := range frIndices {
+				track := tracks[i]
+				switch track.Type {
+				case types.TrackFr:
+					sizes[i] = remaining * ratios[j]
+				case types.TrackMinMax:
+					// For minmax, add the ratio portion to minimum
+					sizes[i] = track.Min + remaining*ratios[j]
+				}
+			}
+		} else {
+			// Use original fr values
+			frUnit := remaining / totalFr
+
+			for _, i := range frIndices {
+				track := tracks[i]
+				switch track.Type {
+				case types.TrackFr:
+					sizes[i] = frUnit * track.Value
+				case types.TrackMinMax:
+					// Add fr portion to minimum
+					frPortion := frUnit * track.Max
+					sizes[i] = track.Min + frPortion
+				}
 			}
 		}
 	}
@@ -119,13 +151,27 @@ func CalculateTrackPositions(sizes []float64, gap float64) []float64 {
 //
 // Returns: CalculatedLayout with all cell bounds computed
 func CalculateLayout(layout *types.Layout, screenRect types.Rect, gap float64) *types.CalculatedLayout {
+	return CalculateLayoutWithRatios(layout, screenRect, gap, nil, nil)
+}
+
+// CalculateLayoutWithRatios computes the full layout with optional ratio overrides.
+//
+// Parameters:
+//   - layout: Layout definition with columns, rows, and cells
+//   - screenRect: Screen bounds to fit the layout into
+//   - gap: Gap between cells in pixels
+//   - columnRatios: Optional ratio overrides for flexible columns (nil = use layout defaults)
+//   - rowRatios: Optional ratio overrides for flexible rows (nil = use layout defaults)
+//
+// Returns: CalculatedLayout with all cell bounds computed
+func CalculateLayoutWithRatios(layout *types.Layout, screenRect types.Rect, gap float64, columnRatios, rowRatios []float64) *types.CalculatedLayout {
 	if layout == nil {
 		return nil
 	}
 
-	// Calculate column and row sizes
-	columnSizes := CalculateTracks(layout.Columns, screenRect.Width, gap)
-	rowSizes := CalculateTracks(layout.Rows, screenRect.Height, gap)
+	// Calculate column and row sizes with optional ratio overrides
+	columnSizes := CalculateTracksWithRatios(layout.Columns, screenRect.Width, gap, columnRatios)
+	rowSizes := CalculateTracksWithRatios(layout.Rows, screenRect.Height, gap, rowRatios)
 
 	// Calculate column and row positions
 	colPositions := CalculateTrackPositions(columnSizes, gap)

@@ -29,6 +29,8 @@ type SpaceState struct {
 	Cells           map[string]*CellState `json:"cells"`           // cellID -> state
 	FocusedCell     string                `json:"focusedCell"`     // Currently focused cell ID
 	FocusedWindow   int                   `json:"focusedWindow"`   // Index of focused window in cell
+	ColumnRatios    []float64             `json:"columnRatios,omitempty"` // Track ratios for columns, sum to 1.0
+	RowRatios       []float64             `json:"rowRatios,omitempty"`    // Track ratios for rows, sum to 1.0
 }
 
 // CellState tracks state for a single cell
@@ -125,6 +127,9 @@ func (ss *SpaceState) SetCurrentLayout(layoutID string, layoutIndex int) {
 	ss.Cells = make(map[string]*CellState)
 	ss.FocusedCell = ""
 	ss.FocusedWindow = 0
+	// Clear track ratios - they're specific to a layout's grid structure
+	ss.ColumnRatios = nil
+	ss.RowRatios = nil
 }
 
 // CycleLayout moves to the next layout in the cycle.
