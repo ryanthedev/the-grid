@@ -124,11 +124,6 @@ struct GridServerCommand: ParsableCommand {
             StateManager.shared.start()
             logger.notice("StateManager initialization started")
 
-            // Initialize ResizeManager and connect to EventBroadcaster
-            logger.info("Initializing ResizeManager...")
-            ResizeManager.shared.eventBroadcaster = eventBroadcaster
-            logger.notice("ResizeManager initialized (use resize.start RPC to enable)")
-
             // Start heartbeat if requested
             if heartbeat {
                 eventBroadcaster.startHeartbeat(interval: heartbeatInterval)
