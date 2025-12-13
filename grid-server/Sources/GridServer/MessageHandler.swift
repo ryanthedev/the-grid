@@ -1,6 +1,7 @@
 import Foundation
 import Logging
 import mss
+import CoreGraphics
 
 /// Handles incoming requests and routes them to appropriate handlers
 class MessageHandler {
@@ -610,6 +611,59 @@ class MessageHandler {
                 completion(Response(id: request.id, result: AnyCodable(["success": true, "spaceId": spaceIdStr])))
             } else {
                 completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to focus space. MSS may not be available.")))
+            }
+        }
+
+        // MARK: - Mouse Methods
+
+        // Warp mouse cursor to center of a window
+        register(method: "mouse.warp") { [weak self] request, completion in
+            guard let self = self else { return }
+            guard let params = request.params else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
+                return
+            }
+
+            // Accept windowId as either string or int
+            var windowID: UInt32?
+            if let windowIdInt = params["windowId"]?.value as? Int {
+                windowID = UInt32(windowIdInt)
+            } else if let windowIdStr = params["windowId"]?.value as? String,
+                      let parsed = UInt32(windowIdStr) {
+                windowID = parsed
+            }
+
+            guard let wid = windowID else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Missing or invalid windowId")))
+                return
+            }
+
+            // Get window state to find frame
+            let state = StateManager.shared.getState()
+            guard let windowState = state.windows[String(wid)] else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32001, message: "Window not found: \(wid)")))
+                return
+            }
+
+            // Calculate center of window
+            let frame = windowState.frame
+            let center = CGPoint(x: frame.midX, y: frame.midY)
+
+            // Warp the mouse cursor to the center
+            let result = CGWarpMouseCursorPosition(center)
+            if result == .success {
+                self.logger.info("Mouse warped to window center", metadata: [
+                    "windowId": "\(wid)",
+                    "center": "(\(center.x), \(center.y))"
+                ])
+                completion(Response(id: request.id, result: AnyCodable([
+                    "success": true,
+                    "windowId": wid,
+                    "position": ["x": center.x, "y": center.y]
+                ])))
+            } else {
+                self.logger.error("Failed to warp mouse", metadata: ["error": "\(result.rawValue)"])
+                completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to warp mouse cursor")))
             }
         }
     }

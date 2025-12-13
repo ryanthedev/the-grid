@@ -107,6 +107,9 @@ class StateManager {
         refreshApplications()
         refreshWindows()
 
+        // Initialize activeDisplayUUID from active space (needed before any focus events)
+        updateActiveDisplayFromSpaces()
+
         state.metadata.update()
         logger.info("Complete state refresh finished")
     }
