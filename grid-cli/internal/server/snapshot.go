@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/yourusername/grid-cli/internal/client"
+	"github.com/yourusername/grid-cli/internal/config"
 	"github.com/yourusername/grid-cli/internal/types"
 )
 
@@ -45,6 +46,32 @@ type WindowInfo struct {
 // IsTileable returns true if the window should be included in tiling.
 func (w WindowInfo) IsTileable() bool {
 	return !w.IsMinimized && !w.IsHidden && w.Level == 0
+}
+
+// IsExcluded returns true if the window matches any exclusion criteria.
+func (w WindowInfo) IsExcluded(exclusions config.WindowExclusion) bool {
+	// Check role exclusions
+	for _, role := range exclusions.Roles {
+		if w.Role == role {
+			return true
+		}
+	}
+
+	// Check subrole exclusions
+	for _, subrole := range exclusions.Subroles {
+		if w.Subrole == subrole {
+			return true
+		}
+	}
+
+	// Check app exclusions
+	for _, app := range exclusions.Apps {
+		if w.AppName == app {
+			return true
+		}
+	}
+
+	return false
 }
 
 // Fetch calls dump ONCE and parses into a Snapshot.

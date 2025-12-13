@@ -2,6 +2,8 @@ package server
 
 import (
 	"testing"
+
+	"github.com/yourusername/grid-cli/internal/config"
 )
 
 func TestParseWindowWithRoleSubrole(t *testing.T) {
@@ -74,5 +76,48 @@ func TestParseWindowWithRoleSubrole(t *testing.T) {
 	}
 	if tooltipWindow.Subrole != "AXUnknown" {
 		t.Errorf("expected subrole AXUnknown, got %s", tooltipWindow.Subrole)
+	}
+}
+
+func TestWindowInfoIsExcluded(t *testing.T) {
+	exclusions := config.WindowExclusion{
+		Roles:    []string{"AXHelpTag"},
+		Subroles: []string{"AXDialog"},
+		Apps:     []string{"Dock"},
+	}
+
+	tests := []struct {
+		name     string
+		window   WindowInfo
+		expected bool
+	}{
+		{
+			name:     "normal window not excluded",
+			window:   WindowInfo{Role: "AXWindow", Subrole: "AXStandardWindow", AppName: "Chrome"},
+			expected: false,
+		},
+		{
+			name:     "tooltip excluded by role",
+			window:   WindowInfo{Role: "AXHelpTag", Subrole: "AXUnknown", AppName: "Chrome"},
+			expected: true,
+		},
+		{
+			name:     "dialog excluded by subrole",
+			window:   WindowInfo{Role: "AXWindow", Subrole: "AXDialog", AppName: "Chrome"},
+			expected: true,
+		},
+		{
+			name:     "dock excluded by app",
+			window:   WindowInfo{Role: "AXWindow", Subrole: "AXStandardWindow", AppName: "Dock"},
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.window.IsExcluded(exclusions); got != tt.expected {
+				t.Errorf("IsExcluded() = %v, want %v", got, tt.expected)
+			}
+		})
 	}
 }
