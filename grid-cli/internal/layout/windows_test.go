@@ -263,9 +263,9 @@ func TestCalculateAllWindowPlacements(t *testing.T) {
 		nil, // use default mode
 		nil, // use equal ratios
 		types.StackVertical,
-		10,  // windowSpacing
 		8,   // baseSpacing
 		nil, // settingsPadding
+		nil, // settingsWindowSpacing
 	)
 
 	if len(placements) != 3 {
@@ -317,9 +317,9 @@ func TestCalculateAllWindowPlacements_WithCellModes(t *testing.T) {
 		cellModes,
 		nil,
 		types.StackVertical, // default is vertical, but we override
-		0,   // windowSpacing
 		8,   // baseSpacing
 		nil, // settingsPadding
+		nil, // settingsWindowSpacing
 	)
 
 	if len(placements) != 2 {
@@ -348,7 +348,7 @@ func TestCalculateAllWindowPlacements_WithCellModes(t *testing.T) {
 }
 
 func TestCalculateAllWindowPlacements_Nil(t *testing.T) {
-	placements := CalculateAllWindowPlacements(nil, nil, nil, nil, nil, types.StackVertical, 0, 8, nil)
+	placements := CalculateAllWindowPlacements(nil, nil, nil, nil, nil, types.StackVertical, 8, nil, nil)
 	if placements != nil {
 		t.Errorf("expected nil for nil layout, got %v", placements)
 	}
@@ -373,15 +373,79 @@ func TestCalculateAllWindowPlacements_UnknownCell(t *testing.T) {
 		nil,
 		nil,
 		types.StackVertical,
-		0,   // windowSpacing
 		8,   // baseSpacing
 		nil, // settingsPadding
+		nil, // settingsWindowSpacing
 	)
 
 	// Should skip unknown cells
 	if len(placements) != 0 {
 		t.Errorf("expected 0 placements for unknown cell, got %d", len(placements))
 	}
+}
+
+func TestAdjustRatiosForWindowCount(t *testing.T) {
+	tests := []struct {
+		name          string
+		ratios        []float64
+		newCount      int
+		expectedLen   int
+		expectedSum   float64
+	}{
+		{
+			name:        "shrink from 3 to 2 - drop last ratio and renormalize",
+			ratios:      []float64{0.33, 0.33, 0.34},
+			newCount:    2,
+			expectedLen: 2,
+			expectedSum: 1.0,
+		},
+		{
+			name:        "grow from 2 to 3 - add equal portion",
+			ratios:      []float64{0.5, 0.5},
+			newCount:    3,
+			expectedLen: 3,
+			expectedSum: 1.0,
+		},
+		{
+			name:        "same count - no change",
+			ratios:      []float64{0.4, 0.6},
+			newCount:    2,
+			expectedLen: 2,
+			expectedSum: 1.0,
+		},
+		{
+			name:        "nil ratios - returns equal ratios",
+			ratios:      nil,
+			newCount:    3,
+			expectedLen: 3,
+			expectedSum: 1.0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := AdjustRatiosForWindowCount(tt.ratios, tt.newCount)
+
+			if len(result) != tt.expectedLen {
+				t.Errorf("expected len %d, got %d", tt.expectedLen, len(result))
+			}
+
+			sum := 0.0
+			for _, r := range result {
+				sum += r
+			}
+			if abs(sum-tt.expectedSum) > 0.001 {
+				t.Errorf("expected sum %.3f, got %.3f", tt.expectedSum, sum)
+			}
+		})
+	}
+}
+
+func abs(x float64) float64 {
+	if x < 0 {
+		return -x
+	}
+	return x
 }
 
 // floatEquals is defined in grid_test.go

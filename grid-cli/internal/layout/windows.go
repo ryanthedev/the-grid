@@ -271,3 +271,49 @@ func applyPaddingInset(bounds types.Rect, p types.ResolvedPadding) types.Rect {
 		Height: max(0, bounds.Height-p.Top-p.Bottom),
 	}
 }
+
+// AdjustRatiosForWindowCount adjusts split ratios when window count changes.
+// Preserves relative proportions instead of falling back to equal splits.
+//
+// When shrinking: drops the last N ratios and renormalizes remaining to sum to 1.0
+// When growing: takes space equally from all existing ratios for new windows
+// When same: returns original ratios normalized
+func AdjustRatiosForWindowCount(ratios []float64, newCount int) []float64 {
+	if newCount <= 0 {
+		return nil
+	}
+
+	// If no ratios provided, return equal ratios
+	if len(ratios) == 0 {
+		return equalRatios(newCount)
+	}
+
+	oldCount := len(ratios)
+
+	// Same count - just normalize
+	if oldCount == newCount {
+		return NormalizeRatios(ratios)
+	}
+
+	// Shrinking: drop last ratios, renormalize
+	if newCount < oldCount {
+		truncated := make([]float64, newCount)
+		copy(truncated, ratios[:newCount])
+		return NormalizeRatios(truncated)
+	}
+
+	// Growing: take equal space from each existing ratio for new windows
+	// New windows get equal share of the total
+	newRatio := 1.0 / float64(newCount)           // Each new window gets this
+	shrinkFactor := float64(oldCount) / float64(newCount)  // Scale existing ratios down
+
+	result := make([]float64, newCount)
+	for i := 0; i < oldCount; i++ {
+		result[i] = ratios[i] * shrinkFactor
+	}
+	for i := oldCount; i < newCount; i++ {
+		result[i] = newRatio
+	}
+
+	return NormalizeRatios(result)
+}
