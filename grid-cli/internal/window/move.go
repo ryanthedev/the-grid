@@ -384,6 +384,62 @@ func moveWindowCrossDisplay(
 		}
 	}
 
+	// Also rebalance the source cell on the source display
+	if sourceLayoutDef, err := cfg.GetLayout(sourceSpace.CurrentLayoutID); err == nil {
+		sourceCalculated := layout.CalculateLayout(sourceLayoutDef, currentDisplayBounds, 0)
+
+		sourceAssignments := make(map[string][]uint32)
+		if cellState := sourceSpace.Cells[currentCell]; cellState != nil {
+			sourceAssignments[currentCell] = cellState.Windows
+		}
+
+		if len(sourceAssignments[currentCell]) > 0 {
+			sourceCellModes := make(map[string]types.StackMode)
+			sourceCellRatios := make(map[string][]float64)
+
+			// 1. Check layout definition's per-cell StackMode
+			for _, cell := range sourceLayoutDef.Cells {
+				if cell.ID == currentCell && cell.StackMode != "" {
+					sourceCellModes[currentCell] = cell.StackMode
+					break
+				}
+			}
+			// 2. Check layout's CellModes map (overrides per-cell)
+			if sourceLayoutDef.CellModes != nil {
+				if mode, ok := sourceLayoutDef.CellModes[currentCell]; ok {
+					sourceCellModes[currentCell] = mode
+				}
+			}
+			// 3. State override (highest priority)
+			if cellState, ok := sourceSpace.Cells[currentCell]; ok {
+				if cellState.StackMode != "" {
+					sourceCellModes[currentCell] = cellState.StackMode
+				}
+				if len(cellState.SplitRatios) > 0 {
+					sourceCellRatios[currentCell] = cellState.SplitRatios
+				}
+			}
+
+			srcSettingsPadding, _ := cfg.GetSettingsPadding()
+			srcSettingsWindowSpacing, _ := cfg.GetSettingsWindowSpacing()
+			sourcePlacements := layout.CalculateAllWindowPlacements(
+				sourceCalculated,
+				sourceLayoutDef,
+				sourceAssignments,
+				sourceCellModes,
+				sourceCellRatios,
+				cfg.Settings.DefaultStackMode,
+				cfg.GetBaseSpacing(),
+				srcSettingsPadding,
+				srcSettingsWindowSpacing,
+			)
+
+			if err := layout.ApplyPlacements(ctx, c, sourcePlacements); err != nil {
+				logging.Warn().Err(err).Msg("failed to apply placements on source space")
+			}
+		}
+	}
+
 	// Focus the window
 	if err := focus.FocusWindow(ctx, c, windowID); err != nil {
 		logging.Warn().Err(err).Uint32("windowId", windowID).Msg("failed to focus moved window")

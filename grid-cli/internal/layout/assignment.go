@@ -327,6 +327,40 @@ func assignPreserve(windows []Window, layout *types.Layout, previous map[string]
 			result.Assignments[cellID] = append(result.Assignments[cellID], w.ID)
 		}
 	}
+
+	// Third pass: reorder windows within each cell to match previous order
+	for cellID, prevWindowIDs := range previous {
+		currentWindows, ok := result.Assignments[cellID]
+		if !ok || len(currentWindows) == 0 {
+			continue
+		}
+
+		// Build set of currently assigned windows for O(1) lookup
+		currentSet := make(map[uint32]bool)
+		for _, wid := range currentWindows {
+			currentSet[wid] = true
+		}
+
+		// Rebuild list preserving previous order
+		reordered := make([]uint32, 0, len(currentWindows))
+
+		// First: add windows in their previous order
+		for _, wid := range prevWindowIDs {
+			if currentSet[wid] {
+				reordered = append(reordered, wid)
+				delete(currentSet, wid)
+			}
+		}
+
+		// Then: append any new windows (not in previous)
+		for _, wid := range currentWindows {
+			if currentSet[wid] {
+				reordered = append(reordered, wid)
+			}
+		}
+
+		result.Assignments[cellID] = reordered
+	}
 }
 
 // assignByPosition assigns windows to cells based on maximum overlap with current position.

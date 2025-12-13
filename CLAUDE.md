@@ -20,6 +20,14 @@
   - Error conditions with full context
   - External API calls (request/response)
 
+## Project Paths
+- **Log files**: `~/.local/state/thegrid/`
+  - `grid-cli.log` - CLI client logs (JSON structured)
+  - `grid-server.log` - Server logs
+  - `state.json` - Runtime state
+- **Config**: `~/.config/thegrid/config.yaml`
+- **Server socket**: `/tmp/grid-server.sock`
+
 ## Documentation Research
 - ALWAYS search online for API docs, library usage examples
 - Run `--help`, `man`, or equivalent for CLI tools before using
