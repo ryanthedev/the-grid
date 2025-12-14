@@ -81,6 +81,7 @@ struct SpaceState: Codable {
     let displayUUID: String
     var windows: [UInt32]  // Window IDs on this space
     var isActive: Bool
+    var lastFocusedWindowID: UInt32?  // Last focused window on this space (for focus restoration)
     var metadata: [String: String]  // Custom metadata (string-only for JSON simplicity)
 
     init(id: UInt64, uuid: String, type: String, displayUUID: String) {
@@ -90,6 +91,7 @@ struct SpaceState: Codable {
         self.displayUUID = displayUUID
         self.windows = []
         self.isActive = false
+        self.lastFocusedWindowID = nil
         self.metadata = [:]
     }
 }
@@ -250,6 +252,7 @@ struct StateMetadata: Codable {
     var connectionID: Int32
     var focusedWindowID: UInt32?  // Currently focused window (global)
     var activeDisplayUUID: String?  // Display containing focused window
+    var activeSpaceID: UInt64?  // Currently active space (derived from space change detection)
 
     init() {
         self.lastUpdate = Date()
@@ -257,6 +260,7 @@ struct StateMetadata: Codable {
         self.connectionID = 0
         self.focusedWindowID = nil
         self.activeDisplayUUID = nil
+        self.activeSpaceID = nil
     }
 
     mutating func update() {

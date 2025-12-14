@@ -28,25 +28,78 @@ const (
 	TrackMinMax TrackType = "minmax" // Constrained flexible
 )
 
+// PaddingValue represents a padding amount (pixels or base-relative)
+type PaddingValue struct {
+	Pixels       float64 // Fixed pixel value
+	BaseMultiple float64 // Multiplier for baseSpacing (e.g., 2.0 for "2x")
+	IsRelative   bool    // True if using BaseMultiple
+}
+
+// Resolve converts the padding value to pixels given the base spacing
+func (pv PaddingValue) Resolve(baseSpacing float64) float64 {
+	if pv.IsRelative {
+		return pv.BaseMultiple * baseSpacing
+	}
+	return pv.Pixels
+}
+
+// Padding represents directional padding (top, right, bottom, left)
+type Padding struct {
+	Top    PaddingValue
+	Right  PaddingValue
+	Bottom PaddingValue
+	Left   PaddingValue
+}
+
+// Resolve converts all padding values to pixels
+func (p Padding) Resolve(baseSpacing float64) ResolvedPadding {
+	return ResolvedPadding{
+		Top:    p.Top.Resolve(baseSpacing),
+		Right:  p.Right.Resolve(baseSpacing),
+		Bottom: p.Bottom.Resolve(baseSpacing),
+		Left:   p.Left.Resolve(baseSpacing),
+	}
+}
+
+// IsZero returns true if all padding values are zero
+func (p Padding) IsZero() bool {
+	return !p.Top.IsRelative && p.Top.Pixels == 0 && p.Top.BaseMultiple == 0 &&
+		!p.Right.IsRelative && p.Right.Pixels == 0 && p.Right.BaseMultiple == 0 &&
+		!p.Bottom.IsRelative && p.Bottom.Pixels == 0 && p.Bottom.BaseMultiple == 0 &&
+		!p.Left.IsRelative && p.Left.Pixels == 0 && p.Left.BaseMultiple == 0
+}
+
+// ResolvedPadding is padding with all values resolved to pixels
+type ResolvedPadding struct {
+	Top    float64
+	Right  float64
+	Bottom float64
+	Left   float64
+}
+
 // Cell represents a grid cell definition from configuration
 type Cell struct {
-	ID          string    // Unique cell identifier
-	ColumnStart int       // 1-indexed column start
-	ColumnEnd   int       // 1-indexed column end (exclusive)
-	RowStart    int       // 1-indexed row start
-	RowEnd      int       // 1-indexed row end (exclusive)
-	StackMode   StackMode // How windows stack in this cell (optional override)
+	ID            string        // Unique cell identifier
+	ColumnStart   int           // 1-indexed column start
+	ColumnEnd     int           // 1-indexed column end (exclusive)
+	RowStart      int           // 1-indexed row start
+	RowEnd        int           // 1-indexed row end (exclusive)
+	StackMode     StackMode     // How windows stack in this cell (optional override)
+	Padding       *Padding      // Per-cell padding override (nil = inherit from layout)
+	WindowSpacing *PaddingValue // Per-cell window spacing override (nil = inherit from layout)
 }
 
 // Layout defines a complete grid layout configuration
 type Layout struct {
-	ID          string               // Unique layout identifier
-	Name        string               // Human-readable name
-	Description string               // Optional description
-	Columns     []TrackSize          // Column track definitions
-	Rows        []TrackSize          // Row track definitions
-	Cells       []Cell               // Cell definitions
-	CellModes   map[string]StackMode // Per-cell stack mode overrides
+	ID            string               // Unique layout identifier
+	Name          string               // Human-readable name
+	Description   string               // Optional description
+	Columns       []TrackSize          // Column track definitions
+	Rows          []TrackSize          // Row track definitions
+	Cells         []Cell               // Cell definitions
+	CellModes     map[string]StackMode // Per-cell stack mode overrides
+	Padding       *Padding             // Layout-level default padding (nil = inherit from settings)
+	WindowSpacing *PaddingValue        // Layout-level window spacing (nil = inherit from settings)
 }
 
 // Rect represents pixel bounds on screen

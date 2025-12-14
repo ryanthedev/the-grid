@@ -74,6 +74,63 @@ func AdjustSplitRatioAtBoundary(ratios []float64, boundaryIndex int, delta float
 	return AdjustSplitRatio(ratios, boundaryIndex, delta, MinimumRatio)
 }
 
+// AdjustSplitRatioWithMax modifies the ratio between two adjacent windows with min/max constraints.
+//
+// Parameters:
+//   - ratios: Current split ratios
+//   - index: Index of window to grow (will shrink window at index+1)
+//   - delta: Change in ratio (positive = grow, negative = shrink)
+//   - minRatio: Minimum allowed ratio per window
+//   - maxRatio: Maximum allowed ratio per window
+//
+// Returns: New ratios array and any error
+func AdjustSplitRatioWithMax(ratios []float64, index int, delta float64, minRatio float64, maxRatio float64) ([]float64, error) {
+	if len(ratios) < 2 {
+		return ratios, fmt.Errorf("need at least 2 windows to adjust splits")
+	}
+
+	if index < 0 || index >= len(ratios)-1 {
+		return ratios, fmt.Errorf("invalid index for split adjustment: %d", index)
+	}
+
+	newRatios := make([]float64, len(ratios))
+	copy(newRatios, ratios)
+
+	// Calculate proposed new values
+	newFirst := newRatios[index] + delta
+	newSecond := newRatios[index+1] - delta
+
+	// Enforce minimum ratios
+	if newFirst < minRatio {
+		delta = newRatios[index] - minRatio
+		newFirst = minRatio
+		newSecond = newRatios[index+1] + (newRatios[index] - minRatio)
+	}
+	if newSecond < minRatio {
+		delta = newRatios[index+1] - minRatio
+		newSecond = minRatio
+		newFirst = newRatios[index] + (newRatios[index+1] - minRatio)
+	}
+
+	// Enforce maximum ratios
+	if newFirst > maxRatio {
+		excess := newFirst - maxRatio
+		newFirst = maxRatio
+		newSecond = newSecond + excess
+	}
+	if newSecond > maxRatio {
+		excess := newSecond - maxRatio
+		newSecond = maxRatio
+		newFirst = newFirst + excess
+	}
+
+	newRatios[index] = newFirst
+	newRatios[index+1] = newSecond
+
+	// Normalize to ensure sum is exactly 1.0
+	return NormalizeRatios(newRatios), nil
+}
+
 // RecalculateSplitsAfterRemoval adjusts ratios when a window is removed.
 // The removed window's ratio is distributed to remaining windows.
 func RecalculateSplitsAfterRemoval(ratios []float64, removedIndex int) []float64 {

@@ -12,22 +12,42 @@ type Config struct {
 
 // Settings contains global application settings
 type Settings struct {
-	DefaultStackMode  types.StackMode `yaml:"defaultStackMode" json:"defaultStackMode"`
-	AnimationDuration float64         `yaml:"animationDuration" json:"animationDuration"`
-	CellPadding       int             `yaml:"cellPadding" json:"cellPadding"`
-	FocusFollowsMouse bool            `yaml:"focusFollowsMouse" json:"focusFollowsMouse"`
+	DefaultStackMode  types.StackMode  `yaml:"defaultStackMode" json:"defaultStackMode"`
+	AnimationDuration float64          `yaml:"animationDuration" json:"animationDuration"`
+	BaseSpacing       float64          `yaml:"baseSpacing" json:"baseSpacing"`                         // Base unit for "Nx" padding syntax
+	Padding           interface{}      `yaml:"padding,omitempty" json:"padding,omitempty"`             // Global default padding (supports shorthand)
+	WindowSpacing     interface{}      `yaml:"windowSpacing,omitempty" json:"windowSpacing,omitempty"` // Gap between stacked windows (supports shorthand)
+	FocusFollowsMouse bool             `yaml:"focusFollowsMouse" json:"focusFollowsMouse"`
+	Resize            ResizeSettings   `yaml:"resize,omitempty" json:"resize,omitempty"`
+	WindowExclusion   WindowExclusion  `yaml:"windowExclusion,omitempty" json:"windowExclusion,omitempty"`
+}
+
+// ResizeSettings configures CLI resize behavior
+type ResizeSettings struct {
+	MinRatio float64 `yaml:"minRatio,omitempty" json:"minRatio,omitempty"` // Minimum cell ratio (default 0.1)
+	MaxRatio float64 `yaml:"maxRatio,omitempty" json:"maxRatio,omitempty"` // Maximum cell ratio (default 0.9)
+}
+
+// WindowExclusion configures which windows to exclude from cell assignment.
+// Windows matching ANY of these criteria are excluded from tiling.
+type WindowExclusion struct {
+	Roles    []string `yaml:"roles,omitempty" json:"roles,omitempty"`       // AX roles to exclude (e.g., "AXHelpTag")
+	Subroles []string `yaml:"subroles,omitempty" json:"subroles,omitempty"` // AX subroles to exclude
+	Apps     []string `yaml:"apps,omitempty" json:"apps,omitempty"`         // App names to exclude entirely
 }
 
 // LayoutConfig is the configuration representation of a layout
 // Supports both explicit cells and areas syntax
 type LayoutConfig struct {
-	ID          string                 `yaml:"id" json:"id"`
-	Name        string                 `yaml:"name" json:"name"`
-	Description string                 `yaml:"description,omitempty" json:"description,omitempty"`
-	Grid        GridConfig             `yaml:"grid" json:"grid"`
-	Areas       [][]string             `yaml:"areas,omitempty" json:"areas,omitempty"`   // ASCII grid syntax
-	Cells       []CellConfig           `yaml:"cells,omitempty" json:"cells,omitempty"`   // Explicit cell definitions
-	CellModes   map[string]types.StackMode `yaml:"cellModes,omitempty" json:"cellModes,omitempty"`
+	ID            string                     `yaml:"id" json:"id"`
+	Name          string                     `yaml:"name" json:"name"`
+	Description   string                     `yaml:"description,omitempty" json:"description,omitempty"`
+	Grid          GridConfig                 `yaml:"grid" json:"grid"`
+	Areas         [][]string                 `yaml:"areas,omitempty" json:"areas,omitempty"`               // ASCII grid syntax
+	Cells         []CellConfig               `yaml:"cells,omitempty" json:"cells,omitempty"`               // Explicit cell definitions
+	CellModes     map[string]types.StackMode `yaml:"cellModes,omitempty" json:"cellModes,omitempty"`
+	Padding       interface{}                `yaml:"padding,omitempty" json:"padding,omitempty"`           // Layout-level default padding (supports shorthand)
+	WindowSpacing interface{}                `yaml:"windowSpacing,omitempty" json:"windowSpacing,omitempty"` // Layout-level window spacing (supports shorthand)
 }
 
 // GridConfig defines the grid structure
@@ -38,10 +58,12 @@ type GridConfig struct {
 
 // CellConfig is the configuration representation of a cell
 type CellConfig struct {
-	ID        string          `yaml:"id" json:"id"`
-	Column    string          `yaml:"column" json:"column"`                       // "start/end" format, e.g., "1/3"
-	Row       string          `yaml:"row" json:"row"`                             // "start/end" format, e.g., "1/2"
-	StackMode types.StackMode `yaml:"stackMode,omitempty" json:"stackMode,omitempty"`
+	ID            string          `yaml:"id" json:"id"`
+	Column        string          `yaml:"column" json:"column"`                               // "start/end" format, e.g., "1/3"
+	Row           string          `yaml:"row" json:"row"`                                     // "start/end" format, e.g., "1/2"
+	StackMode     types.StackMode `yaml:"stackMode,omitempty" json:"stackMode,omitempty"`
+	Padding       interface{}     `yaml:"padding,omitempty" json:"padding,omitempty"`         // Per-cell padding override (supports shorthand)
+	WindowSpacing interface{}     `yaml:"windowSpacing,omitempty" json:"windowSpacing,omitempty"` // Per-cell window spacing override (supports shorthand)
 }
 
 // SpaceConfig defines per-Space settings

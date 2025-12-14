@@ -165,7 +165,7 @@ func TestLoadConfigFromBytes_YAML(t *testing.T) {
 	yamlConfig := `
 settings:
   defaultStackMode: vertical
-  cellPadding: 8
+  baseSpacing: 8
 
 layouts:
   - id: two-column
@@ -189,8 +189,8 @@ layouts:
 	if cfg.Settings.DefaultStackMode != types.StackVertical {
 		t.Errorf("Settings.DefaultStackMode = %q, want %q", cfg.Settings.DefaultStackMode, types.StackVertical)
 	}
-	if cfg.Settings.CellPadding != 8 {
-		t.Errorf("Settings.CellPadding = %d, want 8", cfg.Settings.CellPadding)
+	if cfg.Settings.BaseSpacing != 8 {
+		t.Errorf("Settings.BaseSpacing = %f, want 8", cfg.Settings.BaseSpacing)
 	}
 	if len(cfg.Layouts) != 1 {
 		t.Errorf("len(Layouts) = %d, want 1", len(cfg.Layouts))
@@ -456,5 +456,70 @@ func TestIsRectangular(t *testing.T) {
 				t.Errorf("isRectangular() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestWindowExclusionConfig(t *testing.T) {
+	yaml := `
+settings:
+  defaultStackMode: vertical
+  windowExclusion:
+    roles:
+      - AXHelpTag
+    subroles:
+      - AXUnknown
+    apps:
+      - Dock
+layouts:
+  - id: test
+    grid:
+      columns: ["1fr"]
+      rows: ["1fr"]
+    cells:
+      - id: main
+        column: "1/2"
+        row: "1/2"
+`
+	cfg, err := LoadConfigFromBytes([]byte(yaml), "yaml")
+	if err != nil {
+		t.Fatalf("failed to load config: %v", err)
+	}
+
+	if len(cfg.Settings.WindowExclusion.Roles) != 1 || cfg.Settings.WindowExclusion.Roles[0] != "AXHelpTag" {
+		t.Errorf("expected roles [AXHelpTag], got %v", cfg.Settings.WindowExclusion.Roles)
+	}
+	if len(cfg.Settings.WindowExclusion.Subroles) != 1 || cfg.Settings.WindowExclusion.Subroles[0] != "AXUnknown" {
+		t.Errorf("expected subroles [AXUnknown], got %v", cfg.Settings.WindowExclusion.Subroles)
+	}
+	if len(cfg.Settings.WindowExclusion.Apps) != 1 || cfg.Settings.WindowExclusion.Apps[0] != "Dock" {
+		t.Errorf("expected apps [Dock], got %v", cfg.Settings.WindowExclusion.Apps)
+	}
+}
+
+func TestDefaultWindowExclusions(t *testing.T) {
+	// Config with NO windowExclusion specified
+	yaml := `
+settings:
+  defaultStackMode: vertical
+layouts:
+  - id: test
+    grid:
+      columns: ["1fr"]
+      rows: ["1fr"]
+    cells:
+      - id: main
+        column: "1/2"
+        row: "1/2"
+`
+	cfg, err := LoadConfigFromBytes([]byte(yaml), "yaml")
+	if err != nil {
+		t.Fatalf("failed to load config: %v", err)
+	}
+
+	exclusions := cfg.GetWindowExclusions()
+
+	// Should have sensible defaults
+	if !containsString(exclusions.Roles, "AXHelpTag") {
+		t.Error("expected default roles to include AXHelpTag")
 	}
 }

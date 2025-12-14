@@ -204,12 +204,26 @@ func shouldFloat(w Window, rules []config.AppRule) bool {
 	// Check app rules first
 	for _, rule := range rules {
 		if matchesAppRule(w, rule) && rule.Float {
+			logging.Debug().
+				Uint32("windowID", w.ID).
+				Str("app", w.AppName).
+				Str("reason", "app rule").
+				Msg("window marked as floating")
 			return true
 		}
 	}
 
 	// Use window classification with PIP detection
 	category := ClassifyWindowWithPIPDetection(w)
+	if category == WindowFloating {
+		logging.Debug().
+			Uint32("windowID", w.ID).
+			Str("app", w.AppName).
+			Bool("hasFullscreenButton", w.HasFullscreenButton).
+			Str("role", w.Role).
+			Str("subrole", w.Subrole).
+			Msg("window classified as floating")
+	}
 	return category == WindowFloating
 }
 
@@ -308,6 +322,24 @@ func assignPreserve(windows []Window, layout *types.Layout, previous map[string]
 		}
 	}
 
+	// Build set of current window IDs for ghost detection
+	currentWindowSet := make(map[uint32]bool)
+	for _, w := range windows {
+		currentWindowSet[w.ID] = true
+	}
+
+	// DEBUG: Detect ghost windows (in previous but not in current)
+	for cellID, windowIDs := range previous {
+		for _, wid := range windowIDs {
+			if !currentWindowSet[wid] {
+				logging.Debug().
+					Str("cell", cellID).
+					Uint32("windowID", wid).
+					Msg("GHOST: previous assignment references non-existent window")
+			}
+		}
+	}
+
 	// First pass: preserve previous assignments
 	for _, w := range windows {
 		if prevCellID, ok := prevCellMap[w.ID]; ok {
@@ -326,6 +358,40 @@ func assignPreserve(windows []Window, layout *types.Layout, previous map[string]
 			cellID := findLeastPopulatedCell(result.Assignments)
 			result.Assignments[cellID] = append(result.Assignments[cellID], w.ID)
 		}
+	}
+
+	// Third pass: reorder windows within each cell to match previous order
+	for cellID, prevWindowIDs := range previous {
+		currentWindows, ok := result.Assignments[cellID]
+		if !ok || len(currentWindows) == 0 {
+			continue
+		}
+
+		// Build set of currently assigned windows for O(1) lookup
+		currentSet := make(map[uint32]bool)
+		for _, wid := range currentWindows {
+			currentSet[wid] = true
+		}
+
+		// Rebuild list preserving previous order
+		reordered := make([]uint32, 0, len(currentWindows))
+
+		// First: add windows in their previous order
+		for _, wid := range prevWindowIDs {
+			if currentSet[wid] {
+				reordered = append(reordered, wid)
+				delete(currentSet, wid)
+			}
+		}
+
+		// Then: append any new windows (not in previous)
+		for _, wid := range currentWindows {
+			if currentSet[wid] {
+				reordered = append(reordered, wid)
+			}
+		}
+
+		result.Assignments[cellID] = reordered
 	}
 }
 

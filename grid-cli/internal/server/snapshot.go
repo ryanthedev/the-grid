@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/yourusername/grid-cli/internal/client"
+	"github.com/yourusername/grid-cli/internal/config"
 	"github.com/yourusername/grid-cli/internal/types"
 )
 
@@ -30,19 +31,64 @@ type Snapshot struct {
 
 // WindowInfo contains window data needed for layout operations.
 type WindowInfo struct {
-	ID        uint32
-	AppName   string
-	BundleID  string
-	Title     string
-	Frame     types.Rect
-	Level     int
+	ID          uint32
+	AppName     string
+	BundleID    string
+	Title       string
+	Frame       types.Rect
+	Level       int
 	IsMinimized bool
 	IsHidden    bool
+	Role        string // AX role (e.g., "AXWindow", "AXHelpTag")
+	Subrole     string // AX subrole (e.g., "AXStandardWindow", "AXDialog")
+	// Button presence for floating window detection
+	HasCloseButton      bool
+	HasFullscreenButton bool
+	HasMinimizeButton   bool
+	HasZoomButton       bool
+	IsModal             bool
 }
 
 // IsTileable returns true if the window should be included in tiling.
 func (w WindowInfo) IsTileable() bool {
 	return !w.IsMinimized && !w.IsHidden && w.Level == 0
+}
+
+// IsExcluded returns true if the window matches any exclusion criteria.
+func (w WindowInfo) IsExcluded(exclusions config.WindowExclusion) bool {
+	// Check role exclusions
+	for _, role := range exclusions.Roles {
+		if w.Role == role {
+			return true
+		}
+	}
+
+	// Check subrole exclusions
+	for _, subrole := range exclusions.Subroles {
+		if w.Subrole == subrole {
+			return true
+		}
+	}
+
+	// Check app exclusions
+	for _, app := range exclusions.Apps {
+		if w.AppName == app {
+			return true
+		}
+	}
+
+	return false
+}
+
+// FilterTileable returns windows that are tileable and not excluded.
+func (s *Snapshot) FilterTileable(exclusions config.WindowExclusion) []WindowInfo {
+	var result []WindowInfo
+	for _, w := range s.Windows {
+		if w.IsTileable() && !w.IsExcluded(exclusions) {
+			result = append(result, w)
+		}
+	}
+	return result
 }
 
 // Fetch calls dump ONCE and parses into a Snapshot.
@@ -65,12 +111,17 @@ func parseSnapshot(raw map[string]interface{}) (*Snapshot, error) {
 		return nil, fmt.Errorf("failed to get active display: %w", err)
 	}
 
-	// 2. Find current active space using the display UUID
-	spaceID, err := findActiveSpaceID(raw, activeDisplayUUID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to determine active space: %w", err)
+	// 2. Find current active space - prefer metadata.activeSpaceID, fallback to display lookup
+	if spaceID := getActiveSpaceIDFromMetadata(raw); spaceID != "" {
+		snap.SpaceID = spaceID
+	} else {
+		// Fallback: derive from activeDisplayUUID -> display.currentSpaceID
+		spaceID, err := findActiveSpaceID(raw, activeDisplayUUID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to determine active space: %w", err)
+		}
+		snap.SpaceID = spaceID
 	}
-	snap.SpaceID = spaceID
 
 	// 3. Get display bounds for the ACTIVE display (not first display!)
 	bounds, err := findDisplayBounds(raw, activeDisplayUUID)
@@ -104,6 +155,20 @@ func parseFocusedWindowID(raw map[string]interface{}) uint32 {
 		return 0
 	}
 	return uint32(toFloat64(metadata["focusedWindowID"]))
+}
+
+// getActiveSpaceIDFromMetadata extracts activeSpaceID directly from server metadata
+// This is the preferred way to get the active space as it's derived from space change detection
+func getActiveSpaceIDFromMetadata(raw map[string]interface{}) string {
+	metadata, ok := raw["metadata"].(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	activeSpaceID := metadata["activeSpaceID"]
+	if activeSpaceID == nil {
+		return ""
+	}
+	return fmt.Sprintf("%v", interfaceToInt(activeSpaceID))
 }
 
 // parseAllDisplays extracts information about all connected displays
@@ -280,13 +345,20 @@ func parseWindow(w interface{}, spaceID string) *WindowInfo {
 
 	// Build WindowInfo
 	window := WindowInfo{
-		ID:          uint32(toFloat64(win["id"])),
-		Title:       toString(win["title"]),
-		AppName:     appName,
-		BundleID:    toString(win["bundleId"]),
-		IsMinimized: toBool(win["isMinimized"]),
-		IsHidden:    toBool(win["isHidden"]),
-		Level:       int(toFloat64(win["level"])),
+		ID:                  uint32(toFloat64(win["id"])),
+		Title:               toString(win["title"]),
+		AppName:             appName,
+		BundleID:            toString(win["bundleId"]),
+		IsMinimized:         toBool(win["isMinimized"]),
+		IsHidden:            toBool(win["isHidden"]),
+		Level:               int(toFloat64(win["level"])),
+		Role:                toString(win["role"]),
+		Subrole:             toString(win["subrole"]),
+		HasCloseButton:      toBool(win["hasCloseButton"]),
+		HasFullscreenButton: toBool(win["hasFullscreenButton"]),
+		HasMinimizeButton:   toBool(win["hasMinimizeButton"]),
+		HasZoomButton:       toBool(win["hasZoomButton"]),
+		IsModal:             toBool(win["isModal"]),
 	}
 
 	// Parse frame

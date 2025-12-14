@@ -74,7 +74,7 @@ func MoveWindow(
 	if err != nil {
 		return nil, fmt.Errorf("layout not found: %w", err)
 	}
-	calculated := layout.CalculateLayout(layoutDef, snap.DisplayBounds, float64(cfg.Settings.CellPadding))
+	calculated := layout.CalculateLayout(layoutDef, snap.DisplayBounds, 0)
 
 	// Find adjacent cells on current display
 	adjacentMap := layout.GetAdjacentCells(sourceCell, calculated.CellBounds)
@@ -141,7 +141,7 @@ func moveWindowToCell(
 	if err != nil {
 		return nil, fmt.Errorf("layout not found: %w", err)
 	}
-	calculated := layout.CalculateLayout(layoutDef, snap.DisplayBounds, float64(cfg.Settings.CellPadding))
+	calculated := layout.CalculateLayout(layoutDef, snap.DisplayBounds, 0)
 
 	// Build assignments for just the affected cells
 	affectedAssignments := make(map[string][]uint32)
@@ -183,13 +183,18 @@ func moveWindowToCell(
 	}
 
 	// Calculate and apply placements for affected cells only
+	settingsPadding, _ := cfg.GetSettingsPadding()
+	settingsWindowSpacing, _ := cfg.GetSettingsWindowSpacing()
 	placements := layout.CalculateAllWindowPlacements(
 		calculated,
+		layoutDef,
 		affectedAssignments,
 		cellModes,
 		cellRatios,
 		cfg.Settings.DefaultStackMode,
-		4, // padding
+		cfg.GetBaseSpacing(),
+		settingsPadding,
+		settingsWindowSpacing,
 	)
 
 	if err := layout.ApplyPlacements(ctx, c, placements); err != nil {
@@ -325,7 +330,7 @@ func moveWindowCrossDisplay(
 		if targetDisplayBounds == (types.Rect{}) {
 			targetDisplayBounds = adjacentDisplay.Frame
 		}
-		calculated := layout.CalculateLayout(layoutDef, targetDisplayBounds, float64(cfg.Settings.CellPadding))
+		calculated := layout.CalculateLayout(layoutDef, targetDisplayBounds, 0)
 
 		// Build assignments for just the target cell
 		affectedAssignments := make(map[string][]uint32)
@@ -360,17 +365,78 @@ func moveWindowCrossDisplay(
 		}
 
 		// Calculate and apply placements for target cell only
+		settingsPadding, _ := cfg.GetSettingsPadding()
+		settingsWindowSpacing, _ := cfg.GetSettingsWindowSpacing()
 		placements := layout.CalculateAllWindowPlacements(
 			calculated,
+			layoutDef,
 			affectedAssignments,
 			cellModes,
 			cellRatios,
 			cfg.Settings.DefaultStackMode,
-			4, // padding
+			cfg.GetBaseSpacing(),
+			settingsPadding,
+			settingsWindowSpacing,
 		)
 
 		if err := layout.ApplyPlacements(ctx, c, placements); err != nil {
 			logging.Warn().Err(err).Msg("failed to apply placements on target space")
+		}
+	}
+
+	// Also rebalance the source cell on the source display
+	if sourceLayoutDef, err := cfg.GetLayout(sourceSpace.CurrentLayoutID); err == nil {
+		sourceCalculated := layout.CalculateLayout(sourceLayoutDef, currentDisplayBounds, 0)
+
+		sourceAssignments := make(map[string][]uint32)
+		if cellState := sourceSpace.Cells[currentCell]; cellState != nil {
+			sourceAssignments[currentCell] = cellState.Windows
+		}
+
+		if len(sourceAssignments[currentCell]) > 0 {
+			sourceCellModes := make(map[string]types.StackMode)
+			sourceCellRatios := make(map[string][]float64)
+
+			// 1. Check layout definition's per-cell StackMode
+			for _, cell := range sourceLayoutDef.Cells {
+				if cell.ID == currentCell && cell.StackMode != "" {
+					sourceCellModes[currentCell] = cell.StackMode
+					break
+				}
+			}
+			// 2. Check layout's CellModes map (overrides per-cell)
+			if sourceLayoutDef.CellModes != nil {
+				if mode, ok := sourceLayoutDef.CellModes[currentCell]; ok {
+					sourceCellModes[currentCell] = mode
+				}
+			}
+			// 3. State override (highest priority)
+			if cellState, ok := sourceSpace.Cells[currentCell]; ok {
+				if cellState.StackMode != "" {
+					sourceCellModes[currentCell] = cellState.StackMode
+				}
+				if len(cellState.SplitRatios) > 0 {
+					sourceCellRatios[currentCell] = cellState.SplitRatios
+				}
+			}
+
+			srcSettingsPadding, _ := cfg.GetSettingsPadding()
+			srcSettingsWindowSpacing, _ := cfg.GetSettingsWindowSpacing()
+			sourcePlacements := layout.CalculateAllWindowPlacements(
+				sourceCalculated,
+				sourceLayoutDef,
+				sourceAssignments,
+				sourceCellModes,
+				sourceCellRatios,
+				cfg.Settings.DefaultStackMode,
+				cfg.GetBaseSpacing(),
+				srcSettingsPadding,
+				srcSettingsWindowSpacing,
+			)
+
+			if err := layout.ApplyPlacements(ctx, c, sourcePlacements); err != nil {
+				logging.Warn().Err(err).Msg("failed to apply placements on source space")
+			}
 		}
 	}
 

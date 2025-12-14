@@ -19,6 +19,7 @@ import (
 	gridLayout "github.com/yourusername/grid-cli/internal/layout"
 	"github.com/yourusername/grid-cli/internal/logging"
 	"github.com/yourusername/grid-cli/internal/models"
+	gridMouse "github.com/yourusername/grid-cli/internal/mouse"
 	"github.com/yourusername/grid-cli/internal/output"
 	gridReconcile "github.com/yourusername/grid-cli/internal/reconcile"
 	gridServer "github.com/yourusername/grid-cli/internal/server"
@@ -1133,7 +1134,13 @@ var layoutApplyCmd = &cobra.Command{
 
 		// 3. Apply layout using snapshot
 		opts := gridLayout.DefaultApplyOptions()
-		opts.Gap = float64(cfg.Settings.CellPadding)
+		opts.BaseSpacing = cfg.GetBaseSpacing()
+		if settingsPadding, err := cfg.GetSettingsPadding(); err == nil {
+			opts.SettingsPadding = settingsPadding
+		}
+		if settingsWindowSpacing, err := cfg.GetSettingsWindowSpacing(); err == nil {
+			opts.SettingsWindowSpacing = settingsWindowSpacing
+		}
 
 		if err := gridLayout.ApplyLayout(ctx, c, snap, cfg, runtimeState, layoutID, opts); err != nil {
 			return fmt.Errorf("failed to apply layout: %w", err)
@@ -1177,7 +1184,13 @@ var layoutCycleCmd = &cobra.Command{
 
 		// 3. Cycle layout
 		opts := gridLayout.DefaultApplyOptions()
-		opts.Gap = float64(cfg.Settings.CellPadding)
+		opts.BaseSpacing = cfg.GetBaseSpacing()
+		if settingsPadding, err := cfg.GetSettingsPadding(); err == nil {
+			opts.SettingsPadding = settingsPadding
+		}
+		if settingsWindowSpacing, err := cfg.GetSettingsWindowSpacing(); err == nil {
+			opts.SettingsWindowSpacing = settingsWindowSpacing
+		}
 
 		newLayout, err := gridLayout.CycleLayout(ctx, c, snap, cfg, runtimeState, opts)
 		if err != nil {
@@ -1263,7 +1276,14 @@ var layoutReapplyCmd = &cobra.Command{
 
 		// 3. Reapply layout
 		opts := gridLayout.DefaultApplyOptions()
-		opts.Gap = float64(cfg.Settings.CellPadding)
+		opts.Strategy = gridTypes.AssignPreserve
+		opts.BaseSpacing = cfg.GetBaseSpacing()
+		if settingsPadding, err := cfg.GetSettingsPadding(); err == nil {
+			opts.SettingsPadding = settingsPadding
+		}
+		if settingsWindowSpacing, err := cfg.GetSettingsWindowSpacing(); err == nil {
+			opts.SettingsWindowSpacing = settingsWindowSpacing
+		}
 
 		if err := gridLayout.ReapplyLayout(ctx, c, snap, cfg, runtimeState, opts); err != nil {
 			return fmt.Errorf("failed to reapply layout: %w", err)
@@ -1479,7 +1499,7 @@ var focusCmd = &cobra.Command{
 }
 
 // focusDirectionHelper is a helper function for directional focus commands
-func focusDirectionHelper(direction gridTypes.Direction, wrapAround bool, extend bool) error {
+func focusDirectionHelper(direction gridTypes.Direction, wrapAround bool, extend bool, mouse bool) error {
 	cfg, err := gridConfig.LoadConfig("")
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
@@ -1517,6 +1537,15 @@ func focusDirectionHelper(direction gridTypes.Direction, wrapAround bool, extend
 	}
 
 	successColor.Printf("✓ Focused window: %d\n", windowID)
+
+	// 4. Optionally warp mouse to focused window
+	if mouse && windowID != 0 {
+		if err := gridMouse.WarpToWindow(ctx, c, windowID); err != nil {
+			// Warn but don't fail - focus succeeded
+			errorColor.Printf("⚠ Mouse warp failed: %v\n", err)
+		}
+	}
+
 	return nil
 }
 
@@ -1528,10 +1557,11 @@ var focusLeftCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		wrap, _ := cmd.Flags().GetBool("wrap")
 		extend, _ := cmd.Flags().GetBool("extend")
+		mouse, _ := cmd.Flags().GetBool("mouse")
 		if extend {
 			logging.Debug().Bool("extend", extend).Msg("cross-monitor focus enabled")
 		}
-		return focusDirectionHelper(gridTypes.DirLeft, wrap, extend)
+		return focusDirectionHelper(gridTypes.DirLeft, wrap, extend, mouse)
 	},
 }
 
@@ -1543,10 +1573,11 @@ var focusRightCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		wrap, _ := cmd.Flags().GetBool("wrap")
 		extend, _ := cmd.Flags().GetBool("extend")
+		mouse, _ := cmd.Flags().GetBool("mouse")
 		if extend {
 			logging.Debug().Bool("extend", extend).Msg("cross-monitor focus enabled")
 		}
-		return focusDirectionHelper(gridTypes.DirRight, wrap, extend)
+		return focusDirectionHelper(gridTypes.DirRight, wrap, extend, mouse)
 	},
 }
 
@@ -1558,10 +1589,11 @@ var focusUpCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		wrap, _ := cmd.Flags().GetBool("wrap")
 		extend, _ := cmd.Flags().GetBool("extend")
+		mouse, _ := cmd.Flags().GetBool("mouse")
 		if extend {
 			logging.Debug().Bool("extend", extend).Msg("cross-monitor focus enabled")
 		}
-		return focusDirectionHelper(gridTypes.DirUp, wrap, extend)
+		return focusDirectionHelper(gridTypes.DirUp, wrap, extend, mouse)
 	},
 }
 
@@ -1573,15 +1605,16 @@ var focusDownCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		wrap, _ := cmd.Flags().GetBool("wrap")
 		extend, _ := cmd.Flags().GetBool("extend")
+		mouse, _ := cmd.Flags().GetBool("mouse")
 		if extend {
 			logging.Debug().Bool("extend", extend).Msg("cross-monitor focus enabled")
 		}
-		return focusDirectionHelper(gridTypes.DirDown, wrap, extend)
+		return focusDirectionHelper(gridTypes.DirDown, wrap, extend, mouse)
 	},
 }
 
 // moveWindowDirectionHelper is a helper function for directional window move commands
-func moveWindowDirectionHelper(direction gridTypes.Direction, wrapAround bool, extend bool, windowID uint32) error {
+func moveWindowDirectionHelper(direction gridTypes.Direction, wrapAround bool, extend bool, windowID uint32, mouse bool) error {
 	cfg, err := gridConfig.LoadConfig("")
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
@@ -1626,6 +1659,59 @@ func moveWindowDirectionHelper(direction gridTypes.Direction, wrapAround bool, e
 		successColor.Printf("Moved window %d: %s -> %s\n",
 			result.WindowID, result.SourceCell, result.TargetCell)
 	}
+
+	// Optionally warp mouse to moved window
+	if mouse && result.WindowID != 0 {
+		if err := gridMouse.WarpToWindow(ctx, c, result.WindowID); err != nil {
+			errorColor.Printf("⚠ Mouse warp failed: %v\n", err)
+		}
+	}
+
+	return nil
+}
+
+// swapWindowDirectionHelper is a helper function for directional window swap commands
+func swapWindowDirectionHelper(direction gridTypes.Direction, mouse bool) error {
+	cfg, err := gridConfig.LoadConfig("")
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	runtimeState, err := gridState.LoadState()
+	if err != nil {
+		return fmt.Errorf("failed to load state: %w", err)
+	}
+
+	c := client.NewClient(socketPath, timeout)
+	defer c.Close()
+
+	ctx := context.Background()
+
+	// 1. Fetch server state ONCE
+	snap, err := gridServer.Fetch(ctx, c)
+	if err != nil {
+		return fmt.Errorf("failed to fetch server state: %w", err)
+	}
+
+	// 2. Reconcile local state with server
+	if err := gridReconcile.Sync(snap, runtimeState); err != nil {
+		return fmt.Errorf("failed to reconcile state: %w", err)
+	}
+
+	// 3. Swap window
+	if err := gridCell.SwapWindow(ctx, c, snap, cfg, runtimeState, direction); err != nil {
+		return fmt.Errorf("failed to swap window: %w", err)
+	}
+
+	successColor.Printf("Swapped window %s\n", direction.String())
+
+	// Optionally warp mouse to focused window
+	if mouse && snap.FocusedWindowID != 0 {
+		if err := gridMouse.WarpToWindow(ctx, c, snap.FocusedWindowID); err != nil {
+			errorColor.Printf("⚠ Mouse warp failed: %v\n", err)
+		}
+	}
+
 	return nil
 }
 
@@ -1645,10 +1731,11 @@ var windowMoveLeftCmd = &cobra.Command{
 		wrap, _ := cmd.Flags().GetBool("wrap")
 		extend, _ := cmd.Flags().GetBool("extend")
 		windowID, _ := cmd.Flags().GetUint32("window-id")
+		mouse, _ := cmd.Flags().GetBool("mouse")
 		if extend {
 			logging.Debug().Bool("extend", extend).Msg("cross-monitor window move enabled")
 		}
-		return moveWindowDirectionHelper(gridTypes.DirLeft, wrap, extend, windowID)
+		return moveWindowDirectionHelper(gridTypes.DirLeft, wrap, extend, windowID, mouse)
 	},
 }
 
@@ -1661,10 +1748,11 @@ var windowMoveRightCmd = &cobra.Command{
 		wrap, _ := cmd.Flags().GetBool("wrap")
 		extend, _ := cmd.Flags().GetBool("extend")
 		windowID, _ := cmd.Flags().GetUint32("window-id")
+		mouse, _ := cmd.Flags().GetBool("mouse")
 		if extend {
 			logging.Debug().Bool("extend", extend).Msg("cross-monitor window move enabled")
 		}
-		return moveWindowDirectionHelper(gridTypes.DirRight, wrap, extend, windowID)
+		return moveWindowDirectionHelper(gridTypes.DirRight, wrap, extend, windowID, mouse)
 	},
 }
 
@@ -1677,10 +1765,11 @@ var windowMoveUpCmd = &cobra.Command{
 		wrap, _ := cmd.Flags().GetBool("wrap")
 		extend, _ := cmd.Flags().GetBool("extend")
 		windowID, _ := cmd.Flags().GetUint32("window-id")
+		mouse, _ := cmd.Flags().GetBool("mouse")
 		if extend {
 			logging.Debug().Bool("extend", extend).Msg("cross-monitor window move enabled")
 		}
-		return moveWindowDirectionHelper(gridTypes.DirUp, wrap, extend, windowID)
+		return moveWindowDirectionHelper(gridTypes.DirUp, wrap, extend, windowID, mouse)
 	},
 }
 
@@ -1693,10 +1782,67 @@ var windowMoveDownCmd = &cobra.Command{
 		wrap, _ := cmd.Flags().GetBool("wrap")
 		extend, _ := cmd.Flags().GetBool("extend")
 		windowID, _ := cmd.Flags().GetUint32("window-id")
+		mouse, _ := cmd.Flags().GetBool("mouse")
 		if extend {
 			logging.Debug().Bool("extend", extend).Msg("cross-monitor window move enabled")
 		}
-		return moveWindowDirectionHelper(gridTypes.DirDown, wrap, extend, windowID)
+		return moveWindowDirectionHelper(gridTypes.DirDown, wrap, extend, windowID, mouse)
+	},
+}
+
+// windowSwapCmd is the parent command for window swap operations
+var windowSwapCmd = &cobra.Command{
+	Use:   "swap",
+	Short: "Swap window with adjacent window in cell",
+	Long: `Commands for swapping window positions within the same cell.
+Direction is interpreted based on the cell's stack mode:
+- vertical stacking: up/down swap with adjacent windows
+- horizontal stacking: left/right swap with adjacent windows
+- tabs: left/right cycle through window order
+All directions wrap around at edges.`,
+}
+
+// windowSwapLeftCmd swaps window with the one to its left
+var windowSwapLeftCmd = &cobra.Command{
+	Use:   "left",
+	Short: "Swap with window to the left (or previous in stack)",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		mouse, _ := cmd.Flags().GetBool("mouse")
+		return swapWindowDirectionHelper(gridTypes.DirLeft, mouse)
+	},
+}
+
+// windowSwapRightCmd swaps window with the one to its right
+var windowSwapRightCmd = &cobra.Command{
+	Use:   "right",
+	Short: "Swap with window to the right (or next in stack)",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		mouse, _ := cmd.Flags().GetBool("mouse")
+		return swapWindowDirectionHelper(gridTypes.DirRight, mouse)
+	},
+}
+
+// windowSwapUpCmd swaps window with the one above
+var windowSwapUpCmd = &cobra.Command{
+	Use:   "up",
+	Short: "Swap with window above (or previous in stack)",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		mouse, _ := cmd.Flags().GetBool("mouse")
+		return swapWindowDirectionHelper(gridTypes.DirUp, mouse)
+	},
+}
+
+// windowSwapDownCmd swaps window with the one below
+var windowSwapDownCmd = &cobra.Command{
+	Use:   "down",
+	Short: "Swap with window below (or next in stack)",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		mouse, _ := cmd.Flags().GetBool("mouse")
+		return swapWindowDirectionHelper(gridTypes.DirDown, mouse)
 	},
 }
 
@@ -1707,6 +1853,7 @@ var focusNextCmd = &cobra.Command{
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		logging.Info().Str("cmd", "focus-next").Msg("starting")
+		mouse, _ := cmd.Flags().GetBool("mouse")
 
 		runtimeState, err := gridState.LoadState()
 		if err != nil {
@@ -1745,6 +1892,13 @@ var focusNextCmd = &cobra.Command{
 		} else {
 			logging.Info().Str("cmd", "focus-next").Int("window_id", int(windowID)).Msg("focused window")
 			successColor.Printf("✓ Focused window: %d\n", windowID)
+
+			// 4. Optionally warp mouse to focused window
+			if mouse {
+				if err := gridMouse.WarpToWindow(ctx, c, windowID); err != nil {
+					errorColor.Printf("⚠ Mouse warp failed: %v\n", err)
+				}
+			}
 		}
 		return nil
 	},
@@ -1757,6 +1911,7 @@ var focusPrevCmd = &cobra.Command{
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		logging.Info().Str("cmd", "focus-prev").Msg("starting")
+		mouse, _ := cmd.Flags().GetBool("mouse")
 
 		runtimeState, err := gridState.LoadState()
 		if err != nil {
@@ -1795,6 +1950,13 @@ var focusPrevCmd = &cobra.Command{
 		} else {
 			logging.Info().Str("cmd", "focus-prev").Int("window_id", int(windowID)).Msg("focused window")
 			successColor.Printf("✓ Focused window: %d\n", windowID)
+
+			// 4. Optionally warp mouse to focused window
+			if mouse {
+				if err := gridMouse.WarpToWindow(ctx, c, windowID); err != nil {
+					errorColor.Printf("⚠ Mouse warp failed: %v\n", err)
+				}
+			}
 		}
 		return nil
 	},
@@ -1807,6 +1969,7 @@ var focusCellCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cellID := args[0]
+		mouse, _ := cmd.Flags().GetBool("mouse")
 
 		runtimeState, err := gridState.LoadState()
 		if err != nil {
@@ -1836,6 +1999,80 @@ var focusCellCmd = &cobra.Command{
 		}
 
 		successColor.Printf("✓ Focused cell %s (window: %d)\n", cellID, windowID)
+
+		// 4. Optionally warp mouse to focused window
+		if mouse && windowID != 0 {
+			if err := gridMouse.WarpToWindow(ctx, c, windowID); err != nil {
+				errorColor.Printf("⚠ Mouse warp failed: %v\n", err)
+			}
+		}
+
+		return nil
+	},
+}
+
+// MARK: - Mouse Commands
+
+// mouseCmd is the parent command for mouse subcommands
+var mouseCmd = &cobra.Command{
+	Use:   "mouse",
+	Short: "Control mouse cursor position",
+	Long:  `Commands for warping the mouse cursor to windows.`,
+}
+
+// mouseCenterCmd warps mouse to currently focused window
+var mouseCenterCmd = &cobra.Command{
+	Use:   "center",
+	Short: "Move mouse cursor to center of focused window",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		c := client.NewClient(socketPath, timeout)
+		defer c.Close()
+
+		ctx := context.Background()
+
+		// Get current state to find focused window
+		snap, err := gridServer.Fetch(ctx, c)
+		if err != nil {
+			return fmt.Errorf("failed to fetch server state: %w", err)
+		}
+
+		if snap.FocusedWindowID == 0 {
+			return fmt.Errorf("no focused window")
+		}
+
+		// Warp mouse to focused window
+		if err := gridMouse.WarpToWindow(ctx, c, snap.FocusedWindowID); err != nil {
+			return fmt.Errorf("failed to warp mouse: %w", err)
+		}
+
+		successColor.Printf("✓ Mouse moved to window %d\n", snap.FocusedWindowID)
+		return nil
+	},
+}
+
+// mouseWarpCmd warps mouse to a specific window
+var mouseWarpCmd = &cobra.Command{
+	Use:   "warp <window-id>",
+	Short: "Move mouse cursor to center of specified window",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		windowID, err := strconv.ParseUint(args[0], 10, 32)
+		if err != nil {
+			return fmt.Errorf("invalid window ID: %v", err)
+		}
+
+		c := client.NewClient(socketPath, timeout)
+		defer c.Close()
+
+		ctx := context.Background()
+
+		// Warp mouse to specified window
+		if err := gridMouse.WarpToWindow(ctx, c, uint32(windowID)); err != nil {
+			return fmt.Errorf("failed to warp mouse: %w", err)
+		}
+
+		successColor.Printf("✓ Mouse moved to window %d\n", windowID)
 		return nil
 	},
 }
@@ -1851,19 +2088,16 @@ var gridResizeCmd = &cobra.Command{
 
 // resizeAdjustCmd grows or shrinks focused window
 var resizeAdjustCmd = &cobra.Command{
-	Use:       "grow|shrink [amount]",
-	Short:     "Grow or shrink focused window",
-	Args:      cobra.RangeArgs(1, 2),
-	ValidArgs: []string{"grow", "shrink"},
+	Use:     "grow [amount]",
+	Aliases: []string{"shrink"},
+	Short:   "Grow or shrink focused window",
+	Args:    cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		action := args[0]
-		if action != "grow" && action != "shrink" {
-			return fmt.Errorf("invalid action: %s (use 'grow' or 'shrink')", action)
-		}
+		action := cmd.CalledAs()
 
 		delta := gridLayout.DefaultResizeAmount
-		if len(args) > 1 {
-			parsed, err := strconv.ParseFloat(args[1], 64)
+		if len(args) > 0 {
+			parsed, err := strconv.ParseFloat(args[0], 64)
 			if err != nil {
 				return fmt.Errorf("invalid amount: %w", err)
 			}
@@ -1940,20 +2174,94 @@ var resizeResetCmd = &cobra.Command{
 			return fmt.Errorf("failed to reconcile state: %w", err)
 		}
 
-		// 3. Reset splits
+		// 3. Reset splits or cell ratios
 		resetAll, _ := cmd.Flags().GetBool("all")
-		if resetAll {
+		resetCells, _ := cmd.Flags().GetBool("cells")
+
+		if resetCells {
+			// Reset cell/track ratios
+			if err := gridLayout.ResetCellRatios(ctx, c, snap, cfg, runtimeState); err != nil {
+				return fmt.Errorf("failed to reset cell ratios: %w", err)
+			}
+			successColor.Println("✓ Reset cell ratios to layout defaults")
+		} else if resetAll {
 			if err := gridLayout.ResetAllSplits(ctx, c, snap, cfg, runtimeState); err != nil {
 				return fmt.Errorf("failed to reset all splits: %w", err)
 			}
-			successColor.Println("✓ Reset all splits to equal")
+			successColor.Println("✓ Reset all window splits to equal")
 		} else {
 			if err := gridLayout.ResetFocusedSplits(ctx, c, snap, cfg, runtimeState); err != nil {
 				return fmt.Errorf("failed to reset splits: %w", err)
 			}
-			successColor.Println("✓ Reset focused cell splits to equal")
+			successColor.Println("✓ Reset focused cell window splits to equal")
 		}
 
+		return nil
+	},
+}
+
+// resizeCellCmd adjusts cell boundaries
+var resizeCellCmd = &cobra.Command{
+	Use:   "cell <direction> [amount]",
+	Short: "Resize cell boundary in direction",
+	Long: `Resize the focused cell's boundary in the specified direction.
+
+Directions: left, right, up, down
+Amount: ratio change (default 0.1 = 10%)
+
+Examples:
+  grid resize cell right 0.1   # Grow cell rightward by 10%
+  grid resize cell left 0.05   # Grow cell leftward by 5%
+  grid resize cell up          # Grow cell upward by default amount`,
+	Args:      cobra.RangeArgs(1, 2),
+	ValidArgs: []string{"left", "right", "up", "down"},
+	RunE: func(cmd *cobra.Command, args []string) error {
+		direction := args[0]
+		if direction != "left" && direction != "right" && direction != "up" && direction != "down" {
+			return fmt.Errorf("invalid direction: %s (use left, right, up, or down)", direction)
+		}
+
+		delta := gridLayout.DefaultResizeAmount
+		if len(args) > 1 {
+			parsed, err := strconv.ParseFloat(args[1], 64)
+			if err != nil {
+				return fmt.Errorf("invalid amount: %w", err)
+			}
+			delta = parsed
+		}
+
+		cfg, err := gridConfig.LoadConfig("")
+		if err != nil {
+			return fmt.Errorf("failed to load config: %w", err)
+		}
+
+		runtimeState, err := gridState.LoadState()
+		if err != nil {
+			return fmt.Errorf("failed to load state: %w", err)
+		}
+
+		c := client.NewClient(socketPath, timeout)
+		defer c.Close()
+
+		ctx := context.Background()
+
+		// 1. Fetch server state ONCE
+		snap, err := gridServer.Fetch(ctx, c)
+		if err != nil {
+			return fmt.Errorf("failed to fetch server state: %w", err)
+		}
+
+		// 2. Reconcile local state with server
+		if err := gridReconcile.Sync(snap, runtimeState); err != nil {
+			return fmt.Errorf("failed to reconcile state: %w", err)
+		}
+
+		// 3. Adjust cell boundary
+		if err := gridLayout.AdjustCellBoundary(ctx, c, snap, cfg, runtimeState, direction, delta); err != nil {
+			return fmt.Errorf("failed to resize cell: %w", err)
+		}
+
+		successColor.Printf("✓ Resized cell (%s)\n", direction)
 		return nil
 	},
 }
@@ -2255,13 +2563,29 @@ func init() {
 	focusUpCmd.Flags().Bool("extend", false, "Extend focus to adjacent monitors when no cell exists in direction")
 	focusDownCmd.Flags().Bool("extend", false, "Extend focus to adjacent monitors when no cell exists in direction")
 
+	// Add mouse follow flags to all focus commands
+	focusLeftCmd.Flags().BoolP("mouse", "m", false, "Move mouse cursor to focused window")
+	focusRightCmd.Flags().BoolP("mouse", "m", false, "Move mouse cursor to focused window")
+	focusUpCmd.Flags().BoolP("mouse", "m", false, "Move mouse cursor to focused window")
+	focusDownCmd.Flags().BoolP("mouse", "m", false, "Move mouse cursor to focused window")
+	focusNextCmd.Flags().BoolP("mouse", "m", false, "Move mouse cursor to focused window")
+	focusPrevCmd.Flags().BoolP("mouse", "m", false, "Move mouse cursor to focused window")
+	focusCellCmd.Flags().BoolP("mouse", "m", false, "Move mouse cursor to focused window")
+
+	// Add mouse commands
+	rootCmd.AddCommand(mouseCmd)
+	mouseCmd.AddCommand(mouseCenterCmd)
+	mouseCmd.AddCommand(mouseWarpCmd)
+
 	// Add the-grid resize commands
 	rootCmd.AddCommand(gridResizeCmd)
 	gridResizeCmd.AddCommand(resizeAdjustCmd)
 	gridResizeCmd.AddCommand(resizeResetCmd)
+	gridResizeCmd.AddCommand(resizeCellCmd)
 
 	// Add resize command flags
-	resizeResetCmd.Flags().Bool("all", false, "Reset all cells, not just focused cell")
+	resizeResetCmd.Flags().Bool("all", false, "Reset all window splits, not just focused cell")
+	resizeResetCmd.Flags().Bool("cells", false, "Reset cell/track ratios to layout defaults")
 
 	// Add the-grid cell commands
 	rootCmd.AddCommand(cellCmd)
@@ -2316,6 +2640,19 @@ func init() {
 		cmd.Flags().Bool("wrap", true, "Wrap around to opposite edge")
 		cmd.Flags().Bool("extend", false, "Extend to adjacent monitors")
 		cmd.Flags().Uint32("window-id", 0, "Window ID to move (default: focused window)")
+		cmd.Flags().BoolP("mouse", "m", false, "Move mouse cursor to moved window")
+	}
+
+	// Add window swap command and subcommands
+	windowCmd.AddCommand(windowSwapCmd)
+	windowSwapCmd.AddCommand(windowSwapLeftCmd)
+	windowSwapCmd.AddCommand(windowSwapRightCmd)
+	windowSwapCmd.AddCommand(windowSwapUpCmd)
+	windowSwapCmd.AddCommand(windowSwapDownCmd)
+
+	// Add flags for window swap commands
+	for _, cmd := range []*cobra.Command{windowSwapLeftCmd, windowSwapRightCmd, windowSwapUpCmd, windowSwapDownCmd} {
+		cmd.Flags().BoolP("mouse", "m", false, "Move mouse cursor to swapped window")
 	}
 
 	// Add space subcommands

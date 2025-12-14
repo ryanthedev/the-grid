@@ -145,20 +145,26 @@ func NormalizeRatios(ratios []float64) []float64 {
 //
 // Parameters:
 //   - calculatedLayout: Pre-calculated layout with cell bounds
+//   - layout: The layout definition (for padding and windowSpacing information)
 //   - assignments: Map of cellID -> ordered list of window IDs
 //   - cellModes: Per-cell stack mode overrides (nil uses defaultMode)
 //   - cellRatios: Per-cell split ratios (nil uses equal splits)
 //   - defaultMode: Default stack mode if not specified in cellModes
-//   - padding: Padding between windows in pixels
+//   - baseSpacing: Base spacing unit for resolving "Nx" padding/spacing values
+//   - settingsPadding: Global default padding from settings (nil = no default)
+//   - settingsWindowSpacing: Global default window spacing from settings (nil = no default)
 //
 // Returns: Array of WindowPlacement for all windows
 func CalculateAllWindowPlacements(
 	calculatedLayout *types.CalculatedLayout,
+	layout *types.Layout,
 	assignments map[string][]uint32,
 	cellModes map[string]types.StackMode,
 	cellRatios map[string][]float64,
 	defaultMode types.StackMode,
-	padding float64,
+	baseSpacing float64,
+	settingsPadding *types.Padding,
+	settingsWindowSpacing *types.PaddingValue,
 ) []types.WindowPlacement {
 	if calculatedLayout == nil {
 		return nil
@@ -172,6 +178,13 @@ func CalculateAllWindowPlacements(
 			continue
 		}
 
+		// Apply cell padding inset (cell -> layout -> settings hierarchy)
+		cellPadding := getEffectivePadding(layout, cellID, settingsPadding)
+		if cellPadding != nil {
+			resolved := cellPadding.Resolve(baseSpacing)
+			cellBounds = applyPaddingInset(cellBounds, resolved)
+		}
+
 		// Determine stack mode for this cell
 		mode := defaultMode
 		if cellModes != nil {
@@ -180,16 +193,23 @@ func CalculateAllWindowPlacements(
 			}
 		}
 
-		// Get split ratios for this cell
+		// Get split ratios for this cell, adjusting for actual window count
 		var ratios []float64
 		if cellRatios != nil {
 			if r, ok := cellRatios[cellID]; ok {
-				ratios = r
+				// Adjust ratios if window count changed (e.g., transient window disappeared)
+				ratios = AdjustRatiosForWindowCount(r, len(windowIDs))
 			}
 		}
 
-		// Calculate window bounds
-		windowBounds := CalculateWindowBounds(cellBounds, len(windowIDs), mode, ratios, padding)
+		// Determine window spacing for this cell (cell -> layout -> settings hierarchy)
+		windowSpacing := float64(0)
+		if ws := getEffectiveWindowSpacing(layout, cellID, settingsWindowSpacing); ws != nil {
+			windowSpacing = ws.Resolve(baseSpacing)
+		}
+
+		// Calculate window bounds within the (possibly padded) cell
+		windowBounds := CalculateWindowBounds(cellBounds, len(windowIDs), mode, ratios, windowSpacing)
 
 		// Create placements
 		for i, windowID := range windowIDs {
@@ -203,4 +223,98 @@ func CalculateAllWindowPlacements(
 	}
 
 	return placements
+}
+
+// getEffectivePadding returns the effective padding for a cell.
+// Priority: cell override > layout default > settings default
+func getEffectivePadding(layout *types.Layout, cellID string, settingsPadding *types.Padding) *types.Padding {
+	if layout != nil {
+		// Check cell-level override first
+		for _, cell := range layout.Cells {
+			if cell.ID == cellID && cell.Padding != nil {
+				return cell.Padding
+			}
+		}
+		// Fall back to layout default
+		if layout.Padding != nil {
+			return layout.Padding
+		}
+	}
+	// Fall back to settings default
+	return settingsPadding
+}
+
+// getEffectiveWindowSpacing returns the effective window spacing for a cell.
+// Priority: cell override > layout default > settings default
+func getEffectiveWindowSpacing(layout *types.Layout, cellID string, settingsSpacing *types.PaddingValue) *types.PaddingValue {
+	if layout != nil {
+		// Check cell-level override first
+		for _, cell := range layout.Cells {
+			if cell.ID == cellID && cell.WindowSpacing != nil {
+				return cell.WindowSpacing
+			}
+		}
+		// Fall back to layout default
+		if layout.WindowSpacing != nil {
+			return layout.WindowSpacing
+		}
+	}
+	// Fall back to settings default
+	return settingsSpacing
+}
+
+// applyPaddingInset shrinks bounds by the resolved padding values.
+func applyPaddingInset(bounds types.Rect, p types.ResolvedPadding) types.Rect {
+	return types.Rect{
+		X:      bounds.X + p.Left,
+		Y:      bounds.Y + p.Top,
+		Width:  max(0, bounds.Width-p.Left-p.Right),
+		Height: max(0, bounds.Height-p.Top-p.Bottom),
+	}
+}
+
+// AdjustRatiosForWindowCount adjusts split ratios when window count changes.
+// Preserves relative proportions instead of falling back to equal splits.
+//
+// When shrinking: drops the last N ratios and renormalizes remaining to sum to 1.0
+// When growing: takes space equally from all existing ratios for new windows
+// When same: returns original ratios normalized
+func AdjustRatiosForWindowCount(ratios []float64, newCount int) []float64 {
+	if newCount <= 0 {
+		return nil
+	}
+
+	// If no ratios provided, return equal ratios
+	if len(ratios) == 0 {
+		return equalRatios(newCount)
+	}
+
+	oldCount := len(ratios)
+
+	// Same count - just normalize
+	if oldCount == newCount {
+		return NormalizeRatios(ratios)
+	}
+
+	// Shrinking: drop last ratios, renormalize
+	if newCount < oldCount {
+		truncated := make([]float64, newCount)
+		copy(truncated, ratios[:newCount])
+		return NormalizeRatios(truncated)
+	}
+
+	// Growing: take equal space from each existing ratio for new windows
+	// New windows get equal share of the total
+	newRatio := 1.0 / float64(newCount)           // Each new window gets this
+	shrinkFactor := float64(oldCount) / float64(newCount)  // Scale existing ratios down
+
+	result := make([]float64, newCount)
+	for i := 0; i < oldCount; i++ {
+		result[i] = ratios[i] * shrinkFactor
+	}
+	for i := oldCount; i < newCount; i++ {
+		result[i] = newRatio
+	}
+
+	return NormalizeRatios(result)
 }

@@ -14,17 +14,17 @@ import (
 
 // ApplyLayoutOptions configures layout application
 type ApplyLayoutOptions struct {
-	Strategy types.AssignmentStrategy // Window assignment strategy
-	Gap      float64                  // Gap between cells in pixels
-	Padding  float64                  // Padding between windows in same cell
+	Strategy              types.AssignmentStrategy // Window assignment strategy
+	BaseSpacing           float64                  // Base unit for "Nx" padding syntax
+	SettingsPadding       *types.Padding           // Global default padding from settings
+	SettingsWindowSpacing *types.PaddingValue      // Global default window spacing from settings
 }
 
 // DefaultApplyOptions returns sensible default options
 func DefaultApplyOptions() ApplyLayoutOptions {
 	return ApplyLayoutOptions{
-		Strategy: types.AssignPosition,
-		Gap:      8,
-		Padding:  4,
+		Strategy:    types.AssignPosition,
+		BaseSpacing: 8, // Default base spacing unit
 	}
 }
 
@@ -50,11 +50,29 @@ func ApplyLayout(
 
 	logging.Info().Str("layout", layoutID).Str("space", snap.SpaceID).Msg("applying layout")
 
-	// 2. Calculate grid layout using snapshot's display bounds
-	calculatedLayout := CalculateLayout(layout, snap.DisplayBounds, opts.Gap)
+	// 2. Get existing track ratios if reapplying same layout
+	var columnRatios, rowRatios []float64
+	existingState := rs.GetSpaceReadOnly(snap.SpaceID)
+	if existingState != nil && existingState.CurrentLayoutID == layoutID {
+		// Preserve existing track ratios when reapplying same layout
+		columnRatios = existingState.ColumnRatios
+		rowRatios = existingState.RowRatios
+	}
 
-	// 3. Convert snapshot windows to layout windows
-	windows := convertWindows(snap.Windows)
+	// 3. Calculate grid layout using snapshot's display bounds (gap=0, padding handles spacing)
+	calculatedLayout := CalculateLayoutWithRatios(layout, snap.DisplayBounds, 0, columnRatios, rowRatios)
+
+	// 4. Filter and convert windows (exclude transient windows)
+	exclusions := cfg.GetWindowExclusions()
+	tileableWindows := snap.FilterTileable(exclusions)
+	windows := convertWindows(tileableWindows)
+
+	// DEBUG: Log tileable window IDs
+	var tileableIDs []uint32
+	for _, w := range tileableWindows {
+		tileableIDs = append(tileableIDs, w.ID)
+	}
+	logging.Debug().Interface("tileableWindowIDs", tileableIDs).Int("count", len(tileableIDs)).Msg("filtered tileable windows")
 
 	// 4. Get previous assignments from local state
 	spaceState := rs.GetSpace(snap.SpaceID)
@@ -62,6 +80,9 @@ func ApplyLayout(
 	for cellID, cellState := range spaceState.Cells {
 		previousAssignments[cellID] = cellState.Windows
 	}
+
+	// DEBUG: Log previous assignments from state (may contain ghost windows)
+	logging.Debug().Interface("previousAssignments", previousAssignments).Msg("loaded previous assignments from state")
 
 	// 5. Assign windows to cells
 	assignment := AssignWindows(
@@ -72,6 +93,9 @@ func ApplyLayout(
 		previousAssignments,
 		opts.Strategy,
 	)
+
+	// DEBUG: Log new assignments (should only contain existing windows)
+	logging.Debug().Interface("newAssignments", assignment.Assignments).Msg("computed new assignments")
 
 	// 6. Get cell modes and ratios from config/state
 	cellModes := make(map[string]types.StackMode)
@@ -102,15 +126,49 @@ func ApplyLayout(
 		}
 	}
 
+	// 6b. Adjust ratios to match actual assignment counts
+	// This handles cases where windows disappeared between state save and now
+	for cellID, windowIDs := range assignment.Assignments {
+		if existingRatios, ok := cellRatios[cellID]; ok {
+			if len(existingRatios) != len(windowIDs) {
+				logging.Debug().
+					Str("cell", cellID).
+					Int("ratioCount", len(existingRatios)).
+					Int("windowCount", len(windowIDs)).
+					Interface("oldRatios", existingRatios).
+					Msg("MISMATCH: adjusting ratios for window count change")
+				cellRatios[cellID] = AdjustRatiosForWindowCount(existingRatios, len(windowIDs))
+				logging.Debug().
+					Str("cell", cellID).
+					Interface("newRatios", cellRatios[cellID]).
+					Msg("adjusted ratios")
+			}
+		}
+	}
+
 	// 7. Calculate window placements
 	placements := CalculateAllWindowPlacements(
 		calculatedLayout,
+		layout,
 		assignment.Assignments,
 		cellModes,
 		cellRatios,
 		cfg.Settings.DefaultStackMode,
-		opts.Padding,
+		opts.BaseSpacing,
+		opts.SettingsPadding,
+		opts.SettingsWindowSpacing,
 	)
+
+	// DEBUG: Log final placements
+	for _, p := range placements {
+		logging.Debug().
+			Uint32("windowID", p.WindowID).
+			Float64("x", p.Bounds.X).
+			Float64("y", p.Bounds.Y).
+			Float64("w", p.Bounds.Width).
+			Float64("h", p.Bounds.Height).
+			Msg("placement")
+	}
 
 	// 8. Apply placements via server
 	if err := ApplyPlacements(ctx, c, placements); err != nil {
@@ -118,7 +176,14 @@ func ApplyLayout(
 	}
 
 	// 9. Update local state
-	spaceState.SetCurrentLayout(layoutID, findLayoutIndex(cfg, layoutID))
+	// Only call SetCurrentLayout (which clears ratios) if switching to a different layout
+	if existingState == nil || existingState.CurrentLayoutID != layoutID {
+		spaceState.SetCurrentLayout(layoutID, findLayoutIndex(cfg, layoutID))
+	} else {
+		// Same layout - preserve track ratios, just update other fields
+		spaceState.CurrentLayoutID = layoutID
+		spaceState.LayoutIndex = findLayoutIndex(cfg, layoutID)
+	}
 	rs.SetWindowAssignments(snap.SpaceID, assignment.Assignments)
 	rs.MarkUpdated()
 
@@ -166,14 +231,21 @@ func convertWindows(windows []server.WindowInfo) []Window {
 	result := make([]Window, 0, len(windows))
 	for _, w := range windows {
 		result = append(result, Window{
-			ID:          w.ID,
-			Title:       w.Title,
-			AppName:     w.AppName,
-			BundleID:    w.BundleID,
-			Frame:       w.Frame,
-			IsMinimized: w.IsMinimized,
-			IsHidden:    w.IsHidden,
-			Level:       w.Level,
+			ID:                  w.ID,
+			Title:               w.Title,
+			AppName:             w.AppName,
+			BundleID:            w.BundleID,
+			Frame:               w.Frame,
+			IsMinimized:         w.IsMinimized,
+			IsHidden:            w.IsHidden,
+			Level:               w.Level,
+			Role:                w.Role,
+			Subrole:             w.Subrole,
+			HasCloseButton:      w.HasCloseButton,
+			HasFullscreenButton: w.HasFullscreenButton,
+			HasMinimizeButton:   w.HasMinimizeButton,
+			HasZoomButton:       w.HasZoomButton,
+			IsModal:             w.IsModal,
 		})
 	}
 	return result
