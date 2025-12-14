@@ -1671,7 +1671,7 @@ func moveWindowDirectionHelper(direction gridTypes.Direction, wrapAround bool, e
 }
 
 // swapWindowDirectionHelper is a helper function for directional window swap commands
-func swapWindowDirectionHelper(direction gridTypes.Direction) error {
+func swapWindowDirectionHelper(direction gridTypes.Direction, mouse bool) error {
 	cfg, err := gridConfig.LoadConfig("")
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
@@ -1704,6 +1704,14 @@ func swapWindowDirectionHelper(direction gridTypes.Direction) error {
 	}
 
 	successColor.Printf("Swapped window %s\n", direction.String())
+
+	// Optionally warp mouse to focused window
+	if mouse && snap.FocusedWindowID != 0 {
+		if err := gridMouse.WarpToWindow(ctx, c, snap.FocusedWindowID); err != nil {
+			errorColor.Printf("⚠ Mouse warp failed: %v\n", err)
+		}
+	}
+
 	return nil
 }
 
@@ -1800,7 +1808,8 @@ var windowSwapLeftCmd = &cobra.Command{
 	Short: "Swap with window to the left (or previous in stack)",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return swapWindowDirectionHelper(gridTypes.DirLeft)
+		mouse, _ := cmd.Flags().GetBool("mouse")
+		return swapWindowDirectionHelper(gridTypes.DirLeft, mouse)
 	},
 }
 
@@ -1810,7 +1819,8 @@ var windowSwapRightCmd = &cobra.Command{
 	Short: "Swap with window to the right (or next in stack)",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return swapWindowDirectionHelper(gridTypes.DirRight)
+		mouse, _ := cmd.Flags().GetBool("mouse")
+		return swapWindowDirectionHelper(gridTypes.DirRight, mouse)
 	},
 }
 
@@ -1820,7 +1830,8 @@ var windowSwapUpCmd = &cobra.Command{
 	Short: "Swap with window above (or previous in stack)",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return swapWindowDirectionHelper(gridTypes.DirUp)
+		mouse, _ := cmd.Flags().GetBool("mouse")
+		return swapWindowDirectionHelper(gridTypes.DirUp, mouse)
 	},
 }
 
@@ -1830,7 +1841,8 @@ var windowSwapDownCmd = &cobra.Command{
 	Short: "Swap with window below (or next in stack)",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return swapWindowDirectionHelper(gridTypes.DirDown)
+		mouse, _ := cmd.Flags().GetBool("mouse")
+		return swapWindowDirectionHelper(gridTypes.DirDown, mouse)
 	},
 }
 
@@ -2640,6 +2652,11 @@ func init() {
 	windowSwapCmd.AddCommand(windowSwapRightCmd)
 	windowSwapCmd.AddCommand(windowSwapUpCmd)
 	windowSwapCmd.AddCommand(windowSwapDownCmd)
+
+	// Add flags for window swap commands
+	for _, cmd := range []*cobra.Command{windowSwapLeftCmd, windowSwapRightCmd, windowSwapUpCmd, windowSwapDownCmd} {
+		cmd.Flags().BoolP("mouse", "m", false, "Move mouse cursor to swapped window")
+	}
 
 	// Add space subcommands
 	spaceCmd.AddCommand(spaceCreateCmd)
