@@ -41,6 +41,12 @@ type WindowInfo struct {
 	IsHidden    bool
 	Role        string // AX role (e.g., "AXWindow", "AXHelpTag")
 	Subrole     string // AX subrole (e.g., "AXStandardWindow", "AXDialog")
+	// Button presence for floating window detection
+	HasCloseButton      bool
+	HasFullscreenButton bool
+	HasMinimizeButton   bool
+	HasZoomButton       bool
+	IsModal             bool
 }
 
 // IsTileable returns true if the window should be included in tiling.
