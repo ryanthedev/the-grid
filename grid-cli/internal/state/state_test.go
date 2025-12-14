@@ -539,6 +539,86 @@ func TestSetWindowAssignments(t *testing.T) {
 	}
 }
 
+func TestSetWindowAssignments_PreservesRatios(t *testing.T) {
+	state := NewRuntimeState()
+
+	// Initial assignment
+	assignments := map[string][]uint32{
+		"left": {123, 456},
+	}
+	state.SetWindowAssignments("1", assignments)
+
+	// Set custom split ratios (simulating resize)
+	space := state.GetSpace("1")
+	cell := space.GetCell("left")
+	cell.SplitRatios = []float64{0.7, 0.3}
+	cell.StackMode = "horizontal"
+
+	// Re-apply same assignments (simulates ReapplyLayout)
+	state.SetWindowAssignments("1", assignments)
+
+	// Verify ratios are preserved
+	ratios := state.GetCellSplitRatios("1", "left")
+	if len(ratios) != 2 {
+		t.Fatalf("expected 2 ratios, got %d", len(ratios))
+	}
+	if ratios[0] != 0.7 || ratios[1] != 0.3 {
+		t.Errorf("ratios not preserved: expected [0.7, 0.3], got %v", ratios)
+	}
+
+	// Verify stack mode is preserved
+	mode := state.GetCellStackMode("1", "left")
+	if mode != "horizontal" {
+		t.Errorf("stack mode not preserved: expected horizontal, got %s", mode)
+	}
+}
+
+func TestSetWindowAssignments_AdjustsRatiosOnCountChange(t *testing.T) {
+	state := NewRuntimeState()
+
+	// Initial assignment with 3 windows
+	assignments := map[string][]uint32{
+		"left": {123, 456, 789},
+	}
+	state.SetWindowAssignments("1", assignments)
+
+	// Set custom split ratios
+	space := state.GetSpace("1")
+	cell := space.GetCell("left")
+	cell.SplitRatios = []float64{0.5, 0.3, 0.2}
+
+	// Window removed - now only 2 windows
+	newAssignments := map[string][]uint32{
+		"left": {123, 456},
+	}
+	state.SetWindowAssignments("1", newAssignments)
+
+	// Ratios should be adjusted (first 2 normalized), not reset to equal
+	ratios := state.GetCellSplitRatios("1", "left")
+	if len(ratios) != 2 {
+		t.Fatalf("expected 2 ratios, got %d", len(ratios))
+	}
+
+	// [0.5, 0.3] normalized = [0.5/0.8, 0.3/0.8] = [0.625, 0.375]
+	expectedFirst := 0.625
+	expectedSecond := 0.375
+	tolerance := 0.001
+
+	if abs(ratios[0]-expectedFirst) > tolerance {
+		t.Errorf("first ratio incorrect: expected ~%.3f, got %.3f", expectedFirst, ratios[0])
+	}
+	if abs(ratios[1]-expectedSecond) > tolerance {
+		t.Errorf("second ratio incorrect: expected ~%.3f, got %.3f", expectedSecond, ratios[1])
+	}
+}
+
+func abs(x float64) float64 {
+	if x < 0 {
+		return -x
+	}
+	return x
+}
+
 func TestHasState(t *testing.T) {
 	state := NewRuntimeState()
 

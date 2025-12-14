@@ -2088,19 +2088,16 @@ var gridResizeCmd = &cobra.Command{
 
 // resizeAdjustCmd grows or shrinks focused window
 var resizeAdjustCmd = &cobra.Command{
-	Use:       "grow|shrink [amount]",
-	Short:     "Grow or shrink focused window",
-	Args:      cobra.RangeArgs(1, 2),
-	ValidArgs: []string{"grow", "shrink"},
+	Use:     "grow [amount]",
+	Aliases: []string{"shrink"},
+	Short:   "Grow or shrink focused window",
+	Args:    cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		action := args[0]
-		if action != "grow" && action != "shrink" {
-			return fmt.Errorf("invalid action: %s (use 'grow' or 'shrink')", action)
-		}
+		action := cmd.CalledAs()
 
 		delta := gridLayout.DefaultResizeAmount
-		if len(args) > 1 {
-			parsed, err := strconv.ParseFloat(args[1], 64)
+		if len(args) > 0 {
+			parsed, err := strconv.ParseFloat(args[0], 64)
 			if err != nil {
 				return fmt.Errorf("invalid amount: %w", err)
 			}

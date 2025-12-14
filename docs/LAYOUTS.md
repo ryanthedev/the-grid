@@ -338,6 +338,8 @@ grid resize reset                # Reset splits in focused cell
 grid resize reset --all          # Reset all splits in layout
 ```
 
+See [RESIZE.md](RESIZE.md) for complete resize documentation including cell boundary adjustments.
+
 ### Configuration
 
 ```bash
