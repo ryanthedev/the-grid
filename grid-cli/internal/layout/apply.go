@@ -67,12 +67,22 @@ func ApplyLayout(
 	tileableWindows := snap.FilterTileable(exclusions)
 	windows := convertWindows(tileableWindows)
 
+	// DEBUG: Log tileable window IDs
+	var tileableIDs []uint32
+	for _, w := range tileableWindows {
+		tileableIDs = append(tileableIDs, w.ID)
+	}
+	logging.Debug().Interface("tileableWindowIDs", tileableIDs).Int("count", len(tileableIDs)).Msg("filtered tileable windows")
+
 	// 4. Get previous assignments from local state
 	spaceState := rs.GetSpace(snap.SpaceID)
 	previousAssignments := make(map[string][]uint32)
 	for cellID, cellState := range spaceState.Cells {
 		previousAssignments[cellID] = cellState.Windows
 	}
+
+	// DEBUG: Log previous assignments from state (may contain ghost windows)
+	logging.Debug().Interface("previousAssignments", previousAssignments).Msg("loaded previous assignments from state")
 
 	// 5. Assign windows to cells
 	assignment := AssignWindows(
@@ -83,6 +93,9 @@ func ApplyLayout(
 		previousAssignments,
 		opts.Strategy,
 	)
+
+	// DEBUG: Log new assignments (should only contain existing windows)
+	logging.Debug().Interface("newAssignments", assignment.Assignments).Msg("computed new assignments")
 
 	// 6. Get cell modes and ratios from config/state
 	cellModes := make(map[string]types.StackMode)
@@ -118,7 +131,17 @@ func ApplyLayout(
 	for cellID, windowIDs := range assignment.Assignments {
 		if existingRatios, ok := cellRatios[cellID]; ok {
 			if len(existingRatios) != len(windowIDs) {
+				logging.Debug().
+					Str("cell", cellID).
+					Int("ratioCount", len(existingRatios)).
+					Int("windowCount", len(windowIDs)).
+					Interface("oldRatios", existingRatios).
+					Msg("MISMATCH: adjusting ratios for window count change")
 				cellRatios[cellID] = AdjustRatiosForWindowCount(existingRatios, len(windowIDs))
+				logging.Debug().
+					Str("cell", cellID).
+					Interface("newRatios", cellRatios[cellID]).
+					Msg("adjusted ratios")
 			}
 		}
 	}
@@ -135,6 +158,17 @@ func ApplyLayout(
 		opts.SettingsPadding,
 		opts.SettingsWindowSpacing,
 	)
+
+	// DEBUG: Log final placements
+	for _, p := range placements {
+		logging.Debug().
+			Uint32("windowID", p.WindowID).
+			Float64("x", p.Bounds.X).
+			Float64("y", p.Bounds.Y).
+			Float64("w", p.Bounds.Width).
+			Float64("h", p.Bounds.Height).
+			Msg("placement")
+	}
 
 	// 8. Apply placements via server
 	if err := ApplyPlacements(ctx, c, placements); err != nil {
@@ -197,16 +231,21 @@ func convertWindows(windows []server.WindowInfo) []Window {
 	result := make([]Window, 0, len(windows))
 	for _, w := range windows {
 		result = append(result, Window{
-			ID:          w.ID,
-			Title:       w.Title,
-			AppName:     w.AppName,
-			BundleID:    w.BundleID,
-			Frame:       w.Frame,
-			IsMinimized: w.IsMinimized,
-			IsHidden:    w.IsHidden,
-			Level:       w.Level,
-			Role:        w.Role,
-			Subrole:     w.Subrole,
+			ID:                  w.ID,
+			Title:               w.Title,
+			AppName:             w.AppName,
+			BundleID:            w.BundleID,
+			Frame:               w.Frame,
+			IsMinimized:         w.IsMinimized,
+			IsHidden:            w.IsHidden,
+			Level:               w.Level,
+			Role:                w.Role,
+			Subrole:             w.Subrole,
+			HasCloseButton:      w.HasCloseButton,
+			HasFullscreenButton: w.HasFullscreenButton,
+			HasMinimizeButton:   w.HasMinimizeButton,
+			HasZoomButton:       w.HasZoomButton,
+			IsModal:             w.IsModal,
 		})
 	}
 	return result
