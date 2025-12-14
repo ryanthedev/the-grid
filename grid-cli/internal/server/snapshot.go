@@ -345,15 +345,20 @@ func parseWindow(w interface{}, spaceID string) *WindowInfo {
 
 	// Build WindowInfo
 	window := WindowInfo{
-		ID:          uint32(toFloat64(win["id"])),
-		Title:       toString(win["title"]),
-		AppName:     appName,
-		BundleID:    toString(win["bundleId"]),
-		IsMinimized: toBool(win["isMinimized"]),
-		IsHidden:    toBool(win["isHidden"]),
-		Level:       int(toFloat64(win["level"])),
-		Role:        toString(win["role"]),
-		Subrole:     toString(win["subrole"]),
+		ID:                  uint32(toFloat64(win["id"])),
+		Title:               toString(win["title"]),
+		AppName:             appName,
+		BundleID:            toString(win["bundleId"]),
+		IsMinimized:         toBool(win["isMinimized"]),
+		IsHidden:            toBool(win["isHidden"]),
+		Level:               int(toFloat64(win["level"])),
+		Role:                toString(win["role"]),
+		Subrole:             toString(win["subrole"]),
+		HasCloseButton:      toBool(win["hasCloseButton"]),
+		HasFullscreenButton: toBool(win["hasFullscreenButton"]),
+		HasMinimizeButton:   toBool(win["hasMinimizeButton"]),
+		HasZoomButton:       toBool(win["hasZoomButton"]),
+		IsModal:             toBool(win["isModal"]),
 	}
 
 	// Parse frame
