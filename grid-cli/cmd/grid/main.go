@@ -1276,6 +1276,7 @@ var layoutReapplyCmd = &cobra.Command{
 
 		// 3. Reapply layout
 		opts := gridLayout.DefaultApplyOptions()
+		opts.Strategy = gridTypes.AssignPreserve
 		opts.BaseSpacing = cfg.GetBaseSpacing()
 		if settingsPadding, err := cfg.GetSettingsPadding(); err == nil {
 			opts.SettingsPadding = settingsPadding

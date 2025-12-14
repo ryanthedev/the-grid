@@ -68,9 +68,13 @@ func AdjustFocusedSplit(
 
 	// Reapply layout to update window positions
 	opts := DefaultApplyOptions()
+	opts.Strategy = types.AssignPreserve
 	opts.BaseSpacing = cfg.GetBaseSpacing()
 	if settingsPadding, err := cfg.GetSettingsPadding(); err == nil {
 		opts.SettingsPadding = settingsPadding
+	}
+	if settingsWindowSpacing, err := cfg.GetSettingsWindowSpacing(); err == nil {
+		opts.SettingsWindowSpacing = settingsWindowSpacing
 	}
 	return ReapplyLayout(ctx, c, snap, cfg, rs, opts)
 }
@@ -107,9 +111,13 @@ func ResetFocusedSplits(
 	}
 
 	opts := DefaultApplyOptions()
+	opts.Strategy = types.AssignPreserve
 	opts.BaseSpacing = cfg.GetBaseSpacing()
 	if settingsPadding, err := cfg.GetSettingsPadding(); err == nil {
 		opts.SettingsPadding = settingsPadding
+	}
+	if settingsWindowSpacing, err := cfg.GetSettingsWindowSpacing(); err == nil {
+		opts.SettingsWindowSpacing = settingsWindowSpacing
 	}
 	return ReapplyLayout(ctx, c, snap, cfg, rs, opts)
 }
@@ -138,9 +146,13 @@ func ResetAllSplits(
 	}
 
 	opts := DefaultApplyOptions()
+	opts.Strategy = types.AssignPreserve
 	opts.BaseSpacing = cfg.GetBaseSpacing()
 	if settingsPadding, err := cfg.GetSettingsPadding(); err == nil {
 		opts.SettingsPadding = settingsPadding
+	}
+	if settingsWindowSpacing, err := cfg.GetSettingsWindowSpacing(); err == nil {
+		opts.SettingsWindowSpacing = settingsWindowSpacing
 	}
 	return ReapplyLayout(ctx, c, snap, cfg, rs, opts)
 }
@@ -197,12 +209,12 @@ func AdjustCellBoundary(
 		tracks = layout.Columns
 		currentRatios = spaceState.ColumnRatios
 		trackStart = cell.ColumnStart - 1 // Convert to 0-indexed
-		trackEnd = cell.ColumnEnd - 1
+		trackEnd = cell.ColumnEnd - 2     // End line is AFTER last column
 	} else {
 		tracks = layout.Rows
 		currentRatios = spaceState.RowRatios
 		trackStart = cell.RowStart - 1
-		trackEnd = cell.RowEnd - 1
+		trackEnd = cell.RowEnd - 2 // End line is AFTER last row
 	}
 
 	// Count flexible tracks and initialize ratios if needed
@@ -270,9 +282,13 @@ func AdjustCellBoundary(
 
 	// Reapply layout
 	opts := DefaultApplyOptions()
+	opts.Strategy = types.AssignPreserve
 	opts.BaseSpacing = cfg.GetBaseSpacing()
 	if settingsPadding, err := cfg.GetSettingsPadding(); err == nil {
 		opts.SettingsPadding = settingsPadding
+	}
+	if settingsWindowSpacing, err := cfg.GetSettingsWindowSpacing(); err == nil {
+		opts.SettingsWindowSpacing = settingsWindowSpacing
 	}
 	return ReapplyLayout(ctx, c, snap, cfg, rs, opts)
 }
@@ -300,9 +316,13 @@ func ResetCellRatios(
 	}
 
 	opts := DefaultApplyOptions()
+	opts.Strategy = types.AssignPreserve
 	opts.BaseSpacing = cfg.GetBaseSpacing()
 	if settingsPadding, err := cfg.GetSettingsPadding(); err == nil {
 		opts.SettingsPadding = settingsPadding
+	}
+	if settingsWindowSpacing, err := cfg.GetSettingsWindowSpacing(); err == nil {
+		opts.SettingsWindowSpacing = settingsWindowSpacing
 	}
 	return ReapplyLayout(ctx, c, snap, cfg, rs, opts)
 }

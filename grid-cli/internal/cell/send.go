@@ -69,6 +69,7 @@ func SendWindow(
 
 	// Reapply layout
 	opts := layout.DefaultApplyOptions()
+	opts.Strategy = types.AssignPreserve
 	opts.BaseSpacing = cfg.GetBaseSpacing()
 	if settingsPadding, err := cfg.GetSettingsPadding(); err == nil {
 		opts.SettingsPadding = settingsPadding
