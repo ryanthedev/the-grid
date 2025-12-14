@@ -448,4 +448,58 @@ func abs(x float64) float64 {
 	return x
 }
 
+// TestAdjustRatiosForWindowCount_RatioPreservation tests the specific scenario
+// where state has 3 windows with custom ratios [0.5, 0.3, 0.2], but the third
+// window disappears (e.g., a transient tooltip). The ratios should be adjusted
+// to preserve relative proportions [0.625, 0.375], not reset to equal [0.5, 0.5].
+func TestAdjustRatiosForWindowCount_RatioPreservation(t *testing.T) {
+	// Scenario: State has 3 windows with custom ratios
+	stateRatios := []float64{0.5, 0.3, 0.2}
+
+	// Third window disappeared (e.g., transient tooltip closed)
+	actualWindowCount := 2
+
+	// Adjust ratios for the new count
+	adjustedRatios := AdjustRatiosForWindowCount(stateRatios, actualWindowCount)
+
+	// Verify we get 2 ratios
+	if len(adjustedRatios) != 2 {
+		t.Fatalf("expected 2 ratios, got %d", len(adjustedRatios))
+	}
+
+	// Expected: [0.5, 0.3] normalized
+	// Sum of first two = 0.8
+	// Normalized: [0.5/0.8, 0.3/0.8] = [0.625, 0.375]
+	expected := []float64{0.625, 0.375}
+
+	for i, expectedRatio := range expected {
+		if !floatEquals(adjustedRatios[i], expectedRatio, 0.001) {
+			t.Errorf("ratio[%d] = %v, want %v (relative proportions preserved)",
+				i, adjustedRatios[i], expectedRatio)
+		}
+	}
+
+	// Verify sum is 1.0
+	sum := 0.0
+	for _, r := range adjustedRatios {
+		sum += r
+	}
+	if !floatEquals(sum, 1.0, 0.001) {
+		t.Errorf("sum of ratios = %v, want 1.0", sum)
+	}
+
+	// Verify that we did NOT get equal splits
+	equalSplit := []float64{0.5, 0.5}
+	isEqual := true
+	for i := range equalSplit {
+		if !floatEquals(adjustedRatios[i], equalSplit[i], 0.001) {
+			isEqual = false
+			break
+		}
+	}
+	if isEqual {
+		t.Error("ratios were reset to equal splits [0.5, 0.5] instead of preserving proportions [0.625, 0.375]")
+	}
+}
+
 // floatEquals is defined in grid_test.go
