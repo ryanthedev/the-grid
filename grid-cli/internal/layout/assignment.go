@@ -204,12 +204,26 @@ func shouldFloat(w Window, rules []config.AppRule) bool {
 	// Check app rules first
 	for _, rule := range rules {
 		if matchesAppRule(w, rule) && rule.Float {
+			logging.Debug().
+				Uint32("windowID", w.ID).
+				Str("app", w.AppName).
+				Str("reason", "app rule").
+				Msg("window marked as floating")
 			return true
 		}
 	}
 
 	// Use window classification with PIP detection
 	category := ClassifyWindowWithPIPDetection(w)
+	if category == WindowFloating {
+		logging.Debug().
+			Uint32("windowID", w.ID).
+			Str("app", w.AppName).
+			Bool("hasFullscreenButton", w.HasFullscreenButton).
+			Str("role", w.Role).
+			Str("subrole", w.Subrole).
+			Msg("window classified as floating")
+	}
 	return category == WindowFloating
 }
 
@@ -305,6 +319,24 @@ func assignPreserve(windows []Window, layout *types.Layout, previous map[string]
 	for cellID, windowIDs := range previous {
 		for _, wid := range windowIDs {
 			prevCellMap[wid] = cellID
+		}
+	}
+
+	// Build set of current window IDs for ghost detection
+	currentWindowSet := make(map[uint32]bool)
+	for _, w := range windows {
+		currentWindowSet[w.ID] = true
+	}
+
+	// DEBUG: Detect ghost windows (in previous but not in current)
+	for cellID, windowIDs := range previous {
+		for _, wid := range windowIDs {
+			if !currentWindowSet[wid] {
+				logging.Debug().
+					Str("cell", cellID).
+					Uint32("windowID", wid).
+					Msg("GHOST: previous assignment references non-existent window")
+			}
 		}
 	}
 
