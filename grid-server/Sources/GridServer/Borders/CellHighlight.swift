@@ -27,13 +27,13 @@ class CellHighlight {
     private(set) var isVisible: Bool = false
 
     /// Fill color (white with slight transparency)
-    var fillColor: CGColor = CGColor(red: 1.0, green: 1.0, blue: 1.0, alpha: 0.05)
+    var fillColor: CGColor = SimpleBorderConfig.highlightFillColor
 
     /// Stroke color (blue)
-    var strokeColor: CGColor = CGColor(red: 0.0, green: 0.53, blue: 1.0, alpha: 1.0) // #0088ff
+    var strokeColor: CGColor = SimpleBorderConfig.highlightStrokeColor
 
     /// Stroke width (thin border)
-    var strokeWidth: CGFloat = 2.0
+    var strokeWidth: CGFloat = SimpleBorderConfig.highlightStrokeWidth
 
     // MARK: - Event Coalescing (20ms debounce for smooth updates)
     private var updateTimer: DispatchSourceTimer?
@@ -225,6 +225,10 @@ class CellHighlight {
 
     /// Schedule an update with debouncing (use this during smooth animations)
     func scheduleUpdate(frame: CGRect) {
+        guard frame.size.width > 0 && frame.size.height > 0 else {
+            logger.warning("Ignoring invalid frame for scheduled update", metadata: ["frame": "\(frame)"])
+            return
+        }
         pendingFrame = frame
 
         updateTimer?.cancel()
