@@ -226,7 +226,11 @@ func moveFocusCrossDisplay(
 		return 0, fmt.Errorf("failed to get cells on adjacent display: %w", err)
 	}
 
-	// Get current display bounds for position mapping
+	// Get target space state for last-focused-cell lookup
+	targetSpaceIDStr := fmt.Sprintf("%v", targetSpaceID)
+	targetSpaceState := rs.GetSpaceReadOnly(targetSpaceIDStr)
+
+	// Get current display bounds for position mapping (used in fallback)
 	var currentDisplayBounds types.Rect
 	for _, d := range snap.AllDisplays {
 		if d.UUID == currentDisplayUUID {
@@ -238,23 +242,26 @@ func moveFocusCrossDisplay(
 		}
 	}
 
-	// Map visual position from current cell to target display
+	// Get target display bounds
 	currentBounds := currentCellBounds[currentCell]
 	targetDisplayBounds := adjacentDisplay.VisibleFrame
 	if targetDisplayBounds == (types.Rect{}) {
 		targetDisplayBounds = adjacentDisplay.Frame
 	}
 
-	targetPoint := MatchVisualPosition(currentBounds, currentDisplayBounds, targetDisplayBounds)
-
-	// Find closest cell to target point
-	targetCell := FindClosestCellToPoint(targetPoint, targetCellBounds)
+	// Select target cell: use last focused cell if available, otherwise closest
+	targetCell := SelectCrossDisplayTargetCell(
+		targetSpaceState,
+		targetCellBounds,
+		currentBounds,
+		currentDisplayBounds,
+		targetDisplayBounds,
+	)
 	if targetCell == "" {
 		return 0, fmt.Errorf("no cells on adjacent display")
 	}
 
 	// Focus the cell on the target space
-	targetSpaceIDStr := fmt.Sprintf("%v", targetSpaceID)
 	return focusCellByID(ctx, c, rs, targetSpaceIDStr, targetCell)
 }
 
@@ -642,6 +649,29 @@ func FindClosestCellToPoint(point types.Point, cellBounds map[string]types.Rect)
 	}
 
 	return closestCell
+}
+
+// SelectCrossDisplayTargetCell determines which cell to focus when crossing displays.
+// Uses the last focused cell on the target space if available, otherwise falls back
+// to the closest cell based on visual position mapping.
+func SelectCrossDisplayTargetCell(
+	targetSpaceState *state.SpaceState,
+	targetCellBounds map[string]types.Rect,
+	currentCellBounds types.Rect,
+	currentDisplayBounds types.Rect,
+	targetDisplayBounds types.Rect,
+) string {
+	// Check if we have a previously focused cell on the target space
+	if targetSpaceState != nil && targetSpaceState.FocusedCell != "" {
+		// Verify the cell still exists in the current layout
+		if _, exists := targetCellBounds[targetSpaceState.FocusedCell]; exists {
+			return targetSpaceState.FocusedCell
+		}
+	}
+
+	// Fall back to closest cell based on visual position mapping
+	targetPoint := MatchVisualPosition(currentCellBounds, currentDisplayBounds, targetDisplayBounds)
+	return FindClosestCellToPoint(targetPoint, targetCellBounds)
 }
 
 // GetDisplayCells calculates cell bounds for a specific display's active space.
