@@ -38,6 +38,9 @@ class StateManager {
     // Polling timer for periodic state refresh
     private var pollTimer: DispatchSourceTimer?
 
+    // Border event handler
+    var borderEvents: BorderEvents?
+
     // MARK: - Initialization
 
     private init() {
@@ -900,6 +903,9 @@ class StateManager {
             }
 
             self.state.metadata.update()
+
+            // Notify border system
+            self.borderEvents?.handleWindowCreated(windowID)
         }
     }
 
@@ -934,6 +940,9 @@ class StateManager {
             }
 
             self.state.metadata.update()
+
+            // Notify border system
+            self.borderEvents?.handleWindowDestroyed(windowID)
         }
     }
 
@@ -953,6 +962,9 @@ class StateManager {
             self.updateWindowSpaces(windowID)
 
             self.state.metadata.update()
+
+            // Notify border system
+            self.borderEvents?.handleWindowMoved(windowID, frame: frame)
         }
     }
 
@@ -968,6 +980,9 @@ class StateManager {
             window.lastUpdated = Date()
             self.state.windows[String(windowID)] = window
             self.state.metadata.update()
+
+            // Notify border system
+            self.borderEvents?.handleWindowResized(windowID, frame: frame)
         }
     }
 
@@ -1010,6 +1025,9 @@ class StateManager {
             }
 
             self.state.metadata.update()
+
+            // Notify border system
+            self.borderEvents?.handleWindowFocused(windowID)
         }
     }
 
@@ -1023,6 +1041,9 @@ class StateManager {
             window.lastUpdated = Date()
             self.state.windows[String(windowID)] = window
             self.state.metadata.update()
+
+            // Notify border system
+            self.borderEvents?.handleWindowMinimized(windowID)
         }
     }
 
@@ -1036,6 +1057,9 @@ class StateManager {
             window.lastUpdated = Date()
             self.state.windows[String(windowID)] = window
             self.state.metadata.update()
+
+            // Notify border system
+            self.borderEvents?.handleWindowDeminimized(windowID)
         }
     }
 
