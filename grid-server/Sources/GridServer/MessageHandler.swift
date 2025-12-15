@@ -10,6 +10,9 @@ class MessageHandler {
     private var handlers: [String: RequestHandler] = [:]
     private let logger: Logger
 
+    /// Border manager for handling border-related messages
+    weak var borderManager: BorderManager?
+
     init(logger: Logger) {
         self.logger = logger
         registerBuiltInHandlers()
@@ -665,6 +668,78 @@ class MessageHandler {
                 self.logger.error("Failed to warp mouse", metadata: ["error": "\(result.rawValue)"])
                 completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to warp mouse cursor")))
             }
+        }
+
+        // MARK: - Border Configuration Methods
+
+        // Configure borders
+        register(method: "borders.configure") { [weak self] request, completion in
+            guard let self = self else { return }
+            guard let params = request.params else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
+                return
+            }
+
+            guard let configDict = params["config"]?.value as? [String: Any] else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Missing config")))
+                return
+            }
+
+            guard let borderManager = self.borderManager else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32603, message: "Border manager not available")))
+                return
+            }
+
+            // Load config and update border manager
+            let borderConfig = BorderConfig.load(from: configDict)
+            borderManager.config = borderConfig
+
+            // Refresh all borders with new config
+            borderManager.refreshAllBorders()
+
+            self.logger.info("Border config updated")
+            completion(Response(id: request.id, result: AnyCodable(["success": true])))
+        }
+
+        // Set cell assignments
+        register(method: "borders.setCellAssignments") { [weak self] request, completion in
+            guard let self = self else { return }
+            guard let params = request.params else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
+                return
+            }
+
+            guard let assignmentsDict = params["assignments"]?.value as? [String: String] else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Missing assignments")))
+                return
+            }
+
+            guard let borderManager = self.borderManager else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32603, message: "Border manager not available")))
+                return
+            }
+
+            // Convert string windowIDs to UInt32
+            var cellAssignments: [UInt32: String] = [:]
+            for (widStr, cellID) in assignmentsDict {
+                if let wid = UInt32(widStr) {
+                    cellAssignments[wid] = cellID
+                }
+            }
+            borderManager.setCellAssignments(cellAssignments)
+
+            // Store per-cell overrides if provided
+            if let cellsDict = params["cells"]?.value as? [String: [String: Any]] {
+                for (cellID, cellConfig) in cellsDict {
+                    borderManager.setCellOverride(cellID: cellID, config: cellConfig)
+                }
+            }
+
+            // Refresh borders with new cell awareness
+            borderManager.refreshAllBorders()
+
+            self.logger.info("Cell assignments updated", metadata: ["count": "\(cellAssignments.count)"])
+            completion(Response(id: request.id, result: AnyCodable(["success": true])))
         }
 
     }
