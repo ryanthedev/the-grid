@@ -4,6 +4,7 @@ grid-server/.swiftpm/
 grid-server/Package.resolved
 # Go build artifacts (grid-cli)
 grid-cli/bin/
+grid-cli/thegrid
 
 # Xcode
 xcuserdata/
