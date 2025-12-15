@@ -82,3 +82,67 @@ type AppRule struct {
 	Float              bool            `yaml:"float,omitempty" json:"float,omitempty"`                     // Never tile this app
 	PreferredStackMode types.StackMode `yaml:"preferredStackMode,omitempty" json:"preferredStackMode,omitempty"`
 }
+
+// BorderConfig defines window border appearance
+type BorderConfig struct {
+	Enabled           *bool    `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	Width             *float64 `yaml:"width,omitempty" json:"width,omitempty"`
+	Style             *string  `yaml:"style,omitempty" json:"style,omitempty"`                         // round, square, uniform
+	CornerRadius      *float64 `yaml:"corner_radius,omitempty" json:"corner_radius,omitempty"`
+	Padding           *float64 `yaml:"padding,omitempty" json:"padding,omitempty"`
+	HiDPI             *bool    `yaml:"hidpi,omitempty" json:"hidpi,omitempty"`
+	ActiveWindowColor *string  `yaml:"active_window_color,omitempty" json:"active_window_color,omitempty"` // 0xAARRGGBB
+	ActiveCellColor   *string  `yaml:"active_cell_color,omitempty" json:"active_cell_color,omitempty"`
+	InactiveColor     *string  `yaml:"inactive_color,omitempty" json:"inactive_color,omitempty"`
+	Palette           []string `yaml:"palette,omitempty" json:"palette,omitempty"`
+	Whitelist         []string `yaml:"whitelist,omitempty" json:"whitelist,omitempty"`
+	Blacklist         []string `yaml:"blacklist,omitempty" json:"blacklist,omitempty"`
+}
+
+// GetEnabled returns the enabled state, defaulting to false if not set
+func (b *BorderConfig) GetEnabled() bool {
+	if b == nil || b.Enabled == nil {
+		return false
+	}
+	return *b.Enabled
+}
+
+// GetWidth returns the border width, defaulting to 5.0 if not set
+func (b *BorderConfig) GetWidth() float64 {
+	if b == nil || b.Width == nil {
+		return 5.0
+	}
+	return *b.Width
+}
+
+// GetStyle returns the border style, defaulting to "round" if not set
+func (b *BorderConfig) GetStyle() string {
+	if b == nil || b.Style == nil {
+		return "round"
+	}
+	return *b.Style
+}
+
+// GetCornerRadius returns the corner radius, defaulting to 8.0 if not set
+func (b *BorderConfig) GetCornerRadius() float64 {
+	if b == nil || b.CornerRadius == nil {
+		return 8.0
+	}
+	return *b.CornerRadius
+}
+
+// GetPadding returns the padding, defaulting to 2.0 if not set
+func (b *BorderConfig) GetPadding() float64 {
+	if b == nil || b.Padding == nil {
+		return 2.0
+	}
+	return *b.Padding
+}
+
+// GetHiDPI returns the HiDPI setting, defaulting to true if not set
+func (b *BorderConfig) GetHiDPI() bool {
+	if b == nil || b.HiDPI == nil {
+		return true
+	}
+	return *b.HiDPI
+}
