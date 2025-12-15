@@ -433,6 +433,40 @@ class StateManager {
         }
     }
 
+    /// Re-query AX properties for windows on the active space whose role is nil
+    /// Called after space change when AX may now be accessible for previously inaccessible windows
+    private func refreshAXPropertiesForActiveSpace() {
+        guard let activeSpaceID = state.metadata.activeSpaceID else { return }
+
+        for (windowKey, window) in state.windows {
+            // Only refresh if role is nil AND window is on active space
+            guard window.role == nil,
+                  window.spaces.contains(activeSpaceID) else { continue }
+
+            let axProps = getAXProperties(pid: window.pid, windowID: window.id)
+
+            // Only update if we got a valid role
+            if let role = axProps.role {
+                var updatedWindow = window
+                updatedWindow.role = role
+                updatedWindow.subrole = axProps.subrole
+                updatedWindow.parent = axProps.parent
+                updatedWindow.hasCloseButton = axProps.hasCloseButton
+                updatedWindow.hasFullscreenButton = axProps.hasFullscreenButton
+                updatedWindow.hasMinimizeButton = axProps.hasMinimizeButton
+                updatedWindow.hasZoomButton = axProps.hasZoomButton
+                updatedWindow.isModal = axProps.isModal
+                state.windows[windowKey] = updatedWindow
+
+                logger.info("🔄 Refreshed AX properties on space change", metadata: [
+                    "windowID": "\(window.id)",
+                    "role": "\(role)",
+                    "space": "\(activeSpaceID)"
+                ])
+            }
+        }
+    }
+
     private func refreshWindows() {
         let beforeCount = state.windows.count
         logger.debug("Refreshing windows...", metadata: ["current": "\(beforeCount)"])
@@ -1070,6 +1104,10 @@ class StateManager {
                 }
             }
 
+            // Re-query AX properties for windows on the new active space
+            // This populates role/subrole for windows that weren't accessible before
+            self.refreshAXPropertiesForActiveSpace()
+
             // Auto-focus the new space's last focused window
             if let spaceID = newSpaceID {
                 self.restoreFocusForSpace(spaceID)
@@ -1079,7 +1117,7 @@ class StateManager {
         }
     }
 
-    /// Update activeDisplayUUID based on which display has the focused/active space
+    /// Update activeDisplayUUID and activeSpaceID based on which display has the focused/active space
     private func updateActiveDisplayFromSpaces() {
         // Find the display that has the currently active space
         for display in state.displays {
@@ -1087,6 +1125,7 @@ class StateManager {
             if let space = state.spaces[spaceKey], space.isActive {
                 let oldUUID = state.metadata.activeDisplayUUID
                 state.metadata.activeDisplayUUID = display.uuid
+                state.metadata.activeSpaceID = display.currentSpaceID  // Fix: also set activeSpaceID
                 if oldUUID != display.uuid {
                     logger.info("🖥️  Updated activeDisplayUUID from space change", metadata: [
                         "displayUUID": "\(display.uuid)",
@@ -1247,9 +1286,25 @@ class StateManager {
 
         self.state.metadata.focusedWindowID = windowID
 
-        // Also update active display
+        // Also update active display and space
         if let displayUUID = SLSCopyManagedDisplayForWindow(self.connectionID, windowID) {
             self.state.metadata.activeDisplayUUID = displayUUID as String
+
+            // Also update activeSpaceID from this display's current space
+            let spaceID = SLSManagedDisplayGetCurrentSpace(self.connectionID, displayUUID)
+            if spaceID != 0 {
+                self.state.metadata.activeSpaceID = spaceID
+
+                // Track this as the last focused window for this space
+                let spaceKey = String(spaceID)
+                if self.state.spaces[spaceKey] != nil {
+                    self.state.spaces[spaceKey]?.lastFocusedWindowID = windowID
+                    self.logger.debug("📝 Saved lastFocusedWindowID for space", metadata: [
+                        "spaceID": "\(spaceID)",
+                        "windowID": "\(windowID)"
+                    ])
+                }
+            }
         }
     }
 

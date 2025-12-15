@@ -50,8 +50,14 @@ type WindowInfo struct {
 }
 
 // IsTileable returns true if the window should be included in tiling.
+// Requires valid AX access (Role == "AXWindow") to filter out phantom windows
+// that exist in CGWindowList but cannot be controlled via accessibility APIs.
 func (w WindowInfo) IsTileable() bool {
-	return !w.IsMinimized && !w.IsHidden && w.Level == 0
+	if w.IsMinimized || w.IsHidden || w.Level != 0 {
+		return false
+	}
+	// Must have valid AX window role - phantoms have empty role
+	return w.Role == "AXWindow"
 }
 
 // IsExcluded returns true if the window matches any exclusion criteria.
