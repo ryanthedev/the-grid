@@ -269,8 +269,8 @@ class StateManager {
         let spaceDetails = spaces.values.map { space in
             "ID:\(space.id) type:\(space.type) active:\(space.isActive)"
         }.joined(separator: " | ")
-        logger.info("🔍 DEBUG: All discovered spaces", metadata: [
-            "spaceIDs": "\(spaces.keys.sorted().joined(separator: ", "))",
+        logger.debug("Spaces discovered", metadata: [
+            "ids": "\(spaces.keys.sorted().joined(separator: ","))",
             "details": "\(spaceDetails)"
         ])
     }
@@ -325,11 +325,11 @@ class StateManager {
 
         guard windowsResult == .success,
               let windows = windowsValue as? [AXUIElement] else {
-            logger.debug("🔍 AX: Failed to get windows for pid \(pid), windowID \(windowID), error: \(windowsResult.rawValue)")
+            logger.trace("AX windows query failed", metadata: ["pid": "\(pid)", "windowID": "\(windowID)", "error": "\(windowsResult.rawValue)"])
             return props
         }
 
-        logger.debug("🔍 AX: pid \(pid) has \(windows.count) AX windows, looking for CGWindow \(windowID)")
+        logger.trace("AX window search", metadata: ["pid": "\(pid)", "axCount": "\(windows.count)", "targetCG": "\(windowID)"])
 
         // Find the matching window element
         for windowElement in windows {
@@ -384,12 +384,18 @@ class StateManager {
                     props.isModal = (modalValue as? Bool) ?? false
                 }
 
-                logger.debug("🔍 AX: Matched windowID \(windowID): role=\(props.role ?? "nil"), subrole=\(props.subrole ?? "nil"), buttons=[\(props.hasCloseButton ? "close" : "")|\(props.hasFullscreenButton ? "fs" : "")|\(props.hasMinimizeButton ? "min" : "")|\(props.hasZoomButton ? "zoom" : "")], modal=\(props.isModal)")
+                logger.debug("AX matched", metadata: [
+                    "windowID": "\(windowID)",
+                    "role": "\(props.role ?? "nil")",
+                    "subrole": "\(props.subrole ?? "nil")",
+                    "buttons": "\(props.hasCloseButton ? "c" : "")\(props.hasFullscreenButton ? "f" : "")\(props.hasMinimizeButton ? "m" : "")\(props.hasZoomButton ? "z" : "")",
+                    "modal": "\(props.isModal)"
+                ])
                 return props
             }
         }
 
-        logger.debug("🔍 AX: No AX window matched CGWindow \(windowID) in pid \(pid) (checked \(windows.count) windows)")
+        logger.trace("AX no match", metadata: ["windowID": "\(windowID)", "pid": "\(pid)", "checked": "\(windows.count)"])
         return props
     }
 
@@ -461,7 +467,7 @@ class StateManager {
                 updatedWindow.isModal = axProps.isModal
                 state.windows[windowKey] = updatedWindow
 
-                logger.info("🔄 Refreshed AX properties on space change", metadata: [
+                logger.debug("AX props refreshed on space change", metadata: [
                     "windowID": "\(window.id)",
                     "role": "\(role)",
                     "space": "\(activeSpaceID)"
@@ -484,9 +490,9 @@ class StateManager {
         }
 
         logger.debug("Found \(windowList.count) windows from CGWindowList (all spaces)")
-        logger.info("🔍 DEBUG: Starting window enumeration", metadata: [
-            "totalWindows": "\(windowList.count)",
-            "knownSpaces": "\(state.spaces.keys.sorted().joined(separator: ", "))"
+        logger.debug("Window enumeration starting", metadata: [
+            "total": "\(windowList.count)",
+            "spaces": "\(state.spaces.keys.sorted().joined(separator: ","))"
         ])
 
         var windows: [String: WindowState] = [:]
@@ -553,12 +559,10 @@ class StateManager {
             if let isSticky = mssClient.isWindowSticky(windowID), isSticky {
                 // Sticky windows are on all user spaces
                 windowState.spaces = getAllUserSpaceIDs()
-                logger.info("🔍 DEBUG: Window is sticky (on all spaces)", metadata: [
+                logger.debug("Window sticky", metadata: [
                     "windowID": "\(windowID)",
-                    "appName": "\(windowState.appName ?? "unknown")",
-                    "title": "\(String(windowState.title?.prefix(30) ?? "untitled"))",
-                    "spaces": "\(windowState.spaces)",
-                    "method": "MSS sticky detection"
+                    "app": "\(windowState.appName ?? "?")",
+                    "spaces": "\(windowState.spaces)"
                 ])
             } else {
                 // 2. Not sticky - try to get spaces using SkyLight API with properly typed CFArray
@@ -569,12 +573,10 @@ class StateManager {
                     if !spaceNumbers.isEmpty {
                         // Success - we know the actual spaces
                         windowState.spaces = spaceNumbers.map { $0.uint64Value }
-                        logger.info("🔍 DEBUG: Window space assignment", metadata: [
+                        logger.trace("Window spaces resolved", metadata: [
                             "windowID": "\(windowID)",
-                            "appName": "\(windowState.appName ?? "unknown")",
-                            "title": "\(String(windowState.title?.prefix(30) ?? "untitled"))",
-                            "spaces": "\(spaceNumbers.map { $0.uint64Value })",
-                            "method": "SLSCopySpacesForWindows"
+                            "app": "\(windowState.appName ?? "?")",
+                            "spaces": "\(spaceNumbers.map { $0.uint64Value })"
                         ])
                     } else {
                         // API returned empty - we don't know which spaces this window is on
@@ -635,7 +637,7 @@ class StateManager {
             .reduce(into: [:]) { result, pair in
                 result["space_\(pair.key)"] = Logger.MetadataValue(stringLiteral: "\(pair.value)")
             }
-        logger.info("🔍 DEBUG: Window distribution across spaces", metadata: distributionMetadata)
+        logger.debug("Window distribution", metadata: distributionMetadata)
     }
 
     // MARK: - Observer Management
@@ -746,7 +748,7 @@ class StateManager {
         // Remove windows no longer in CGWindowList
         for windowKey in state.windows.keys {
             if let windowID = UInt32(windowKey), !seenWindowIDs.contains(windowID) {
-                logger.info("📡 Poll: removing stale window", metadata: ["windowID": "\(windowID)"])
+                logger.debug("Poll removing stale window", metadata: ["windowID": "\(windowID)"])
                 // Inline removal logic (don't call handleWindowDestroyed to avoid log confusion)
                 let pid = state.windows[windowKey]?.pid
                 if state.metadata.focusedWindowID == windowID {
@@ -836,9 +838,9 @@ class StateManager {
         state.windows[String(windowID)] = window
         updateWindowSpaces(windowID)
 
-        logger.info("📡 Poll discovered window", metadata: [
+        logger.debug("Poll discovered window", metadata: [
             "windowID": "\(windowID)",
-            "app": "\(window.appName ?? "unknown")"
+            "app": "\(window.appName ?? "?")"
         ])
     }
 
@@ -846,7 +848,7 @@ class StateManager {
 
     func handleWindowCreated(_ windowID: UInt32, pid: pid_t) {
         queue.async {
-            self.logger.info("🪟 Window created", metadata: [
+            self.logger.info("Window created", metadata: [
                 "windowID": "\(windowID)",
                 "pid": "\(pid)"
             ])
@@ -912,7 +914,7 @@ class StateManager {
 
     func handleWindowDestroyed(_ windowID: UInt32) {
         queue.async {
-            self.logger.info("💀 Window destroyed", metadata: ["windowID": "\(windowID)"])
+            self.logger.info("Window destroyed", metadata: ["windowID": "\(windowID)"])
 
             // Get PID before removing window
             let pid = self.state.windows[String(windowID)]?.pid
@@ -949,9 +951,9 @@ class StateManager {
 
     func handleWindowMoved(_ windowID: UInt32, frame: CGRect) {
         queue.async {
-            self.logger.debug("→ Window moved", metadata: [
+            self.logger.debug("Window moved", metadata: [
                 "windowID": "\(windowID)",
-                "frame": "(\(frame.origin.x),\(frame.origin.y) \(frame.size.width)x\(frame.size.height))"
+                "frame": "\(Int(frame.origin.x)),\(Int(frame.origin.y)) \(Int(frame.width))x\(Int(frame.height))"
             ])
 
             guard var window = self.state.windows[String(windowID)] else { return }
@@ -971,9 +973,9 @@ class StateManager {
 
     func handleWindowResized(_ windowID: UInt32, frame: CGRect) {
         queue.async {
-            self.logger.debug("↔️ Window resized", metadata: [
+            self.logger.debug("Window resized", metadata: [
                 "windowID": "\(windowID)",
-                "frame": "(\(frame.origin.x),\(frame.origin.y) \(frame.size.width)x\(frame.size.height))"
+                "frame": "\(Int(frame.origin.x)),\(Int(frame.origin.y)) \(Int(frame.width))x\(Int(frame.height))"
             ])
 
             guard var window = self.state.windows[String(windowID)] else { return }
@@ -989,7 +991,7 @@ class StateManager {
 
     func handleWindowFocused(_ windowID: UInt32) {
         queue.async {
-            self.logger.info("🎯 Window focused", metadata: ["windowID": "\(windowID)"])
+            self.logger.info("Window focused", metadata: ["windowID": "\(windowID)"])
 
             // Store focused window ID
             self.state.metadata.focusedWindowID = windowID
@@ -1000,8 +1002,8 @@ class StateManager {
 
                 // Only log if display changed
                 if self.state.metadata.activeDisplayUUID != displayStr {
-                    self.logger.info("🖥️  Active display changed", metadata: [
-                        "displayUUID": "\(displayStr)",
+                    self.logger.info("Active display changed", metadata: [
+                        "display": "\(displayStr)",
                         "windowID": "\(windowID)"
                     ])
                 }
@@ -1017,7 +1019,7 @@ class StateManager {
                     let spaceKey = String(spaceID)
                     if self.state.spaces[spaceKey] != nil {
                         self.state.spaces[spaceKey]?.lastFocusedWindowID = windowID
-                        self.logger.debug("📝 Saved lastFocusedWindowID for space", metadata: [
+                        self.logger.trace("Saved lastFocusedWindowID", metadata: [
                             "spaceID": "\(spaceID)",
                             "windowID": "\(windowID)"
                         ])
@@ -1034,7 +1036,7 @@ class StateManager {
 
     func handleWindowMinimized(_ windowID: UInt32) {
         queue.async {
-            self.logger.debug("⬇️ Window minimized", metadata: ["windowID": "\(windowID)"])
+            self.logger.debug("Window minimized", metadata: ["windowID": "\(windowID)"])
 
             guard var window = self.state.windows[String(windowID)] else { return }
             window.isMinimized = true
@@ -1050,7 +1052,7 @@ class StateManager {
 
     func handleWindowDeminimized(_ windowID: UInt32) {
         queue.async {
-            self.logger.debug("⬆️ Window deminimized", metadata: ["windowID": "\(windowID)"])
+            self.logger.debug("Window deminimized", metadata: ["windowID": "\(windowID)"])
 
             guard var window = self.state.windows[String(windowID)] else { return }
             window.isMinimized = false
@@ -1066,7 +1068,7 @@ class StateManager {
 
     func handleWindowTitleChanged(_ windowID: UInt32, title: String) {
         queue.async {
-            self.logger.debug("📝 Window title changed", metadata: [
+            self.logger.trace("Window title changed", metadata: [
                 "windowID": "\(windowID)",
                 "title": "\(title)"
             ])
@@ -1106,10 +1108,10 @@ class StateManager {
                     self.state.metadata.activeSpaceID = display.currentSpaceID
                     newSpaceID = display.currentSpaceID
                     foundChangedDisplay = true
-                    self.logger.info("📍 Active space detected from change", metadata: [
-                        "displayUUID": "\(display.uuid)",
-                        "oldSpaceID": "\(oldSpaceID)",
-                        "newSpaceID": "\(display.currentSpaceID)"
+                    self.logger.info("Active space changed", metadata: [
+                        "display": "\(display.uuid)",
+                        "from": "\(oldSpaceID)",
+                        "to": "\(display.currentSpaceID)"
                     ])
                     break
                 }
@@ -1152,10 +1154,10 @@ class StateManager {
                 state.metadata.activeDisplayUUID = display.uuid
                 state.metadata.activeSpaceID = display.currentSpaceID  // Fix: also set activeSpaceID
                 if oldUUID != display.uuid {
-                    logger.info("🖥️  Updated activeDisplayUUID from space change", metadata: [
-                        "displayUUID": "\(display.uuid)",
+                    logger.debug("Active display updated from space", metadata: [
+                        "display": "\(display.uuid)",
                         "spaceID": "\(display.currentSpaceID)",
-                        "previousUUID": "\(oldUUID ?? "nil")"
+                        "prev": "\(oldUUID ?? "nil")"
                     ])
                 }
                 return
@@ -1183,20 +1185,18 @@ class StateManager {
             return
         }
 
-        logger.info("🔄 Restoring focus to previous window", metadata: [
+        logger.debug("Restoring focus", metadata: [
             "spaceID": "\(spaceID)",
             "windowID": "\(windowID)",
-            "app": "\(window.appName ?? "unknown")"
+            "app": "\(window.appName ?? "?")"
         ])
 
         // Focus the window using WindowManipulator
         let manipulator = WindowManipulator(connectionID: connectionID, logger: logger)
         let success = manipulator.focusWindow(pid: window.pid, windowID: windowID)
 
-        if success {
-            logger.info("✓ Focus restored", metadata: ["windowID": "\(windowID)"])
-        } else {
-            logger.warning("Failed to restore focus", metadata: ["windowID": "\(windowID)"])
+        if !success {
+            logger.warning("Focus restore failed", metadata: ["windowID": "\(windowID)"])
         }
     }
 
@@ -1218,10 +1218,10 @@ class StateManager {
             let pidKey = String(app.processIdentifier)
             self.state.applications[pidKey] = appState
 
-            self.logger.info("📱 Application launched and tracked", metadata: [
+            self.logger.info("App launched", metadata: [
                 "pid": "\(app.processIdentifier)",
-                "app": "\(app.localizedName ?? "unknown")",
-                "bundleID": "\(app.bundleIdentifier ?? "unknown")"
+                "app": "\(app.localizedName ?? "?")",
+                "bundle": "\(app.bundleIdentifier ?? "?")"
             ])
 
             // Create AX observer
@@ -1304,7 +1304,7 @@ class StateManager {
         }
 
         // Update focused window state
-        logger.info("🎯 Window focused (from app activation)", metadata: [
+        logger.debug("Window focused from app activation", metadata: [
             "windowID": "\(windowID)",
             "pid": "\(pid)"
         ])
@@ -1324,7 +1324,7 @@ class StateManager {
                 let spaceKey = String(spaceID)
                 if self.state.spaces[spaceKey] != nil {
                     self.state.spaces[spaceKey]?.lastFocusedWindowID = windowID
-                    self.logger.debug("📝 Saved lastFocusedWindowID for space", metadata: [
+                    self.logger.trace("Saved lastFocusedWindowID", metadata: [
                         "spaceID": "\(spaceID)",
                         "windowID": "\(windowID)"
                     ])

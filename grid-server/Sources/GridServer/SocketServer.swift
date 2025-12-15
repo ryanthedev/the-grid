@@ -116,7 +116,7 @@ class SocketServer {
                 continue
             }
 
-            logger.info("Client connected", metadata: ["socket": "\(clientSocket)"])
+            logger.trace("Client connected", metadata: ["socket": "\(clientSocket)"])
 
             socketQueue.async(flags: .barrier) { [weak self] in
                 self?.clientSockets.insert(clientSocket)
@@ -136,7 +136,7 @@ class SocketServer {
             socketQueue.async(flags: .barrier) { [weak self] in
                 self?.clientSockets.remove(socket)
             }
-            logger.info("Client disconnected", metadata: ["socket": "\(socket)"])
+            logger.trace("Client disconnected", metadata: ["socket": "\(socket)"])
         }
 
         var buffer = Data()
@@ -172,7 +172,7 @@ class SocketServer {
             decoder.dateDecodingStrategy = .iso8601
             let message = try decoder.decode(Message.self, from: data)
 
-            logger.debug("Received message", metadata: ["type": "\(message.type)", "socket": "\(clientSocket)"])
+            logger.trace("Received message", metadata: ["type": "\(message.type)", "socket": "\(clientSocket)"])
 
             switch message.type {
             case .request:

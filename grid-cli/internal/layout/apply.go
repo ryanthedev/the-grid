@@ -62,6 +62,12 @@ func ApplyLayout(
 	}
 
 	// 3. Calculate grid layout using snapshot's display bounds (gap=0, padding handles spacing)
+	logging.Debug().
+		Float64("displayX", snap.DisplayBounds.X).
+		Float64("displayY", snap.DisplayBounds.Y).
+		Float64("displayW", snap.DisplayBounds.Width).
+		Float64("displayH", snap.DisplayBounds.Height).
+		Msg("using display bounds for layout")
 	calculatedLayout := CalculateLayoutWithRatios(layout, snap.DisplayBounds, 0, columnRatios, rowRatios)
 
 	// 4. Filter and convert windows (exclude transient windows)
@@ -381,6 +387,14 @@ func sendCellAssignments(ctx context.Context, c *client.Client, layout *types.La
 			Width:  rect.Width,
 			Height: rect.Height,
 		}
+		// Debug: log each cellBounds being sent
+		logging.Debug().
+			Str("cellID", cellID).
+			Float64("x", rect.X).
+			Float64("y", rect.Y).
+			Float64("w", rect.Width).
+			Float64("h", rect.Height).
+			Msg("cellBounds being sent")
 	}
 
 	logging.Debug().

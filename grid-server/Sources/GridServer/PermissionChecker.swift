@@ -16,13 +16,9 @@ class PermissionChecker {
         let trusted = AXIsProcessTrusted()
 
         if trusted {
-            logger.info("✓ Accessibility permission granted")
+            logger.debug("Accessibility permission granted")
         } else {
-            logger.warning("✗ Accessibility permission NOT granted")
-            logger.warning("To grant permission:")
-            logger.warning("1. Open System Settings → Privacy & Security → Accessibility")
-            logger.warning("2. Add 'grid-server' or 'Terminal' to the allowed apps")
-            logger.warning("3. Restart the application")
+            logger.warning("Accessibility permission NOT granted - add grid-server to System Settings > Privacy & Security > Accessibility")
         }
 
         return trusted

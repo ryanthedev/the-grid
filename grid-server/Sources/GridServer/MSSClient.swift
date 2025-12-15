@@ -67,18 +67,18 @@ class MSSClient {
             }
 
             guard ctx != nil else {
-                logger.error("❌ Failed to create MSS context")
+                logger.error("Failed to create MSS context")
                 return
             }
 
-            logger.info("✓ MSS client initialized")
+            logger.debug("MSS client initialized")
         }
     }
 
     deinit {
         if let ctx = ctx {
             mss_destroy(ctx)
-            logger.info("MSS client destroyed")
+            logger.trace("MSS client destroyed")
         }
     }
 
@@ -99,10 +99,10 @@ class MSSClient {
             let result = mss_handshake(ctx, &capabilities, &version)
 
             if result == 0 {  // MSS_SUCCESS = 0
-                let versionString = version != nil ? String(cString: version!) : "unknown"
-                logger.info("✓ MSS available", metadata: [
+                let versionString = version != nil ? String(cString: version!) : "?"
+                logger.debug("MSS available", metadata: [
                     "version": "\(versionString)",
-                    "capabilities": "0x\(String(capabilities, radix: 16))"
+                    "caps": "0x\(String(capabilities, radix: 16))"
                 ])
                 return true
             } else {
@@ -143,21 +143,14 @@ class MSSClient {
     func moveWindowToSpace(windowID: UInt32, spaceID: UInt64) -> Bool {
         return queue.sync {
             guard let ctx = ctx else {
-                logger.error("❌ MSS context not available")
+                logger.error("MSS context not available")
                 return false
             }
 
-            logger.info("Moving window to space via MSS", metadata: [
-                "windowID": "\(windowID)",
-                "spaceID": "\(spaceID)"
-            ])
-
             let result = mss_window_move_to_space(ctx, windowID, spaceID)
 
-            if result {
-                logger.info("✓ Window moved successfully")
-            } else {
-                logger.error("✗ Window move failed")
+            if !result {
+                logger.error("MSS window move failed", metadata: ["windowID": "\(windowID)", "spaceID": "\(spaceID)"])
             }
 
             return result
@@ -489,19 +482,11 @@ class MSSClient {
         return queue.sync {
             guard let ctx = ctx, !windowIDs.isEmpty else { return false }
 
-            logger.info("Moving \(windowIDs.count) windows to space", metadata: [
-                "count": "\(windowIDs.count)",
-                "spaceID": "\(spaceID)"
-            ])
-
-            // Convert to C array
             var wids = windowIDs
             let result = mss_window_list_move_to_space(ctx, &wids, Int32(windowIDs.count), spaceID)
 
-            if result {
-                logger.info("✓ Batch window move successful")
-            } else {
-                logger.error("✗ Batch window move failed")
+            if !result {
+                logger.error("MSS batch move failed", metadata: ["count": "\(windowIDs.count)", "spaceID": "\(spaceID)"])
             }
 
             return result

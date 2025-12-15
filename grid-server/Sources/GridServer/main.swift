@@ -117,7 +117,7 @@ struct GridServerCommand: ParsableCommand {
             // This is required for space change notifications to fire
             _ = NSApplication.shared
             NSApplication.shared.setActivationPolicy(.prohibited)
-            logger.info("✓ NSApplication initialized for workspace notifications")
+            logger.debug("NSApplication initialized")
 
             // Initialize StateManager
             logger.info("Initializing StateManager...")

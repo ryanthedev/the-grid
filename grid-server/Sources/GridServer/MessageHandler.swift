@@ -89,7 +89,7 @@ class MessageHandler {
 
         // Dump - returns complete window manager state
         register(method: "dump") { [weak self] request, completion in
-            self?.logger.info("dump called - returning complete state")
+            self?.logger.trace("dump called - returning complete state")
 
             do {
                 // Get state from StateManager (Codable type preserves all type information)
@@ -696,15 +696,34 @@ class MessageHandler {
             // Parse cellBounds if provided (new field for simplified border system)
             var cellBounds: [String: CGRect] = [:]
             if let cellBoundsDict = params["cellBounds"]?.value as? [String: [String: Any]] {
+                self.logger.debug("Raw cellBounds dict received", metadata: ["keys": "\(cellBoundsDict.keys.sorted())"])
                 for (cellID, boundsDict) in cellBoundsDict {
+                    self.logger.debug("Parsing cellBounds for cell", metadata: [
+                        "cellID": "\(cellID)",
+                        "rawX": "\(boundsDict["x"] ?? "nil")",
+                        "rawY": "\(boundsDict["y"] ?? "nil")",
+                        "rawW": "\(boundsDict["width"] ?? "nil")",
+                        "rawH": "\(boundsDict["height"] ?? "nil")"
+                    ])
                     if let x = (boundsDict["x"] as? NSNumber)?.doubleValue,
                        let y = (boundsDict["y"] as? NSNumber)?.doubleValue,
                        let width = (boundsDict["width"] as? NSNumber)?.doubleValue,
                        let height = (boundsDict["height"] as? NSNumber)?.doubleValue {
                         cellBounds[cellID] = CGRect(x: x, y: y, width: width, height: height)
+                        self.logger.debug("Parsed cellBounds", metadata: [
+                            "cellID": "\(cellID)",
+                            "x": "\(x)",
+                            "y": "\(y)",
+                            "width": "\(width)",
+                            "height": "\(height)"
+                        ])
+                    } else {
+                        self.logger.warning("Failed to parse cellBounds for cell", metadata: ["cellID": "\(cellID)"])
                     }
                 }
                 self.logger.info("Cell bounds parsed", metadata: ["count": "\(cellBounds.count)"])
+            } else {
+                self.logger.debug("No cellBounds in params or wrong type")
             }
 
             // Update SimpleBorderManager

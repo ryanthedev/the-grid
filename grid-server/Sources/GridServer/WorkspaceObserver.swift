@@ -82,7 +82,7 @@ class WorkspaceObserver {
             object: nil
         )
 
-        logger.info("✓ Workspace observer registered for system notifications")
+        logger.debug("Workspace observer registered")
     }
 
     /// Stop observing
@@ -94,12 +94,12 @@ class WorkspaceObserver {
     // MARK: - Space/Display Event Handlers
 
     @objc private func spaceChanged(_ notification: Notification) {
-        logger.info("📍 Active space changed (notification received)")
+        logger.debug("Space change notification")
         stateManager?.handleSpaceChanged()
     }
 
     @objc private func screenParametersChanged(_ notification: Notification) {
-        logger.info("📐 Screen parameters changed (resolution/arrangement)")
+        logger.debug("Screen parameters changed")
         stateManager?.handleDisplayConfigurationChanged()
     }
 
@@ -110,8 +110,8 @@ class WorkspaceObserver {
             return
         }
 
-        logger.info("🚀 Application launched", metadata: [
-            "app": "\(app.localizedName ?? "Unknown")",
+        logger.debug("App launched notification", metadata: [
+            "app": "\(app.localizedName ?? "?")",
             "pid": "\(app.processIdentifier)"
         ])
 
@@ -123,8 +123,8 @@ class WorkspaceObserver {
             return
         }
 
-        logger.info("💀 Application terminated", metadata: [
-            "app": "\(app.localizedName ?? "Unknown")",
+        logger.debug("App terminated notification", metadata: [
+            "app": "\(app.localizedName ?? "?")",
             "pid": "\(app.processIdentifier)"
         ])
 
@@ -175,7 +175,7 @@ class WorkspaceObserver {
     // MARK: - System Event Handlers
 
     @objc private func systemWoke(_ notification: Notification) {
-        logger.info("⏰ System woke from sleep")
+        logger.info("System woke from sleep")
         stateManager?.handleSystemWoke()
     }
 }

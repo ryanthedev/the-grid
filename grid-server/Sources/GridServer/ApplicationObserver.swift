@@ -87,9 +87,9 @@ class ApplicationObserver {
         let runLoopSource = AXObserverGetRunLoopSource(observerRef)
         CFRunLoopAddSource(CFRunLoopGetMain(), runLoopSource, .defaultMode)
 
-        logger.info("✓ AX observer created", metadata: [
+        logger.debug("AX observer created", metadata: [
             "pid": "\(pid)",
-            "app": "\(appName ?? "unknown")",
+            "app": "\(appName ?? "?")",
             "notifications": "\(successCount)/\(Self.observedNotifications.count)"
         ])
 

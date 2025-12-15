@@ -161,7 +161,7 @@ class WindowManipulator {
 
     /// Move window using compatibility workspace IDs (for modern macOS)
     private func moveWindowViaCompatibilityWorkspace(windowID: UInt32, spaceID: UInt64) -> Bool {
-        logger.info("🔧 Using compatibility workspace ID method", metadata: [
+        logger.debug("Using compat workspace method", metadata: [
             "windowID": "\(windowID)",
             "spaceID": "\(spaceID)"
         ])
@@ -183,8 +183,8 @@ class WindowManipulator {
         ])
 
         if result != .success {
-            logger.error("❌ Failed to set space compat ID", metadata: [
-                "CGError": "\(result.rawValue)",
+            logger.error("SLSSpaceSetCompatID failed", metadata: [
+                "error": "\(result.rawValue)",
                 "spaceID": "\(spaceID)",
                 "compatID": "\(compatID)"
             ])
@@ -209,25 +209,20 @@ class WindowManipulator {
         logger.debug("Resetting compat ID to 0")
         let resetResult = SLSSpaceSetCompatID(connectionID, spaceID, 0)
         if resetResult != .success {
-            logger.warning("⚠️ Failed to reset compat ID (non-fatal)", metadata: [
-                "CGError": "\(resetResult.rawValue)"
+            logger.warning("Reset compat ID failed (non-fatal)", metadata: [
+                "error": "\(resetResult.rawValue)"
             ])
-        } else {
-            logger.debug("Successfully reset compat ID")
         }
 
         if result != .success {
-            logger.error("❌ SLSSetWindowListWorkspace failed", metadata: [
-                "CGError": "\(result.rawValue)",
+            logger.error("SLSSetWindowListWorkspace failed", metadata: [
+                "error": "\(result.rawValue)",
                 "windowID": "\(windowID)",
                 "workspaceID": "\(compatID)"
             ])
             return false
         }
 
-        logger.info("✓ Compatibility workspace method completed", metadata: [
-            "windowID": "\(windowID)"
-        ])
         return true
     }
 
@@ -248,11 +243,9 @@ class WindowManipulator {
 
     /// Move a window to a specific space
     func moveWindowToSpace(windowID: UInt32, spaceID: UInt64) -> Bool {
-        let osVersion = ProcessInfo.processInfo.operatingSystemVersion
-        logger.info("📍 Moving window to space", metadata: [
+        logger.debug("Moving window to space", metadata: [
             "windowID": "\(windowID)",
-            "spaceID": "\(spaceID)",
-            "macOS": "\(osVersion.majorVersion).\(osVersion.minorVersion).\(osVersion.patchVersion)"
+            "spaceID": "\(spaceID)"
         ])
 
         // Validate space type - don't allow moves to fullscreen spaces
@@ -265,10 +258,7 @@ class WindowManipulator {
         ])
 
         if spaceType == SpaceType.fullscreen.rawValue {
-            logger.error("❌ Cannot move window to fullscreen space", metadata: [
-                "spaceID": "\(spaceID)",
-                "spaceType": "fullscreen"
-            ])
+            logger.error("Cannot move to fullscreen space", metadata: ["spaceID": "\(spaceID)"])
             return false
         }
 
@@ -280,10 +270,7 @@ class WindowManipulator {
         ])
 
         if currentSpace == spaceID {
-            logger.info("✓ Window already on target space", metadata: [
-                "windowID": "\(windowID)",
-                "spaceID": "\(spaceID)"
-            ])
+            logger.debug("Window already on target space", metadata: ["windowID": "\(windowID)"])
             return true
         }
 
@@ -292,20 +279,13 @@ class WindowManipulator {
 
         if needsWorkaround {
             // macOS 12.7+, 13.6+, 14.5+, 15+ - try MSS first, then fail gracefully
-            logger.info("🔀 Modern macOS detected - checking for MSS")
-
-            // Check if MSS is available
             if mssClient.isAvailable() {
-                logger.info("✓ MSS available - using privileged method")
 
                 // Use MSS to move window
                 let success = mssClient.moveWindowToSpace(windowID: windowID, spaceID: spaceID)
 
                 if !success {
-                    logger.error("❌ MSS move API failed", metadata: [
-                        "windowID": "\(windowID)",
-                        "spaceID": "\(spaceID)"
-                    ])
+                    logger.error("MSS move failed", metadata: ["windowID": "\(windowID)", "spaceID": "\(spaceID)"])
                     return false
                 }
 
@@ -314,51 +294,46 @@ class WindowManipulator {
                 let verified = newSpace == spaceID
 
                 if verified {
-                    logger.info("✓ Window moved successfully via MSS", metadata: [
+                    logger.debug("Window moved via MSS", metadata: [
                         "windowID": "\(windowID)",
-                        "fromSpace": "\(currentSpace?.description ?? "unknown")",
-                        "toSpace": "\(spaceID)"
+                        "from": "\(currentSpace?.description ?? "?")",
+                        "to": "\(spaceID)"
                     ])
                     return true
                 } else {
-                    logger.error("❌ MSS move verification failed", metadata: [
+                    logger.error("MSS move verification failed", metadata: [
                         "windowID": "\(windowID)",
-                        "expectedSpace": "\(spaceID)",
-                        "actualSpace": "\(newSpace?.description ?? "unknown")"
+                        "expected": "\(spaceID)",
+                        "actual": "\(newSpace?.description ?? "?")"
                     ])
                     return false
                 }
 
             } else {
-                // MSS not available - warn user
-                logger.warning("⚠️  MSS not available on macOS \(ProcessInfo.processInfo.operatingSystemVersion.majorVersion)+")
-                logger.warning("⚠️  Window move to space functionality requires MSS installation")
-                logger.warning("ℹ️   Install with: brew install mss && sudo mss load")
-                logger.warning("ℹ️   See: https://github.com/ryanthedev/mss for details")
-
+                // MSS not available
+                logger.warning("MSS not available - window move to space requires MSS on macOS 12.7+")
                 return false
             }
         } else {
             // Older macOS - use direct API
-            logger.info("🔀 Older macOS - using direct SLSMoveWindowsToManagedSpace")
 
             let success = moveWindowViaSkyLightAPI(windowID: windowID, spaceID: spaceID)
 
             if !success {
-                logger.error("❌ Direct API failed")
+                logger.error("Direct SLS API failed")
                 return false
             }
 
-            // Verify the move
             let newSpace = getWindowSpace(windowID: windowID)
             let verified = newSpace == spaceID
 
-            logger.info(verified ? "✓ Window moved successfully" : "❌ Move verification failed", metadata: [
-                "windowID": "\(windowID)",
-                "fromSpace": "\(currentSpace?.description ?? "unknown")",
-                "toSpace": "\(spaceID)",
-                "actualSpace": "\(newSpace?.description ?? "unknown")"
-            ])
+            if !verified {
+                logger.error("Move verification failed", metadata: [
+                    "windowID": "\(windowID)",
+                    "expected": "\(spaceID)",
+                    "actual": "\(newSpace?.description ?? "?")"
+                ])
+            }
 
             return verified
         }
@@ -490,9 +465,9 @@ class WindowManipulator {
             }
         }
 
-        logger.info("✓ Window moved to display", metadata: [
+        logger.debug("Window moved to display", metadata: [
             "windowID": "\(windowID)",
-            "displayUUID": "\(displayUUID)"
+            "display": "\(displayUUID)"
         ])
 
         // Re-query space assignment after successful move
