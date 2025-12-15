@@ -50,7 +50,11 @@ class BorderEvents {
     }
 
     func handleWindowDestroyed(_ windowID: UInt32) {
+        // Legacy path
         borderManager?.destroyBorder(for: windowID)
+
+        // SimpleBorderManager path
+        simpleBorderManager?.handleWindowDestroyed(windowID: windowID)
     }
 
     func handleWindowMoved(_ windowID: UInt32, frame: CGRect) {
@@ -95,7 +99,7 @@ class BorderEvents {
     }
 
     func handleAppHidden(bundleID: String) {
-        // Hide borders for all windows of this app
+        // Legacy path: Hide borders for all windows of this app
         guard let state = stateManager?.getState() else {
             logger.warning("State unavailable in handleAppHidden")
             return
@@ -107,10 +111,13 @@ class BorderEvents {
                 borderManager?.hideBorder(for: window.id)
             }
         }
+
+        // SimpleBorderManager path
+        simpleBorderManager?.handleAppHidden(bundleID: bundleID)
     }
 
     func handleAppUnhidden(bundleID: String) {
-        // Show borders for all windows of this app
+        // Legacy path: Show borders for all windows of this app
         guard let state = stateManager?.getState() else {
             logger.warning("State unavailable in handleAppUnhidden")
             return
@@ -123,10 +130,13 @@ class BorderEvents {
                 borderManager?.updateBorder(for: window.id)
             }
         }
+
+        // SimpleBorderManager path
+        simpleBorderManager?.handleAppUnhidden(bundleID: bundleID)
     }
 
     func handleSpaceChanged() {
-        // Refresh all borders for current space visibility
+        // Legacy path: Refresh all borders for current space visibility
         // Windows not on current space will have their borders hidden by the system
         guard let state = stateManager?.getState() else {
             logger.warning("State unavailable in handleSpaceChanged")
@@ -137,6 +147,9 @@ class BorderEvents {
         for window in windows {
             borderManager?.updateBorder(for: window.id)
         }
+
+        // SimpleBorderManager path
+        simpleBorderManager?.handleSpaceChanged()
     }
 
     // MARK: - State Queries

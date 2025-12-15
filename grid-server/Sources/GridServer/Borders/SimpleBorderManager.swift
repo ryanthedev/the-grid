@@ -145,6 +145,84 @@ class SimpleBorderManager {
         logger.debug("Window deminimized", metadata: ["windowID": "\(windowID)"])
     }
 
+    /// Handle app hidden (hide overlays if focused window's app matches)
+    func handleAppHidden(bundleID: String) {
+        guard let windowID = focusedWindowID else { return }
+
+        // Check if focused window belongs to the hidden app
+        // We don't have direct access to bundleID mapping here, but BorderEvents
+        // will only call this if relevant. Hide overlays defensively.
+        logger.debug("App hidden event", metadata: [
+            "bundleID": "\(bundleID)",
+            "focusedWindow": "\(windowID)"
+        ])
+
+        // Hide both overlays
+        cellHighlight.hide()
+        windowBorder?.hide()
+    }
+
+    /// Handle app unhidden (restore overlays if needed)
+    func handleAppUnhidden(bundleID: String) {
+        guard let windowID = focusedWindowID else { return }
+
+        logger.debug("App unhidden event", metadata: [
+            "bundleID": "\(bundleID)",
+            "focusedWindow": "\(windowID)"
+        ])
+
+        // Re-evaluate focus state to restore overlays if needed
+        updateCellHighlight()
+        updateWindowBorder()
+    }
+
+    /// Handle space changed (re-evaluate focus and update overlays)
+    func handleSpaceChanged() {
+        logger.debug("Space changed event")
+
+        // Re-evaluate focus state for the new space
+        // Windows not on current space should have their overlays hidden
+        guard let windowID = focusedWindowID else {
+            // No focused window, ensure overlays are hidden
+            cellHighlight.hide()
+            windowBorder?.hide()
+            return
+        }
+
+        // Verify focused window is still valid on current space
+        var windowFrame = CGRect.zero
+        let result = SLSGetWindowBounds(connectionID, windowID, &windowFrame)
+
+        if result == .success {
+            // Window exists on current space, update overlays
+            updateCellHighlight()
+            updateWindowBorder()
+        } else {
+            // Window not accessible (likely on different space), hide overlays
+            cellHighlight.hide()
+            windowBorder?.hide()
+        }
+    }
+
+    /// Handle window destroyed (clear state if focused window destroyed)
+    func handleWindowDestroyed(windowID: UInt32) {
+        guard windowID == focusedWindowID else { return }
+
+        logger.debug("Focused window destroyed", metadata: ["windowID": "\(windowID)"])
+
+        // Clear focus state
+        focusedWindowID = nil
+        focusedCellID = nil
+
+        // Hide both overlays
+        cellHighlight.hide()
+        windowBorder?.hide()
+
+        // Destroy window border since target is gone
+        windowBorder?.destroy()
+        windowBorder = nil
+    }
+
     // MARK: - Private Helpers
 
     /// Update cell highlight visibility and position
