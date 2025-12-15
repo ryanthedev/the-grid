@@ -69,6 +69,14 @@ type CellAssignment struct {
 	CellID   string
 }
 
+// CellRect represents the bounds of a cell
+type CellRect struct {
+	X      float64 `json:"x"`
+	Y      float64 `json:"y"`
+	Width  float64 `json:"width"`
+	Height float64 `json:"height"`
+}
+
 // CellOverride represents per-cell border config
 type CellOverride struct {
 	ActiveCellColor string `json:"activeCellColor,omitempty"`
@@ -77,7 +85,7 @@ type CellOverride struct {
 }
 
 // SendCellAssignments sends window-to-cell mappings to the server
-func (c *Client) SendCellAssignments(ctx context.Context, assignments []CellAssignment, overrides map[string]CellOverride) error {
+func (c *Client) SendCellAssignments(ctx context.Context, assignments []CellAssignment, overrides map[string]CellOverride, cellBounds map[string]CellRect) error {
 	// Build assignment map (windowID as string -> cellID)
 	assignmentMap := make(map[string]string)
 	for _, a := range assignments {
@@ -106,6 +114,11 @@ func (c *Client) SendCellAssignments(ctx context.Context, assignments []CellAssi
 			cellsMap[cellID] = cellConfig
 		}
 		params["cells"] = cellsMap
+	}
+
+	// Add cellBounds if provided
+	if len(cellBounds) > 0 {
+		params["cellBounds"] = cellBounds
 	}
 
 	resp, err := c.request(ctx, "borders.setCellAssignments", params)

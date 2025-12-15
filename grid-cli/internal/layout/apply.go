@@ -377,5 +377,6 @@ func sendCellAssignments(ctx context.Context, c *client.Client, layout *types.La
 		Int("overrideCount", len(overrides)).
 		Msg("sending cell assignments to server")
 
-	return c.SendCellAssignments(ctx, cellAssignments, overrides)
+	// TODO: Phase 1.2 - pass actual cellBounds from CalculatedLayout
+	return c.SendCellAssignments(ctx, cellAssignments, overrides, nil)
 }
