@@ -140,3 +140,67 @@ func equalRatios(n int) []float64 {
 	}
 	return ratios
 }
+
+// syncBorders sends cell assignments and bounds to the server for border rendering.
+// This is called after reconcile to keep server border state in sync with CLI state.
+// Errors are logged but don't fail the reconcile - borders are a visual enhancement.
+func syncBorders(ctx context.Context, c *client.Client, snap *server.Snapshot, rs *state.RuntimeState, cfg *config.Config) {
+	// 1. Check if borders are configured
+	if cfg == nil || cfg.Borders == nil || !cfg.Borders.GetEnabled() {
+		logging.Debug().Msg("syncBorders: borders not enabled, skipping")
+		return
+	}
+
+	// 2. Get space state
+	spaceState := rs.GetSpaceReadOnly(snap.SpaceID)
+	if spaceState == nil {
+		logging.Debug().
+			Str("spaceID", snap.SpaceID).
+			Msg("syncBorders: no local state for space, skipping")
+		return
+	}
+
+	// 3. Get current layout ID
+	layoutID := spaceState.CurrentLayoutID
+	if layoutID == "" {
+		logging.Debug().
+			Str("spaceID", snap.SpaceID).
+			Msg("syncBorders: no layout applied to space, skipping")
+		return
+	}
+
+	// 4. Get layout definition from config
+	layoutDef, err := cfg.GetLayout(layoutID)
+	if err != nil {
+		logging.Warn().
+			Str("layoutID", layoutID).
+			Err(err).
+			Msg("syncBorders: failed to get layout definition")
+		return
+	}
+
+	// 5. Calculate cell bounds
+	calculated := calculateCellBounds(layoutDef, snap, spaceState)
+	if calculated == nil {
+		logging.Debug().Msg("syncBorders: no cell bounds calculated")
+		return
+	}
+
+	// 6. Build cell assignments from space state
+	assignments := buildCellAssignments(spaceState)
+	if len(assignments) == 0 {
+		logging.Debug().Msg("syncBorders: no cell assignments to send")
+		return
+	}
+
+	// 7. Send to server
+	if err := c.SendCellAssignments(ctx, assignments, nil, calculated); err != nil {
+		logging.Warn().Err(err).Msg("syncBorders: failed to send cell assignments")
+		return
+	}
+
+	logging.Debug().
+		Int("assignments", len(assignments)).
+		Int("cellBounds", len(calculated)).
+		Msg("syncBorders: sent cell assignments to server")
+}
