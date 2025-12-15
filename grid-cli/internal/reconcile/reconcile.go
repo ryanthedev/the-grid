@@ -1,6 +1,10 @@
 package reconcile
 
 import (
+	"context"
+
+	"github.com/yourusername/grid-cli/internal/client"
+	"github.com/yourusername/grid-cli/internal/config"
 	"github.com/yourusername/grid-cli/internal/logging"
 	"github.com/yourusername/grid-cli/internal/server"
 	"github.com/yourusername/grid-cli/internal/state"
@@ -11,7 +15,7 @@ import (
 // and syncs the focused cell to match the OS-focused window.
 // This should be called before any command execution to ensure
 // local state is accurate.
-func Sync(snap *server.Snapshot, rs *state.RuntimeState) error {
+func Sync(ctx context.Context, c *client.Client, snap *server.Snapshot, rs *state.RuntimeState, cfg *config.Config) error {
 	logging.Debug().
 		Str("spaceID", snap.SpaceID).
 		Uint32("focusedWindowID", snap.FocusedWindowID).
