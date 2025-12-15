@@ -10,6 +10,9 @@ import CoreGraphics
 import Logging
 
 /// Routes window events from StateManager to BorderManager
+///
+/// **Thread Safety**: All methods must be called on the main queue.
+/// The weak references to managers are not thread-safe.
 class BorderEvents {
     private let logger = Logger(label: "com.grid.BorderEvents")
     private weak var borderManager: BorderManager?
@@ -63,9 +66,13 @@ class BorderEvents {
 
     func handleAppHidden(bundleID: String) {
         // Hide borders for all windows of this app
-        guard let state = stateManager?.getState() else { return }
+        guard let state = stateManager?.getState() else {
+            logger.warning("State unavailable in handleAppHidden")
+            return
+        }
 
-        for (_, window) in state.windows {
+        let windows = Array(state.windows.values)  // Snapshot to avoid mutation during iteration
+        for window in windows {
             if getBundleIDForWindow(window.id) == bundleID {
                 borderManager?.hideBorder(for: window.id)
             }
@@ -74,9 +81,13 @@ class BorderEvents {
 
     func handleAppUnhidden(bundleID: String) {
         // Show borders for all windows of this app
-        guard let state = stateManager?.getState() else { return }
+        guard let state = stateManager?.getState() else {
+            logger.warning("State unavailable in handleAppUnhidden")
+            return
+        }
 
-        for (_, window) in state.windows {
+        let windows = Array(state.windows.values)  // Snapshot to avoid mutation during iteration
+        for window in windows {
             if getBundleIDForWindow(window.id) == bundleID {
                 borderManager?.showBorder(for: window.id)
                 borderManager?.updateBorder(for: window.id)
@@ -87,10 +98,13 @@ class BorderEvents {
     func handleSpaceChanged() {
         // Refresh all borders for current space visibility
         // Windows not on current space will have their borders hidden by the system
-        guard let state = stateManager?.getState() else { return }
+        guard let state = stateManager?.getState() else {
+            logger.warning("State unavailable in handleSpaceChanged")
+            return
+        }
 
-        // Refresh all existing borders
-        for (_, window) in state.windows {
+        let windows = Array(state.windows.values)  // Snapshot to avoid mutation during iteration
+        for window in windows {
             borderManager?.updateBorder(for: window.id)
         }
     }
