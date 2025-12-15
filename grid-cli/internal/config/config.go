@@ -238,6 +238,16 @@ func (cc *CellConfig) ToCell() (types.Cell, error) {
 		cellWindowSpacing = &pv
 	}
 
+	// Convert cell-level border config
+	var cellBorder *types.CellBorderConfig
+	if cc.Border != nil {
+		cellBorder = &types.CellBorderConfig{
+			ActiveCellColor: cc.Border.ActiveCellColor,
+			InactiveColor:   cc.Border.InactiveColor,
+			Style:           cc.Border.Style,
+		}
+	}
+
 	return types.Cell{
 		ID:            cc.ID,
 		ColumnStart:   colStart,
@@ -247,6 +257,7 @@ func (cc *CellConfig) ToCell() (types.Cell, error) {
 		StackMode:     cc.StackMode,
 		Padding:       cellPadding,
 		WindowSpacing: cellWindowSpacing,
+		Border:        cellBorder,
 	}, nil
 }
 
