@@ -13,6 +13,9 @@ class MessageHandler {
     /// Border manager for handling border-related messages
     weak var borderManager: BorderManager?
 
+    /// Simple border manager for handling simplified border system
+    weak var simpleBorderManager: SimpleBorderManager?
+
     init(logger: Logger) {
         self.logger = logger
         registerBuiltInHandlers()
@@ -714,11 +717,6 @@ class MessageHandler {
                 return
             }
 
-            guard let borderManager = self.borderManager else {
-                completion(Response(id: request.id, error: ErrorInfo(code: -32603, message: "Border manager not available")))
-                return
-            }
-
             // Convert string windowIDs to UInt32
             var cellAssignments: [UInt32: String] = [:]
             for (widStr, cellID) in assignmentsDict {
@@ -726,17 +724,43 @@ class MessageHandler {
                     cellAssignments[wid] = cellID
                 }
             }
-            borderManager.setCellAssignments(cellAssignments)
 
-            // Store per-cell overrides if provided
-            if let cellsDict = params["cells"]?.value as? [String: [String: Any]] {
-                for (cellID, cellConfig) in cellsDict {
-                    borderManager.setCellOverride(cellID: cellID, config: cellConfig)
+            // Parse cellBounds if provided (new field for simplified border system)
+            var cellBounds: [String: CGRect] = [:]
+            if let cellBoundsDict = params["cellBounds"]?.value as? [String: [String: Any]] {
+                for (cellID, boundsDict) in cellBoundsDict {
+                    if let x = boundsDict["x"] as? Double,
+                       let y = boundsDict["y"] as? Double,
+                       let width = boundsDict["width"] as? Double,
+                       let height = boundsDict["height"] as? Double {
+                        cellBounds[cellID] = CGRect(x: x, y: y, width: width, height: height)
+                    }
+                }
+                self.logger.info("Cell bounds parsed", metadata: ["count": "\(cellBounds.count)"])
+            }
+
+            // Update SimpleBorderManager if available
+            if let simpleBorderManager = self.simpleBorderManager {
+                simpleBorderManager.setCellAssignments(cellAssignments)
+                if !cellBounds.isEmpty {
+                    simpleBorderManager.setCellBounds(cellBounds)
                 }
             }
 
-            // Refresh borders with new cell awareness
-            borderManager.refreshAllBorders()
+            // Update legacy BorderManager if available
+            if let borderManager = self.borderManager {
+                borderManager.setCellAssignments(cellAssignments)
+
+                // Store per-cell overrides if provided
+                if let cellsDict = params["cells"]?.value as? [String: [String: Any]] {
+                    for (cellID, cellConfig) in cellsDict {
+                        borderManager.setCellOverride(cellID: cellID, config: cellConfig)
+                    }
+                }
+
+                // Refresh borders with new cell awareness
+                borderManager.refreshAllBorders()
+            }
 
             self.logger.info("Cell assignments updated", metadata: ["count": "\(cellAssignments.count)"])
             completion(Response(id: request.id, result: AnyCodable(["success": true])))
