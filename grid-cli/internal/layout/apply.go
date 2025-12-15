@@ -184,7 +184,7 @@ func ApplyLayout(
 			logging.Warn().Err(err).Msg("failed to send border config")
 		}
 
-		if err := sendCellAssignments(ctx, c, layout, assignment.Assignments); err != nil {
+		if err := sendCellAssignments(ctx, c, layout, assignment.Assignments, calculatedLayout.CellBounds); err != nil {
 			// Log but don't fail - borders are optional
 			logging.Warn().Err(err).Msg("failed to send cell assignments")
 		}
@@ -335,7 +335,7 @@ func sendBorderConfig(ctx context.Context, c *client.Client, cfg *config.Config)
 }
 
 // sendCellAssignments sends window-to-cell mappings to the server for border coloring.
-func sendCellAssignments(ctx context.Context, c *client.Client, layout *types.Layout, assignments map[string][]uint32) error {
+func sendCellAssignments(ctx context.Context, c *client.Client, layout *types.Layout, assignments map[string][]uint32, cellBounds map[string]types.Rect) error {
 	// Build cell assignments list
 	var cellAssignments []client.CellAssignment
 	for cellID, windowIDs := range assignments {
@@ -372,11 +372,22 @@ func sendCellAssignments(ctx context.Context, c *client.Client, layout *types.La
 		}
 	}
 
+	// Convert types.Rect to client.CellRect
+	convertedCellBounds := make(map[string]client.CellRect)
+	for cellID, rect := range cellBounds {
+		convertedCellBounds[cellID] = client.CellRect{
+			X:      rect.X,
+			Y:      rect.Y,
+			Width:  rect.Width,
+			Height: rect.Height,
+		}
+	}
+
 	logging.Debug().
 		Int("assignmentCount", len(cellAssignments)).
 		Int("overrideCount", len(overrides)).
+		Int("cellBoundsCount", len(convertedCellBounds)).
 		Msg("sending cell assignments to server")
 
-	// TODO: Phase 1.2 - pass actual cellBounds from CalculatedLayout
-	return c.SendCellAssignments(ctx, cellAssignments, overrides, nil)
+	return c.SendCellAssignments(ctx, cellAssignments, overrides, convertedCellBounds)
 }
