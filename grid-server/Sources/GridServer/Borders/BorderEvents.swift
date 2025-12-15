@@ -9,18 +9,19 @@ import Foundation
 import CoreGraphics
 import Logging
 
-/// Routes window events from StateManager to BorderManager
+/// Routes window events from StateManager to BorderManager and SimpleBorderManager
 ///
 /// **Thread Safety**: All methods must be called on the main queue.
 /// The weak references to managers are not thread-safe.
 class BorderEvents {
     private let logger = Logger(label: "com.grid.BorderEvents")
     private weak var borderManager: BorderManager?
+    private weak var simpleBorderManager: SimpleBorderManager?
     private weak var stateManager: StateManager?
 
     init() {}
 
-    /// Connect to managers
+    /// Connect to managers (legacy BorderManager path)
     func setup(borderManager: BorderManager, stateManager: StateManager) {
         self.borderManager = borderManager
         self.stateManager = stateManager
@@ -30,7 +31,15 @@ class BorderEvents {
             self?.getBundleIDForWindow(windowID)
         }
 
-        logger.info("BorderEvents connected to managers")
+        logger.info("BorderEvents connected to managers (legacy)")
+    }
+
+    /// Connect to managers (SimpleBorderManager path)
+    func setup(simpleBorderManager: SimpleBorderManager, stateManager: StateManager) {
+        self.simpleBorderManager = simpleBorderManager
+        self.stateManager = stateManager
+
+        logger.info("BorderEvents connected to SimpleBorderManager")
     }
 
     // MARK: - Event Handlers (called by StateManager)
@@ -45,24 +54,44 @@ class BorderEvents {
     }
 
     func handleWindowMoved(_ windowID: UInt32, frame: CGRect) {
+        // Legacy path
         borderManager?.updatePosition(for: windowID, frame: frame)
+
+        // SimpleBorderManager path
+        simpleBorderManager?.handleWindowMoved(windowID: windowID, newFrame: frame)
     }
 
     func handleWindowResized(_ windowID: UInt32, frame: CGRect) {
+        // Legacy path
         borderManager?.updatePosition(for: windowID, frame: frame)
+
+        // SimpleBorderManager path (treat resize like move)
+        simpleBorderManager?.handleWindowMoved(windowID: windowID, newFrame: frame)
     }
 
     func handleWindowFocused(_ windowID: UInt32) {
+        // Legacy path
         borderManager?.updateFocus(newFocusedWindow: windowID)
+
+        // SimpleBorderManager path
+        simpleBorderManager?.updateFocus(newFocusedWindow: windowID)
     }
 
     func handleWindowMinimized(_ windowID: UInt32) {
+        // Legacy path
         borderManager?.hideBorder(for: windowID)
+
+        // SimpleBorderManager path
+        simpleBorderManager?.handleWindowMinimized(windowID: windowID)
     }
 
     func handleWindowDeminimized(_ windowID: UInt32) {
+        // Legacy path
         borderManager?.showBorder(for: windowID)
         borderManager?.updateBorder(for: windowID)
+
+        // SimpleBorderManager path
+        simpleBorderManager?.handleWindowDeminimized(windowID: windowID)
     }
 
     func handleAppHidden(bundleID: String) {
