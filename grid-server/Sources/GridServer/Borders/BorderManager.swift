@@ -83,12 +83,17 @@ class BorderManager {
     // MARK: - Border Lifecycle
 
     /// Create a border for a window
-    func createBorder(for windowID: UInt32) {
+    /// - Parameters:
+    ///   - windowID: The window to create a border for
+    ///   - bundleID: Optional bundle ID passed directly to avoid re-entrant StateManager calls
+    func createBorder(for windowID: UInt32, bundleID: String? = nil) {
         guard config.enabled else { return }
         guard borders[windowID] == nil else { return }
 
         // Check blacklist/whitelist
-        if let bundleID = getBundleIDForWindow?(windowID) {
+        // Use passed bundleID if available, otherwise fall back to callback (for non-creation paths)
+        let effectiveBundleID = bundleID ?? getBundleIDForWindow?(windowID)
+        if let bundleID = effectiveBundleID {
             if !config.shouldShowBorder(bundleID: bundleID) {
                 logger.debug("Skipping border for blacklisted app", metadata: [
                     "windowID": "\(windowID)",
@@ -96,10 +101,6 @@ class BorderManager {
                 ])
                 return
             }
-        } else if getBundleIDForWindow == nil {
-            logger.warning("Bundle ID callback not set, filtering bypassed", metadata: [
-                "windowID": "\(windowID)"
-            ])
         }
 
         let border = BorderWindow(connectionID: connectionID, targetWindowID: windowID)

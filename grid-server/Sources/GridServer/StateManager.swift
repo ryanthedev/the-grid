@@ -904,8 +904,9 @@ class StateManager {
 
             self.state.metadata.update()
 
-            // Notify border system
-            self.borderEvents?.handleWindowCreated(windowID)
+            // Notify border system with bundleID to avoid re-entrant queue access
+            let bundleID = self.state.applications[pidKey]?.bundleIdentifier
+            self.borderEvents?.handleWindowCreated(windowID, bundleID: bundleID)
         }
     }
 

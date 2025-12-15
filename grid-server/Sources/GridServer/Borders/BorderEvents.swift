@@ -35,8 +35,9 @@ class BorderEvents {
 
     // MARK: - Event Handlers (called by StateManager)
 
-    func handleWindowCreated(_ windowID: UInt32) {
-        borderManager?.createBorder(for: windowID)
+    /// Handle window creation with bundleID passed directly to avoid re-entrant StateManager calls
+    func handleWindowCreated(_ windowID: UInt32, bundleID: String?) {
+        borderManager?.createBorder(for: windowID, bundleID: bundleID)
     }
 
     func handleWindowDestroyed(_ windowID: UInt32) {
