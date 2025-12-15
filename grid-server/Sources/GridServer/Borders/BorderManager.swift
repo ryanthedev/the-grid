@@ -10,6 +10,10 @@ import CoreGraphics
 import Logging
 
 /// Manages all window borders and focus state
+///
+/// **Thread Safety**: All methods must be called on the main queue.
+/// The borders dictionary and focus state are not protected by locks
+/// and assume single-threaded access.
 class BorderManager {
     private let logger = Logger(label: "com.grid.BorderManager")
     private let connectionID: Int32
@@ -70,7 +74,8 @@ class BorderManager {
 
     /// Refresh all borders (after config or cell assignment change)
     func refreshAllBorders() {
-        for windowID in borders.keys {
+        let windowIDs = Array(borders.keys)  // Snapshot to prevent mutation during iteration
+        for windowID in windowIDs {
             updateBorder(for: windowID)
         }
     }
@@ -91,6 +96,10 @@ class BorderManager {
                 ])
                 return
             }
+        } else if getBundleIDForWindow == nil {
+            logger.warning("Bundle ID callback not set, filtering bypassed", metadata: [
+                "windowID": "\(windowID)"
+            ])
         }
 
         let border = BorderWindow(connectionID: connectionID, targetWindowID: windowID)
@@ -199,7 +208,12 @@ class BorderManager {
                     SLSTransactionOrderWindow(transaction, border.windowID, -1, windowID)
                 }
             }
-            _ = SLSTransactionCommit(transaction, 1)
+            let result = SLSTransactionCommit(transaction, 1)
+            if result != .success {
+                logger.warning("Transaction commit failed", metadata: ["error": "\(result.rawValue)"])
+            }
+        } else {
+            logger.warning("Failed to create transaction for focus update")
         }
 
         // Repaint affected borders
