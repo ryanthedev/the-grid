@@ -128,30 +128,12 @@ struct GridServerCommand: ParsableCommand {
             logger.info("Initializing border system...")
             let connectionID = SLSMainConnectionID()
 
-            // Initialize SimpleBorderManager (new system)
+            // Initialize SimpleBorderManager
             let simpleBorderManager = SimpleBorderManager(connectionID: connectionID)
             let borderEvents = BorderEvents()
             borderEvents.setup(simpleBorderManager: simpleBorderManager, stateManager: StateManager.shared)
             StateManager.shared.borderEvents = borderEvents
             messageHandler.simpleBorderManager = simpleBorderManager
-
-            // Legacy BorderManager initialization (kept for backward compatibility)
-            let borderConfig = BorderConfig()
-            let borderManager = BorderManager(connectionID: connectionID, config: borderConfig)
-            messageHandler.borderManager = borderManager
-
-            // DISABLED: Per-window border creation loop (replaced by SimpleBorderManager)
-            // The SimpleBorderManager uses a 2-element system:
-            // 1. Cell highlight (single instance, repositioned)
-            // 2. Window border (single instance, only for focused window)
-            //
-            // Old per-window loop commented out:
-            // let state = StateManager.shared.getState()
-            // for (widStr, _) in state.windows {
-            //     if let windowID = UInt32(widStr) {
-            //         borderManager.createBorder(for: windowID)
-            //     }
-            // }
 
             logger.notice("Border system initialized (SimpleBorderManager)")
 

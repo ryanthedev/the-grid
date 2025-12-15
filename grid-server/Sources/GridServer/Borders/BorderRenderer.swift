@@ -8,6 +8,13 @@
 import Foundation
 import CoreGraphics
 
+/// Border style type
+enum BorderStyleType {
+    case round
+    case square
+    case uniform
+}
+
 /// Border rendering style parameters
 struct BorderStyle {
     var color: CGColor

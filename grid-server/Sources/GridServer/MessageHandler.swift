@@ -10,9 +10,6 @@ class MessageHandler {
     private var handlers: [String: RequestHandler] = [:]
     private let logger: Logger
 
-    /// Border manager for handling border-related messages
-    weak var borderManager: BorderManager?
-
     /// Simple border manager for handling simplified border system
     weak var simpleBorderManager: SimpleBorderManager?
 
@@ -675,35 +672,6 @@ class MessageHandler {
 
         // MARK: - Border Configuration Methods
 
-        // Configure borders
-        register(method: "borders.configure") { [weak self] request, completion in
-            guard let self = self else { return }
-            guard let params = request.params else {
-                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
-                return
-            }
-
-            guard let configDict = params["config"]?.value as? [String: Any] else {
-                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Missing config")))
-                return
-            }
-
-            guard let borderManager = self.borderManager else {
-                completion(Response(id: request.id, error: ErrorInfo(code: -32603, message: "Border manager not available")))
-                return
-            }
-
-            // Load config and update border manager
-            let borderConfig = BorderConfig.load(from: configDict)
-            borderManager.config = borderConfig
-
-            // Refresh all borders with new config
-            borderManager.refreshAllBorders()
-
-            self.logger.info("Border config updated")
-            completion(Response(id: request.id, result: AnyCodable(["success": true])))
-        }
-
         // Set cell assignments
         register(method: "borders.setCellAssignments") { [weak self] request, completion in
             guard let self = self else { return }
@@ -739,27 +707,12 @@ class MessageHandler {
                 self.logger.info("Cell bounds parsed", metadata: ["count": "\(cellBounds.count)"])
             }
 
-            // Update SimpleBorderManager if available
+            // Update SimpleBorderManager
             if let simpleBorderManager = self.simpleBorderManager {
                 simpleBorderManager.setCellAssignments(cellAssignments)
                 if !cellBounds.isEmpty {
                     simpleBorderManager.setCellBounds(cellBounds)
                 }
-            }
-
-            // Update legacy BorderManager if available
-            if let borderManager = self.borderManager {
-                borderManager.setCellAssignments(cellAssignments)
-
-                // Store per-cell overrides if provided
-                if let cellsDict = params["cells"]?.value as? [String: [String: Any]] {
-                    for (cellID, cellConfig) in cellsDict {
-                        borderManager.setCellOverride(cellID: cellID, config: cellConfig)
-                    }
-                }
-
-                // Refresh borders with new cell awareness
-                borderManager.refreshAllBorders()
             }
 
             self.logger.info("Cell assignments updated", metadata: ["count": "\(cellAssignments.count)"])
