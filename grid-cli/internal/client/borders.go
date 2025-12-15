@@ -4,18 +4,16 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/google/uuid"
 	"github.com/yourusername/grid-cli/internal/config"
-	"github.com/yourusername/grid-cli/internal/models"
 )
 
 // SendBorderConfig sends border configuration to the server
-func (c *Client) SendBorderConfig(cfg *config.BorderConfig) error {
+func (c *Client) SendBorderConfig(ctx context.Context, cfg *config.BorderConfig) error {
 	if cfg == nil || !cfg.GetEnabled() {
 		return nil
 	}
 
-	params := map[string]interface{}{
+	configParams := map[string]interface{}{
 		"enabled":       cfg.GetEnabled(),
 		"width":         cfg.GetWidth(),
 		"style":         cfg.GetStyle(),
@@ -26,30 +24,33 @@ func (c *Client) SendBorderConfig(cfg *config.BorderConfig) error {
 
 	// Add optional color fields if set
 	if cfg.ActiveWindowColor != nil {
-		params["active_window_color"] = *cfg.ActiveWindowColor
+		configParams["active_window_color"] = *cfg.ActiveWindowColor
 	}
 	if cfg.ActiveCellColor != nil {
-		params["active_cell_color"] = *cfg.ActiveCellColor
+		configParams["active_cell_color"] = *cfg.ActiveCellColor
 	}
 	if cfg.InactiveColor != nil {
-		params["inactive_color"] = *cfg.InactiveColor
+		configParams["inactive_color"] = *cfg.InactiveColor
 	}
 
 	// Add palette if set
 	if len(cfg.Palette) > 0 {
-		params["palette"] = cfg.Palette
+		configParams["palette"] = cfg.Palette
 	}
 
 	// Add blacklist/whitelist if set
 	if len(cfg.Blacklist) > 0 {
-		params["blacklist"] = cfg.Blacklist
+		configParams["blacklist"] = cfg.Blacklist
 	}
 	if len(cfg.Whitelist) > 0 {
-		params["whitelist"] = cfg.Whitelist
+		configParams["whitelist"] = cfg.Whitelist
 	}
 
-	// Use the RPC request pattern from existing client methods
-	ctx := context.Background()
+	// Wrap config in params["config"] as expected by server
+	params := map[string]interface{}{
+		"config": configParams,
+	}
+
 	resp, err := c.request(ctx, "borders.configure", params)
 	if err != nil {
 		return fmt.Errorf("failed to send border config: %w", err)
@@ -76,7 +77,7 @@ type CellOverride struct {
 }
 
 // SendCellAssignments sends window-to-cell mappings to the server
-func (c *Client) SendCellAssignments(assignments []CellAssignment, overrides map[string]CellOverride) error {
+func (c *Client) SendCellAssignments(ctx context.Context, assignments []CellAssignment, overrides map[string]CellOverride) error {
 	// Build assignment map (windowID as string -> cellID)
 	assignmentMap := make(map[string]string)
 	for _, a := range assignments {
@@ -107,10 +108,7 @@ func (c *Client) SendCellAssignments(assignments []CellAssignment, overrides map
 		params["cells"] = cellsMap
 	}
 
-	// Use the RPC request pattern
-	ctx := context.Background()
-	req := models.NewRequest(uuid.New().String(), "borders.setCellAssignments", params)
-	resp, err := c.conn.SendRequest(ctx, req)
+	resp, err := c.request(ctx, "borders.setCellAssignments", params)
 	if err != nil {
 		return fmt.Errorf("failed to send cell assignments: %w", err)
 	}

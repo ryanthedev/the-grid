@@ -1,6 +1,7 @@
 package client
 
 import (
+	"context"
 	"testing"
 
 	"github.com/yourusername/grid-cli/internal/config"
@@ -11,7 +12,7 @@ func TestSendBorderConfig_NilConfig(t *testing.T) {
 		conn: nil, // We don't need a real connection for this test
 	}
 
-	err := c.SendBorderConfig(nil)
+	err := c.SendBorderConfig(context.Background(), nil)
 	if err != nil {
 		t.Errorf("Expected no error for nil config, got: %v", err)
 	}
@@ -27,7 +28,7 @@ func TestSendBorderConfig_DisabledConfig(t *testing.T) {
 		Enabled: &enabled,
 	}
 
-	err := c.SendBorderConfig(cfg)
+	err := c.SendBorderConfig(context.Background(), cfg)
 	if err != nil {
 		t.Errorf("Expected no error for disabled config, got: %v", err)
 	}
