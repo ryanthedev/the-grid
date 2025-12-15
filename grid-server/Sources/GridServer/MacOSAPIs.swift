@@ -47,6 +47,29 @@ typealias SLSSpaceSetCompatID_t = @convention(c) (Int32, UInt64, Int32) -> CGErr
 typealias SLSSetWindowListWorkspace_t = @convention(c) (Int32, UnsafePointer<UInt32>, Int32, Int32) -> CGError
 typealias SLSMoveWindowsToManagedSpace_t = @convention(c) (Int32, CFArray, UInt64) -> Void
 
+// Window creation and manipulation
+typealias SLSNewWindow_t = @convention(c) (Int32, Int32, CGFloat, CGFloat, UnsafePointer<CGRect>, UnsafeMutablePointer<UInt32>) -> CGError
+typealias SLSReleaseWindow_t = @convention(c) (Int32, UInt32) -> CGError
+typealias SLSSetWindowTags_t = @convention(c) (Int32, UInt32, UnsafeMutablePointer<UInt64>, Int32) -> CGError
+typealias SLSClearWindowTags_t = @convention(c) (Int32, UInt32, UnsafeMutablePointer<UInt64>, Int32) -> CGError
+typealias SLSSetWindowShape_t = @convention(c) (Int32, UInt32, CGFloat, CGFloat, UnsafePointer<CGRect>) -> CGError
+typealias SLSSetWindowOpacity_t = @convention(c) (Int32, UInt32, Bool) -> CGError
+typealias SLSSetWindowAlpha_t = @convention(c) (Int32, UInt32, Float) -> CGError
+typealias SLSOrderWindow_t = @convention(c) (Int32, UInt32, Int32, UInt32) -> CGError
+typealias SLSSetWindowLevel_t = @convention(c) (Int32, UInt32, Int32) -> CGError
+typealias SLSMoveWindow_t = @convention(c) (Int32, UInt32, UnsafePointer<CGPoint>) -> CGError
+typealias SLWindowContextCreate_t = @convention(c) (Int32, UInt32, UnsafeMutableRawPointer?) -> CGContext?
+typealias SLSFlushWindowContentRegion_t = @convention(c) (Int32, UInt32, UnsafeRawPointer?) -> CGError
+
+// Transaction API for atomic updates
+typealias SLSTransactionCreate_t = @convention(c) (Int32) -> CFTypeRef?
+typealias SLSTransactionCommit_t = @convention(c) (CFTypeRef, Int32) -> CGError
+typealias SLSTransactionOrderWindow_t = @convention(c) (CFTypeRef, UInt32, Int32, UInt32) -> Void
+typealias SLSTransactionSetWindowLevel_t = @convention(c) (CFTypeRef, UInt32, Int32) -> Void
+
+// Corner radius detection (returns array of 4 CGFloats: topLeft, topRight, bottomRight, bottomLeft)
+typealias SLSWindowIteratorGetCornerRadii_t = @convention(c) (UInt32, UnsafeMutablePointer<CGFloat>) -> CGError
+
 // MARK: - Process Serial Number APIs (for yabai-style focus)
 // Note: ProcessSerialNumber is imported from Carbon.HIToolbox
 
@@ -88,6 +111,25 @@ private let _SLSConnectionGetPID: SLSConnectionGetPID_t? = loadSymbol("SLSConnec
 private let _SLSSpaceSetCompatID: SLSSpaceSetCompatID_t? = loadSymbol("SLSSpaceSetCompatID")
 private let _SLSSetWindowListWorkspace: SLSSetWindowListWorkspace_t? = loadSymbol("SLSSetWindowListWorkspace")
 private let _SLSMoveWindowsToManagedSpace: SLSMoveWindowsToManagedSpace_t? = loadSymbol("SLSMoveWindowsToManagedSpace")
+
+// Window creation APIs
+private let _SLSNewWindow: SLSNewWindow_t? = loadSymbol("SLSNewWindow")
+private let _SLSReleaseWindow: SLSReleaseWindow_t? = loadSymbol("SLSReleaseWindow")
+private let _SLSSetWindowTags: SLSSetWindowTags_t? = loadSymbol("SLSSetWindowTags")
+private let _SLSClearWindowTags: SLSClearWindowTags_t? = loadSymbol("SLSClearWindowTags")
+private let _SLSSetWindowShape: SLSSetWindowShape_t? = loadSymbol("SLSSetWindowShape")
+private let _SLSSetWindowOpacity: SLSSetWindowOpacity_t? = loadSymbol("SLSSetWindowOpacity")
+private let _SLSSetWindowAlpha: SLSSetWindowAlpha_t? = loadSymbol("SLSSetWindowAlpha")
+private let _SLSOrderWindow: SLSOrderWindow_t? = loadSymbol("SLSOrderWindow")
+private let _SLSSetWindowLevel: SLSSetWindowLevel_t? = loadSymbol("SLSSetWindowLevel")
+private let _SLSMoveWindow: SLSMoveWindow_t? = loadSymbol("SLSMoveWindow")
+private let _SLWindowContextCreate: SLWindowContextCreate_t? = loadSymbol("SLWindowContextCreate")
+private let _SLSFlushWindowContentRegion: SLSFlushWindowContentRegion_t? = loadSymbol("SLSFlushWindowContentRegion")
+private let _SLSTransactionCreate: SLSTransactionCreate_t? = loadSymbol("SLSTransactionCreate")
+private let _SLSTransactionCommit: SLSTransactionCommit_t? = loadSymbol("SLSTransactionCommit")
+private let _SLSTransactionOrderWindow: SLSTransactionOrderWindow_t? = loadSymbol("SLSTransactionOrderWindow")
+private let _SLSTransactionSetWindowLevel: SLSTransactionSetWindowLevel_t? = loadSymbol("SLSTransactionSetWindowLevel")
+private let _SLSWindowIteratorGetCornerRadii: SLSWindowIteratorGetCornerRadii_t? = loadSymbol("SLSWindowIteratorGetCornerRadii")
 
 // SLPS APIs for yabai-style focus
 private let _SLPSSetFrontProcessWithOptions: SLPSSetFrontProcessWithOptions_t? =
@@ -207,6 +249,89 @@ func SLPSSetFrontProcessWithOptions(_ psn: UnsafePointer<ProcessSerialNumber>, _
 /// Post event record to process for focus events (yabai-style)
 func SLPSPostEventRecordTo(_ psn: UnsafePointer<ProcessSerialNumber>, _ bytes: UnsafeMutablePointer<UInt8>) -> CGError {
     _SLPSPostEventRecordTo?(psn, bytes) ?? .failure
+}
+
+// MARK: - Window Creation API Wrappers
+
+func SLSNewWindow(_ cid: Int32, _ backing: Int32, _ x: CGFloat, _ y: CGFloat, _ region: UnsafePointer<CGRect>, _ wid: UnsafeMutablePointer<UInt32>) -> CGError {
+    return _SLSNewWindow?(cid, backing, x, y, region, wid) ?? .failure
+}
+
+func SLSReleaseWindow(_ cid: Int32, _ wid: UInt32) -> CGError {
+    return _SLSReleaseWindow?(cid, wid) ?? .failure
+}
+
+func SLSSetWindowTags(_ cid: Int32, _ wid: UInt32, _ tags: UnsafeMutablePointer<UInt64>, _ tagSize: Int32) -> CGError {
+    return _SLSSetWindowTags?(cid, wid, tags, tagSize) ?? .failure
+}
+
+func SLSClearWindowTags(_ cid: Int32, _ wid: UInt32, _ tags: UnsafeMutablePointer<UInt64>, _ tagSize: Int32) -> CGError {
+    return _SLSClearWindowTags?(cid, wid, tags, tagSize) ?? .failure
+}
+
+func SLSSetWindowShape(_ cid: Int32, _ wid: UInt32, _ x: CGFloat, _ y: CGFloat, _ region: UnsafePointer<CGRect>) -> CGError {
+    return _SLSSetWindowShape?(cid, wid, x, y, region) ?? .failure
+}
+
+func SLSSetWindowOpacity(_ cid: Int32, _ wid: UInt32, _ opaque: Bool) -> CGError {
+    return _SLSSetWindowOpacity?(cid, wid, opaque) ?? .failure
+}
+
+func SLSSetWindowAlpha(_ cid: Int32, _ wid: UInt32, _ alpha: Float) -> CGError {
+    return _SLSSetWindowAlpha?(cid, wid, alpha) ?? .failure
+}
+
+func SLSOrderWindow(_ cid: Int32, _ wid: UInt32, _ order: Int32, _ relativeWid: UInt32) -> CGError {
+    return _SLSOrderWindow?(cid, wid, order, relativeWid) ?? .failure
+}
+
+func SLSSetWindowLevel(_ cid: Int32, _ wid: UInt32, _ level: Int32) -> CGError {
+    return _SLSSetWindowLevel?(cid, wid, level) ?? .failure
+}
+
+func SLSMoveWindow(_ cid: Int32, _ wid: UInt32, _ point: UnsafePointer<CGPoint>) -> CGError {
+    return _SLSMoveWindow?(cid, wid, point) ?? .failure
+}
+
+func SLWindowContextCreate(_ cid: Int32, _ wid: UInt32, _ options: UnsafeMutableRawPointer?) -> CGContext? {
+    return _SLWindowContextCreate?(cid, wid, options)
+}
+
+func SLSFlushWindowContentRegion(_ cid: Int32, _ wid: UInt32, _ region: UnsafeRawPointer?) -> CGError {
+    return _SLSFlushWindowContentRegion?(cid, wid, region) ?? .failure
+}
+
+func SLSTransactionCreate(_ cid: Int32) -> CFTypeRef? {
+    return _SLSTransactionCreate?(cid)
+}
+
+func SLSTransactionCommit(_ transaction: CFTypeRef, _ sync: Int32) -> CGError {
+    return _SLSTransactionCommit?(transaction, sync) ?? .failure
+}
+
+func SLSTransactionOrderWindow(_ transaction: CFTypeRef, _ wid: UInt32, _ order: Int32, _ relativeWid: UInt32) {
+    _SLSTransactionOrderWindow?(transaction, wid, order, relativeWid)
+}
+
+func SLSTransactionSetWindowLevel(_ transaction: CFTypeRef, _ wid: UInt32, _ level: Int32) {
+    _SLSTransactionSetWindowLevel?(transaction, wid, level)
+}
+
+/// Get corner radii for a window
+/// - Parameters:
+///   - wid: Window ID
+///   - radii: Pointer to array of 4 CGFloats (topLeft, topRight, bottomRight, bottomLeft)
+func SLSWindowIteratorGetCornerRadii(_ wid: UInt32, _ radii: UnsafeMutablePointer<CGFloat>) -> CGError {
+    return _SLSWindowIteratorGetCornerRadii?(wid, radii) ?? .failure
+}
+
+// MARK: - Window Tag Constants
+
+/// Window tag bits (from JankyBorders)
+struct WindowTags {
+    static let sticky: UInt64 = (1 << 11)           // Visible on all spaces
+    static let floating: UInt64 = (1 << 1) | (1 << 9)  // Floating window
+    static let noShadow: UInt64 = (1 << 3)          // No shadow
 }
 
 // MARK: - Event Type Constants
