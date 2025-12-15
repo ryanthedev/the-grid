@@ -1,4 +1,4 @@
-<video src="thegridvid.mp4" autoplay loop muted playsinline></video>
+<video src="./thegridvid.mp4" autoplay loop muted playsinline></video>
 
 # the grid
 
