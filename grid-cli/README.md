@@ -6,118 +6,118 @@ Command-line client for theGrid macOS window manager.
 
 ```bash
 cd grid-cli
-make build      # Build to ./bin/grid
+make build      # Build to ./bin/thegrid
 make install    # Install to $GOPATH/bin
 ```
 
 ## Quick Start
 
 ```bash
-grid ping                    # Test server connection
-grid info                    # Get server info
-grid list windows            # List all windows
-grid layout apply ide        # Apply a layout
-grid focus right             # Move focus to adjacent cell
+thegrid ping                    # Test server connection
+thegrid info                    # Get server info
+thegrid list windows            # List all windows
+thegrid layout apply ide        # Apply a layout
+thegrid focus right             # Move focus to adjacent cell
 ```
 
 ## Commands
 
 ### Connectivity
 ```bash
-grid ping                    # Test server connection
-grid info                    # Get server information
-grid dump                    # Dump complete state (JSON)
+thegrid ping                    # Test server connection
+thegrid info                    # Get server information
+thegrid dump                    # Dump complete state (JSON)
 ```
 
 ### Listing
 ```bash
-grid list windows [--all]    # List windows (--all includes minimized/hidden)
-grid list spaces             # List all spaces
-grid list displays           # List all displays
-grid list apps               # List all applications
+thegrid list windows [--all]    # List windows (--all includes minimized/hidden)
+thegrid list spaces             # List all spaces
+thegrid list displays           # List all displays
+thegrid list apps               # List all applications
 ```
 
 ### Window Management
 ```bash
-grid window get <id>                              # Get window details
-grid window find <pattern>                        # Find windows by title/app
-grid window update <id> --x X --y Y --w W --h H   # Move/resize window
-grid window to-space <id> <space-id>              # Move to space
-grid window to-display <id> <uuid>                # Move to display
+thegrid window get <id>                              # Get window details
+thegrid window find <pattern>                        # Find windows by title/app
+thegrid window update <id> --x X --y Y --w W --h H   # Move/resize window
+thegrid window to-space <id> <space-id>              # Move to space
+thegrid window to-display <id> <uuid>                # Move to display
 ```
 
 ### Window Properties (requires MSS)
 ```bash
-grid window set-opacity <id> <0.0-1.0>            # Set window opacity
-grid window fade-opacity <id> <opacity> <duration> # Animated opacity
-grid window get-opacity <id>                      # Get current opacity
-grid window set-layer <id> <layer>                # Set window layer
-grid window get-layer <id>                        # Get window layer
-grid window set-sticky <id> <true|false>          # Set sticky (all spaces)
-grid window is-sticky <id>                        # Check if sticky
-grid window minimize <id>                         # Minimize window
-grid window unminimize <id>                       # Unminimize window
-grid window is-minimized <id>                     # Check if minimized
+thegrid window set-opacity <id> <0.0-1.0>            # Set window opacity
+thegrid window fade-opacity <id> <opacity> <duration> # Animated opacity
+thegrid window get-opacity <id>                      # Get current opacity
+thegrid window set-layer <id> <layer>                # Set window layer
+thegrid window get-layer <id>                        # Get window layer
+thegrid window set-sticky <id> <true|false>          # Set sticky (all spaces)
+thegrid window is-sticky <id>                        # Check if sticky
+thegrid window minimize <id>                         # Minimize window
+thegrid window unminimize <id>                       # Unminimize window
+thegrid window is-minimized <id>                     # Check if minimized
 ```
 
 ### Space Management (requires MSS)
 ```bash
-grid space create <display-space-id>              # Create new space
-grid space destroy <space-id>                     # Destroy space
-grid space focus <space-id>                       # Focus space
+thegrid space create <display-space-id>              # Create new space
+thegrid space destroy <space-id>                     # Destroy space
+thegrid space focus <space-id>                       # Focus space
 ```
 
 ### Layout Management
 ```bash
-grid layout list                   # List available layouts
-grid layout show <id>              # Show layout details
-grid layout apply <id> [--space N] # Apply layout to current/specified space
-grid layout cycle                  # Cycle to next layout
-grid layout current                # Show current layout
-grid layout reapply                # Reapply current layout
+thegrid layout list                   # List available layouts
+thegrid layout show <id>              # Show layout details
+thegrid layout apply <id> [--space N] # Apply layout to current/specified space
+thegrid layout cycle                  # Cycle to next layout
+thegrid layout current                # Show current layout
+thegrid layout reapply                # Reapply current layout
 ```
 
 ### Focus Navigation
 ```bash
-grid focus left [--wrap]           # Focus cell to the left
-grid focus right [--wrap]          # Focus cell to the right
-grid focus up [--wrap]             # Focus cell above
-grid focus down [--wrap]           # Focus cell below
-grid focus next                    # Next window in cell
-grid focus prev                    # Previous window in cell
-grid focus cell <id>               # Focus specific cell by ID
+thegrid focus left [--wrap]           # Focus cell to the left
+thegrid focus right [--wrap]          # Focus cell to the right
+thegrid focus up [--wrap]             # Focus cell above
+thegrid focus down [--wrap]           # Focus cell below
+thegrid focus next                    # Next window in cell
+thegrid focus prev                    # Previous window in cell
+thegrid focus cell <id>               # Focus specific cell by ID
 ```
 
 ### Resize
 ```bash
-grid resize grow [amount]          # Grow focused window (default 10%)
-grid resize shrink [amount]        # Shrink focused window
-grid resize reset [--all]          # Reset splits in cell (--all for all)
+thegrid resize grow [amount]          # Grow focused window (default 10%)
+thegrid resize shrink [amount]        # Shrink focused window
+thegrid resize reset [--all]          # Reset splits in cell (--all for all)
 ```
 
 ### Cell Management
 ```bash
-grid cell send <direction>         # Send window to adjacent cell
+thegrid cell send <direction>         # Send window to adjacent cell
 ```
 
 ### Configuration
 ```bash
-grid config show                   # Display current config
-grid config validate [path]        # Validate config file
-grid config init                   # Create default config
+thegrid config show                   # Display current config
+thegrid config validate [path]        # Validate config file
+thegrid config init                   # Create default config
 ```
 
 ### State Management
 ```bash
-grid state show                    # Show runtime state
-grid state reset                   # Clear all state
+thegrid state show                    # Show runtime state
+thegrid state reset                   # Clear all state
 ```
 
 ### Debug
 ```bash
-grid show layout                   # ASCII visualization of layout
-grid show display <index>          # Show display info
-grid render <space-id>             # Render window positions (JSON)
+thegrid show layout                   # ASCII visualization of layout
+thegrid show display <index>          # Show display info
+thegrid render <space-id>             # Render window positions (JSON)
 ```
 
 ## Global Flags

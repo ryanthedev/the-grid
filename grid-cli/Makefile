@@ -1,6 +1,6 @@
 .PHONY: build install clean test run-ping run-info deps
 
-BINARY_NAME=grid
+BINARY_NAME=thegrid
 BUILD_DIR=bin
 GO=go
 GOFLAGS=-v

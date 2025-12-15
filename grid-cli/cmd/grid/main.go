@@ -44,7 +44,7 @@ var (
 
 // rootCmd is the base command
 var rootCmd = &cobra.Command{
-	Use:   "grid",
+	Use:   "thegrid",
 	Short: "GridServer CLI - macOS window manager client",
 	Long: `Grid is a command-line client for GridServer, a powerful macOS window manager.
 

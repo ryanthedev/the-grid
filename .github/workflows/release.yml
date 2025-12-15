@@ -1,0 +1,205 @@
+name: Automated Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump_type:
+        description: 'Version bump type'
+        required: true
+        type: choice
+        options:
+          - minor
+          - patch
+        default: 'patch'
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+
+      - name: Get current version
+        id: current_version
+        run: |
+          CURRENT_VERSION=$(cat VERSION)
+          echo "Current version: $CURRENT_VERSION"
+          echo "version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
+          echo "major=$MAJOR" >> $GITHUB_OUTPUT
+          echo "minor=$MINOR" >> $GITHUB_OUTPUT
+          echo "patch=$PATCH" >> $GITHUB_OUTPUT
+
+      - name: Calculate new version
+        id: new_version
+        run: |
+          MAJOR=${{ steps.current_version.outputs.major }}
+          MINOR=${{ steps.current_version.outputs.minor }}
+          PATCH=${{ steps.current_version.outputs.patch }}
+
+          BUMP_TYPE="${{ github.event.inputs.bump_type }}"
+          if [ -z "$BUMP_TYPE" ]; then
+            BUMP_TYPE="patch"
+          fi
+
+          if [ "$BUMP_TYPE" == "minor" ]; then
+            MINOR=$((MINOR + 1))
+            PATCH=0
+          elif [ "$BUMP_TYPE" == "patch" ]; then
+            PATCH=$((PATCH + 1))
+          fi
+
+          NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}"
+          echo "New version: $NEW_VERSION"
+          echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Check if version tag exists
+        run: |
+          NEW_VERSION="${{ steps.new_version.outputs.version }}"
+          if git rev-parse "v$NEW_VERSION" >/dev/null 2>&1; then
+            echo "Error: Tag v$NEW_VERSION already exists!"
+            exit 1
+          fi
+          echo "Tag v$NEW_VERSION is available"
+
+      - name: Update VERSION file
+        run: |
+          NEW_VERSION="${{ steps.new_version.outputs.version }}"
+          echo "$NEW_VERSION" > VERSION
+          echo "Updated VERSION to $NEW_VERSION"
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          NEW_VERSION="${{ steps.new_version.outputs.version }}"
+          CURRENT_VERSION="${{ steps.current_version.outputs.version }}"
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+
+          CHANGELOG_FILE="CHANGELOG_${NEW_VERSION}.md"
+
+          echo "# Release v${NEW_VERSION}" > "$CHANGELOG_FILE"
+          echo "" >> "$CHANGELOG_FILE"
+          echo "## Changes since v${CURRENT_VERSION}" >> "$CHANGELOG_FILE"
+          echo "" >> "$CHANGELOG_FILE"
+
+          if [ -n "$LAST_TAG" ]; then
+            git log ${LAST_TAG}..HEAD --pretty=format:"- %s (%h)" --no-merges >> "$CHANGELOG_FILE"
+          else
+            git log --pretty=format:"- %s (%h)" --no-merges -20 >> "$CHANGELOG_FILE"
+          fi
+
+          echo "" >> "$CHANGELOG_FILE"
+          echo "file=$CHANGELOG_FILE" >> $GITHUB_OUTPUT
+
+      - name: Commit version bump
+        run: |
+          NEW_VERSION="${{ steps.new_version.outputs.version }}"
+          git add VERSION
+          git commit -m "chore: bump version to $NEW_VERSION [skip ci]"
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Build release tarball
+        run: |
+          make dist
+          NEW_VERSION="${{ steps.new_version.outputs.version }}"
+          TARBALL="dist/thegrid-${NEW_VERSION}.tar.gz"
+
+          if [ ! -f "$TARBALL" ]; then
+            echo "Error: Tarball $TARBALL not found!"
+            exit 1
+          fi
+
+          echo "Successfully built $TARBALL"
+          ls -lh "$TARBALL"
+
+      - name: Calculate SHA256
+        id: sha256
+        run: |
+          NEW_VERSION="${{ steps.new_version.outputs.version }}"
+          TARBALL="dist/thegrid-${NEW_VERSION}.tar.gz"
+
+          SHA256=$(shasum -a 256 "$TARBALL" | cut -d' ' -f1)
+          echo "SHA256: $SHA256"
+          echo "sha256=$SHA256" >> $GITHUB_OUTPUT
+
+      - name: Trigger tap repository update
+        env:
+          GH_TOKEN: ${{ secrets.THEGRID_BREW_GH_TOKEN }}
+        run: |
+          NEW_VERSION="${{ steps.new_version.outputs.version }}"
+          SHA256="${{ steps.sha256.outputs.sha256 }}"
+          TARBALL_URL="https://github.com/${{ github.repository }}/archive/refs/tags/v${NEW_VERSION}.tar.gz"
+
+          echo "Triggering formula update in homebrew-thegrid repository..."
+
+          gh workflow run update-formula.yml \
+            --repo ryanthedev/homebrew-thegrid \
+            --field version="${NEW_VERSION}" \
+            --field sha256="${SHA256}" \
+            --field tarball_url="${TARBALL_URL}"
+
+          if [ $? -eq 0 ]; then
+            echo "Successfully triggered formula update for version ${NEW_VERSION}"
+          else
+            echo "Failed to trigger formula update"
+            exit 1
+          fi
+
+      - name: Create and push tag
+        run: |
+          NEW_VERSION="${{ steps.new_version.outputs.version }}"
+          git tag -a "v$NEW_VERSION" -m "Release v$NEW_VERSION"
+          git push origin main
+          git push origin --tags
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.new_version.outputs.version }}
+          name: Release v${{ steps.new_version.outputs.version }}
+          body_path: ${{ steps.changelog.outputs.file }}
+          files: dist/thegrid-${{ steps.new_version.outputs.version }}.tar.gz
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Output release information
+        run: |
+          NEW_VERSION="${{ steps.new_version.outputs.version }}"
+          SHA256="${{ steps.sha256.outputs.sha256 }}"
+
+          echo ""
+          echo "Release v$NEW_VERSION created successfully!"
+          echo ""
+          echo "Tarball: thegrid-${NEW_VERSION}.tar.gz"
+          echo "SHA256: $SHA256"
+          echo "Tag: v$NEW_VERSION"
+          echo "Release URL: https://github.com/${{ github.repository }}/releases/tag/v$NEW_VERSION"
+          echo ""
+          echo "Next steps:"
+          echo "  1. Verify the release"
+          echo "  2. Verify tap update: https://github.com/ryanthedev/homebrew-thegrid"
+          echo "  3. Test installation: brew tap ryanthedev/thegrid && brew install thegrid"

@@ -1,4 +1,7 @@
-.PHONY: help build server cli test clean server-test cli-test server-clean cli-clean run-server install
+.PHONY: help build server cli test clean server-test cli-test server-clean cli-clean run-server install dist
+
+# Version from VERSION file
+VERSION := $(shell cat VERSION)
 
 # Default target - build everything
 all: build
@@ -61,6 +64,24 @@ run-server-release: server-release
 verify: build test
 	@echo "✓ Build and test verification complete"
 
+# Distribution tarball
+dist: server-release cli
+	@echo "Creating distribution tarball v$(VERSION)..."
+	@rm -rf dist
+	@mkdir -p dist/thegrid-$(VERSION)/bin
+	@cp grid-server/.build/release/grid-server dist/thegrid-$(VERSION)/bin/
+	@cp grid-cli/bin/thegrid dist/thegrid-$(VERSION)/bin/
+	@cp VERSION dist/thegrid-$(VERSION)/
+	@cp LICENSE dist/thegrid-$(VERSION)/ 2>/dev/null || echo "No LICENSE file"
+	@cp README.md dist/thegrid-$(VERSION)/ 2>/dev/null || true
+	@cd dist && tar -czf thegrid-$(VERSION).tar.gz thegrid-$(VERSION)
+	@echo ""
+	@echo "Distribution tarball created:"
+	@ls -lh dist/thegrid-$(VERSION).tar.gz
+	@echo ""
+	@echo "SHA256:"
+	@shasum -a 256 dist/thegrid-$(VERSION).tar.gz
+
 # Show help
 help:
 	@echo "TheGrid Monorepo Build System"
@@ -70,6 +91,7 @@ help:
 	@echo "  test             - Run all tests"
 	@echo "  clean            - Clean all build artifacts"
 	@echo "  verify           - Build and test everything"
+	@echo "  dist             - Create distribution tarball"
 	@echo ""
 	@echo "Server targets:"
 	@echo "  server           - Build grid-server (debug)"
@@ -79,10 +101,10 @@ help:
 	@echo "  run-server       - Build and run grid-server (debug)"
 	@echo ""
 	@echo "CLI targets:"
-	@echo "  cli              - Build grid-cli"
+	@echo "  cli              - Build thegrid CLI"
 	@echo "  cli-test         - Run grid-cli tests"
 	@echo "  cli-clean        - Clean grid-cli build"
-	@echo "  cli-install      - Install grid-cli to \$$GOPATH/bin"
+	@echo "  cli-install      - Install thegrid to \$$GOPATH/bin"
 	@echo ""
 	@echo "Usage examples:"
 	@echo "  make              # Build everything"
@@ -90,3 +112,4 @@ help:
 	@echo "  make cli          # Build just the CLI"
 	@echo "  make test         # Run all tests"
 	@echo "  make run-server   # Build and run the server"
+	@echo "  make dist         # Create distribution tarball"

@@ -30,3 +30,6 @@ xcuserdata/
 *.dSYM/
 # logs
 *.log
+
+# Distribution
+dist/
