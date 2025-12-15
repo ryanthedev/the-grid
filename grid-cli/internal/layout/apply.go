@@ -18,13 +18,15 @@ type ApplyLayoutOptions struct {
 	BaseSpacing           float64                  // Base unit for "Nx" padding syntax
 	SettingsPadding       *types.Padding           // Global default padding from settings
 	SettingsWindowSpacing *types.PaddingValue      // Global default window spacing from settings
+	SendBorders           bool                     // Whether to send border config/assignments
 }
 
 // DefaultApplyOptions returns sensible default options
 func DefaultApplyOptions() ApplyLayoutOptions {
 	return ApplyLayoutOptions{
 		Strategy:    types.AssignPosition,
-		BaseSpacing: 8, // Default base spacing unit
+		BaseSpacing: 8,    // Default base spacing unit
+		SendBorders: true, // Send border config by default
 	}
 }
 
@@ -175,6 +177,19 @@ func ApplyLayout(
 		return fmt.Errorf("failed to apply placements: %w", err)
 	}
 
+	// 8b. Send border config and cell assignments to server
+	if opts.SendBorders {
+		if err := sendBorderConfig(ctx, c, cfg); err != nil {
+			// Log but don't fail - borders are optional
+			logging.Warn().Err(err).Msg("failed to send border config")
+		}
+
+		if err := sendCellAssignments(ctx, c, layout, assignment.Assignments); err != nil {
+			// Log but don't fail - borders are optional
+			logging.Warn().Err(err).Msg("failed to send cell assignments")
+		}
+	}
+
 	// 9. Update local state
 	// Only call SetCurrentLayout (which clears ratios) if switching to a different layout
 	if existingState == nil || existingState.CurrentLayoutID != layoutID {
@@ -307,4 +322,60 @@ func ReapplyLayout(
 	}
 
 	return ApplyLayout(ctx, c, snap, cfg, rs, spaceState.CurrentLayoutID, opts)
+}
+
+// sendBorderConfig sends the border configuration to the server.
+func sendBorderConfig(ctx context.Context, c *client.Client, cfg *config.Config) error {
+	if cfg.Borders == nil || !cfg.Borders.GetEnabled() {
+		return nil // Borders not configured or disabled
+	}
+
+	logging.Debug().Msg("sending border config to server")
+	return c.SendBorderConfig(ctx, cfg.Borders)
+}
+
+// sendCellAssignments sends window-to-cell mappings to the server for border coloring.
+func sendCellAssignments(ctx context.Context, c *client.Client, layout *types.Layout, assignments map[string][]uint32) error {
+	// Build cell assignments list
+	var cellAssignments []client.CellAssignment
+	for cellID, windowIDs := range assignments {
+		for _, windowID := range windowIDs {
+			cellAssignments = append(cellAssignments, client.CellAssignment{
+				WindowID: windowID,
+				CellID:   cellID,
+			})
+		}
+	}
+
+	if len(cellAssignments) == 0 {
+		return nil // No assignments to send
+	}
+
+	// Build cell overrides from layout cells that have border config
+	overrides := make(map[string]client.CellOverride)
+	for _, cell := range layout.Cells {
+		if cell.Border != nil {
+			override := client.CellOverride{}
+			if cell.Border.ActiveCellColor != nil {
+				override.ActiveCellColor = *cell.Border.ActiveCellColor
+			}
+			if cell.Border.InactiveColor != nil {
+				override.InactiveColor = *cell.Border.InactiveColor
+			}
+			if cell.Border.Style != nil {
+				override.Style = *cell.Border.Style
+			}
+			// Only add if at least one field is set
+			if override.ActiveCellColor != "" || override.InactiveColor != "" || override.Style != "" {
+				overrides[cell.ID] = override
+			}
+		}
+	}
+
+	logging.Debug().
+		Int("assignmentCount", len(cellAssignments)).
+		Int("overrideCount", len(overrides)).
+		Msg("sending cell assignments to server")
+
+	return c.SendCellAssignments(ctx, cellAssignments, overrides)
 }
