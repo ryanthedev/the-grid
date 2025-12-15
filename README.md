@@ -1,5 +1,6 @@
-<video src="./thegridvid.mp4" autoplay loop muted playsinline></video>
-
+<div align="center">
+  <video src="https://github.com/user-attachments/assets/5a6156ec-975a-4eac-a424-010522c1c180" autoplay loop muted playsinline></video>
+</div>
 # the grid
 
 > The Grid. A digital frontier. I tried to picture clusters of information as they moved through the computer. What did they look like? Ships? Motorcycles? Were the circuits like freeways? I kept dreaming of a world I thought I'd never see. And then, one day... I got in.
