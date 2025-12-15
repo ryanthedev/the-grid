@@ -8,6 +8,7 @@ type Config struct {
 	Layouts  []LayoutConfig         `yaml:"layouts" json:"layouts"`
 	Spaces   map[string]SpaceConfig `yaml:"spaces" json:"spaces"`
 	AppRules []AppRule              `yaml:"appRules" json:"appRules"`
+	Borders  *BorderConfig          `yaml:"borders,omitempty" json:"borders,omitempty"`
 }
 
 // Settings contains global application settings
@@ -56,14 +57,22 @@ type GridConfig struct {
 	Rows    []string `yaml:"rows" json:"rows"`       // Track size strings
 }
 
+// CellBorderConfigYAML is the YAML representation of per-cell border overrides
+type CellBorderConfigYAML struct {
+	ActiveCellColor *string `yaml:"active_cell_color,omitempty" json:"active_cell_color,omitempty"`
+	InactiveColor   *string `yaml:"inactive_color,omitempty" json:"inactive_color,omitempty"`
+	Style           *string `yaml:"style,omitempty" json:"style,omitempty"`
+}
+
 // CellConfig is the configuration representation of a cell
 type CellConfig struct {
-	ID            string          `yaml:"id" json:"id"`
-	Column        string          `yaml:"column" json:"column"`                               // "start/end" format, e.g., "1/3"
-	Row           string          `yaml:"row" json:"row"`                                     // "start/end" format, e.g., "1/2"
-	StackMode     types.StackMode `yaml:"stackMode,omitempty" json:"stackMode,omitempty"`
-	Padding       interface{}     `yaml:"padding,omitempty" json:"padding,omitempty"`         // Per-cell padding override (supports shorthand)
-	WindowSpacing interface{}     `yaml:"windowSpacing,omitempty" json:"windowSpacing,omitempty"` // Per-cell window spacing override (supports shorthand)
+	ID            string                `yaml:"id" json:"id"`
+	Column        string                `yaml:"column" json:"column"`                                    // "start/end" format, e.g., "1/3"
+	Row           string                `yaml:"row" json:"row"`                                          // "start/end" format, e.g., "1/2"
+	StackMode     types.StackMode       `yaml:"stackMode,omitempty" json:"stackMode,omitempty"`
+	Padding       interface{}           `yaml:"padding,omitempty" json:"padding,omitempty"`              // Per-cell padding override (supports shorthand)
+	WindowSpacing interface{}           `yaml:"windowSpacing,omitempty" json:"windowSpacing,omitempty"`  // Per-cell window spacing override (supports shorthand)
+	Border        *CellBorderConfigYAML `yaml:"border,omitempty" json:"border,omitempty"`                // Per-cell border style override
 }
 
 // SpaceConfig defines per-Space settings

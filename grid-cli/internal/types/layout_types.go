@@ -77,16 +77,24 @@ type ResolvedPadding struct {
 	Left   float64
 }
 
+// CellBorderConfig defines per-cell border overrides
+type CellBorderConfig struct {
+	ActiveCellColor *string `yaml:"active_cell_color,omitempty" json:"active_cell_color,omitempty"`
+	InactiveColor   *string `yaml:"inactive_color,omitempty" json:"inactive_color,omitempty"`
+	Style           *string `yaml:"style,omitempty" json:"style,omitempty"`
+}
+
 // Cell represents a grid cell definition from configuration
 type Cell struct {
-	ID            string        // Unique cell identifier
-	ColumnStart   int           // 1-indexed column start
-	ColumnEnd     int           // 1-indexed column end (exclusive)
-	RowStart      int           // 1-indexed row start
-	RowEnd        int           // 1-indexed row end (exclusive)
-	StackMode     StackMode     // How windows stack in this cell (optional override)
-	Padding       *Padding      // Per-cell padding override (nil = inherit from layout)
-	WindowSpacing *PaddingValue // Per-cell window spacing override (nil = inherit from layout)
+	ID            string            // Unique cell identifier
+	ColumnStart   int               // 1-indexed column start
+	ColumnEnd     int               // 1-indexed column end (exclusive)
+	RowStart      int               // 1-indexed row start
+	RowEnd        int               // 1-indexed row end (exclusive)
+	StackMode     StackMode         // How windows stack in this cell (optional override)
+	Padding       *Padding          // Per-cell padding override (nil = inherit from layout)
+	WindowSpacing *PaddingValue     // Per-cell window spacing override (nil = inherit from layout)
+	Border        *CellBorderConfig // Per-cell border style override (nil = inherit from global)
 }
 
 // Layout defines a complete grid layout configuration
