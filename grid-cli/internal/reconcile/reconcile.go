@@ -5,9 +5,11 @@ import (
 
 	"github.com/yourusername/grid-cli/internal/client"
 	"github.com/yourusername/grid-cli/internal/config"
+	"github.com/yourusername/grid-cli/internal/layout"
 	"github.com/yourusername/grid-cli/internal/logging"
 	"github.com/yourusername/grid-cli/internal/server"
 	"github.com/yourusername/grid-cli/internal/state"
+	"github.com/yourusername/grid-cli/internal/types"
 )
 
 // Sync updates runtimeState to match server reality.
@@ -139,6 +141,55 @@ func equalRatios(n int) []float64 {
 		ratios[i] = ratio
 	}
 	return ratios
+}
+
+// calculateCellBounds computes cell bounds from layout definition and display geometry.
+func calculateCellBounds(layoutDef *types.Layout, snap *server.Snapshot, spaceState *state.SpaceState) map[string]client.CellRect {
+	if layoutDef == nil || len(layoutDef.Cells) == 0 {
+		return nil
+	}
+
+	// Use ratio overrides from space state if available
+	calculated := layout.CalculateLayoutWithRatios(
+		layoutDef,
+		snap.DisplayBounds,
+		0, // gap handled by layout
+		spaceState.ColumnRatios,
+		spaceState.RowRatios,
+	)
+
+	if calculated == nil || len(calculated.CellBounds) == 0 {
+		return nil
+	}
+
+	// Convert types.Rect to client.CellRect
+	result := make(map[string]client.CellRect, len(calculated.CellBounds))
+	for cellID, rect := range calculated.CellBounds {
+		result[cellID] = client.CellRect{
+			X:      rect.X,
+			Y:      rect.Y,
+			Width:  rect.Width,
+			Height: rect.Height,
+		}
+	}
+
+	return result
+}
+
+// buildCellAssignments builds the window-to-cell assignment list from space state.
+func buildCellAssignments(spaceState *state.SpaceState) []client.CellAssignment {
+	var assignments []client.CellAssignment
+
+	for cellID, cellState := range spaceState.Cells {
+		for _, windowID := range cellState.Windows {
+			assignments = append(assignments, client.CellAssignment{
+				WindowID: windowID,
+				CellID:   cellID,
+			})
+		}
+	}
+
+	return assignments
 }
 
 // syncBorders sends cell assignments and bounds to the server for border rendering.
