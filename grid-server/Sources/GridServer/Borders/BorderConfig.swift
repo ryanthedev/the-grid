@@ -33,6 +33,7 @@ struct CellBorderStyle {
 /// Border configuration
 class BorderConfig {
     private let logger = Logger(label: "com.grid.BorderConfig")
+    private let queue = DispatchQueue(label: "com.grid.BorderConfig")
 
     // General settings
     var enabled: Bool = true
@@ -51,7 +52,11 @@ class BorderConfig {
     var palette: [CGColor] = []
 
     // Per-cell overrides
-    var cellOverrides: [String: CellBorderStyle] = [:]
+    private var _cellOverrides: [String: CellBorderStyle] = [:]
+    var cellOverrides: [String: CellBorderStyle] {
+        get { queue.sync { _cellOverrides } }
+        set { queue.sync { _cellOverrides = newValue } }
+    }
 
     // App filtering
     var whitelist: Set<String> = []
@@ -73,7 +78,8 @@ class BorderConfig {
             guard let cellID = cellID else { return activeCellColor }
 
             // 1. Per-cell override
-            if let override = cellOverrides[cellID]?.activeCellColor {
+            let override = queue.sync { _cellOverrides[cellID]?.activeCellColor }
+            if let override = override {
                 return override
             }
             // 2. Palette
@@ -87,7 +93,8 @@ class BorderConfig {
             guard let cellID = cellID else { return inactiveColor }
 
             // 1. Per-cell override
-            if let override = cellOverrides[cellID]?.inactiveColor {
+            let override = queue.sync { _cellOverrides[cellID]?.inactiveColor }
+            if let override = override {
                 return override
             }
             // 2. Dimmed palette color
@@ -117,16 +124,35 @@ class BorderConfig {
         return true
     }
 
+    // MARK: - Palette Management
+
+    /// Clear palette assignment for a specific cell
+    func clearPaletteAssignment(for cellID: String) {
+        queue.sync {
+            _ = paletteAssignments.removeValue(forKey: cellID)
+        }
+    }
+
+    /// Reset all palette assignments
+    func resetPaletteAssignments() {
+        queue.sync {
+            paletteAssignments.removeAll()
+            nextPaletteIndex = 0
+        }
+    }
+
     // MARK: - Private Helpers
 
     private func getPaletteIndex(for cellID: String) -> Int {
-        if let existing = paletteAssignments[cellID] {
-            return existing
+        return queue.sync {
+            if let existing = paletteAssignments[cellID] {
+                return existing
+            }
+            let index = nextPaletteIndex % palette.count
+            paletteAssignments[cellID] = index
+            nextPaletteIndex += 1
+            return index
         }
-        let index = nextPaletteIndex % palette.count
-        paletteAssignments[cellID] = index
-        nextPaletteIndex += 1
-        return index
     }
 
     private func dimColor(_ color: CGColor, by factor: CGFloat) -> CGColor {
@@ -149,6 +175,11 @@ class BorderConfig {
         var hexString = hex
         if hexString.hasPrefix("0x") {
             hexString = String(hexString.dropFirst(2))
+        }
+
+        // Validate length: must be 6 (RRGGBB) or 8 (AARRGGBB)
+        guard hexString.count == 6 || hexString.count == 8 else {
+            return nil
         }
 
         guard let value = UInt32(hexString, radix: 16) else {
