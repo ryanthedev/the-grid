@@ -251,14 +251,56 @@ func syncBorders(ctx context.Context, c *client.Client, snap *server.Snapshot, r
 		return
 	}
 
-	// 7. Send to server
-	if err := c.SendCellAssignments(ctx, assignments, nil, calculated); err != nil {
+	// 7. Apply padding to cell bounds to match window placement
+	baseSpacing := cfg.GetBaseSpacing()
+	settingsPadding, _ := cfg.GetSettingsPadding()
+	paddedCellBounds := applyCellPadding(calculated, layoutDef, baseSpacing, settingsPadding)
+
+	// 8. Send to server
+	if err := c.SendCellAssignments(ctx, assignments, nil, paddedCellBounds); err != nil {
 		logging.Warn().Err(err).Msg("syncBorders: failed to send cell assignments")
 		return
 	}
 
 	logging.Debug().
 		Int("assignments", len(assignments)).
-		Int("cellBounds", len(calculated)).
+		Int("cellBounds", len(paddedCellBounds)).
 		Msg("syncBorders: sent cell assignments to server")
+}
+
+// applyCellPadding applies padding to cell bounds to match window placement areas.
+// Uses layout.GetEffectivePadding to ensure consistent padding resolution.
+func applyCellPadding(cellBounds map[string]client.CellRect, layoutDef *types.Layout, baseSpacing float64, settingsPadding *types.Padding) map[string]client.CellRect {
+	result := make(map[string]client.CellRect, len(cellBounds))
+
+	for cellID, rect := range cellBounds {
+		// Use the same padding resolution logic as window placement
+		effectivePadding := layout.GetEffectivePadding(layoutDef, cellID, settingsPadding)
+
+		if effectivePadding != nil {
+			resolved := effectivePadding.Resolve(baseSpacing)
+			width := max(0, rect.Width-resolved.Left-resolved.Right)
+			height := max(0, rect.Height-resolved.Top-resolved.Bottom)
+
+			// Warn if padding results in zero-size bounds
+			if width == 0 || height == 0 {
+				logging.Warn().
+					Str("cellID", cellID).
+					Float64("originalWidth", rect.Width).
+					Float64("originalHeight", rect.Height).
+					Msg("Cell padding resulted in zero-size bounds")
+			}
+
+			result[cellID] = client.CellRect{
+				X:      rect.X + resolved.Left,
+				Y:      rect.Y + resolved.Top,
+				Width:  width,
+				Height: height,
+			}
+		} else {
+			result[cellID] = rect
+		}
+	}
+
+	return result
 }

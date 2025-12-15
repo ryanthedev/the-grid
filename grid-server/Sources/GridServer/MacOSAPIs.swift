@@ -67,7 +67,8 @@ typealias SLSNewWindow_t = @convention(c) (Int32, Int32, CGFloat, CGFloat, CFTyp
 typealias SLSReleaseWindow_t = @convention(c) (Int32, UInt32) -> CGError
 typealias SLSSetWindowTags_t = @convention(c) (Int32, UInt32, UnsafeMutablePointer<UInt64>, Int32) -> CGError
 typealias SLSClearWindowTags_t = @convention(c) (Int32, UInt32, UnsafeMutablePointer<UInt64>, Int32) -> CGError
-typealias SLSSetWindowShape_t = @convention(c) (Int32, UInt32, CGFloat, CGFloat, UnsafePointer<CGRect>) -> CGError
+// Note: region parameter is CFTypeRef created by CGSNewRegionWithRect, NOT raw CGRect*
+typealias SLSSetWindowShape_t = @convention(c) (Int32, UInt32, CGFloat, CGFloat, CFTypeRef) -> CGError
 typealias SLSSetWindowOpacity_t = @convention(c) (Int32, UInt32, Bool) -> CGError
 typealias SLSSetWindowAlpha_t = @convention(c) (Int32, UInt32, Float) -> CGError
 typealias SLSOrderWindow_t = @convention(c) (Int32, UInt32, Int32, UInt32) -> CGError
@@ -307,7 +308,14 @@ func SLSClearWindowTags(_ cid: Int32, _ wid: UInt32, _ tags: UnsafeMutablePointe
     return _SLSClearWindowTags?(cid, wid, tags, tagSize) ?? .failure
 }
 
-func SLSSetWindowShape(_ cid: Int32, _ wid: UInt32, _ x: CGFloat, _ y: CGFloat, _ region: UnsafePointer<CGRect>) -> CGError {
+/// Set window shape using a CFTypeRef region created by CGSNewRegionWithRect
+/// - Parameters:
+///   - cid: Connection ID
+///   - wid: Window ID
+///   - x: X offset (typically -9999 for offscreen or actual position)
+///   - y: Y offset (typically -9999 for offscreen or actual position)
+///   - region: CFTypeRef region created by CGSNewRegionWithRect
+func SLSSetWindowShape(_ cid: Int32, _ wid: UInt32, _ x: CGFloat, _ y: CGFloat, _ region: CFTypeRef) -> CGError {
     return _SLSSetWindowShape?(cid, wid, x, y, region) ?? .failure
 }
 

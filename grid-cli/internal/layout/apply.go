@@ -190,7 +190,7 @@ func ApplyLayout(
 			logging.Warn().Err(err).Msg("failed to send border config")
 		}
 
-		if err := sendCellAssignments(ctx, c, layout, assignment.Assignments, calculatedLayout.CellBounds); err != nil {
+		if err := sendCellAssignments(ctx, c, layout, assignment.Assignments, calculatedLayout.CellBounds, opts.BaseSpacing, opts.SettingsPadding); err != nil {
 			// Log but don't fail - borders are optional
 			logging.Warn().Err(err).Msg("failed to send cell assignments")
 		}
@@ -341,7 +341,8 @@ func sendBorderConfig(ctx context.Context, c *client.Client, cfg *config.Config)
 }
 
 // sendCellAssignments sends window-to-cell mappings to the server for border coloring.
-func sendCellAssignments(ctx context.Context, c *client.Client, layout *types.Layout, assignments map[string][]uint32, cellBounds map[string]types.Rect) error {
+// Cell bounds are adjusted with padding to match actual window placement areas.
+func sendCellAssignments(ctx context.Context, c *client.Client, layout *types.Layout, assignments map[string][]uint32, cellBounds map[string]types.Rect, baseSpacing float64, settingsPadding *types.Padding) error {
 	// Build cell assignments list
 	var cellAssignments []client.CellAssignment
 	for cellID, windowIDs := range assignments {
@@ -378,23 +379,42 @@ func sendCellAssignments(ctx context.Context, c *client.Client, layout *types.La
 		}
 	}
 
-	// Convert types.Rect to client.CellRect
+	// Convert types.Rect to client.CellRect, applying padding to match window placement
 	convertedCellBounds := make(map[string]client.CellRect)
 	for cellID, rect := range cellBounds {
-		convertedCellBounds[cellID] = client.CellRect{
-			X:      rect.X,
-			Y:      rect.Y,
-			Width:  rect.Width,
-			Height: rect.Height,
+		// Apply the same padding transformation used for window placement
+		// so cell highlights match the actual window bounds area
+		cellPadding := GetEffectivePadding(layout, cellID, settingsPadding)
+		paddedRect := rect
+		if cellPadding != nil {
+			resolved := cellPadding.Resolve(baseSpacing)
+			paddedRect = applyPaddingInset(rect, resolved)
+
+			// Warn if padding results in zero-size bounds
+			if paddedRect.Width == 0 || paddedRect.Height == 0 {
+				logging.Warn().
+					Str("cellID", cellID).
+					Float64("originalWidth", rect.Width).
+					Float64("originalHeight", rect.Height).
+					Msg("Cell padding resulted in zero-size bounds")
+			}
 		}
-		// Debug: log each cellBounds being sent
+
+		convertedCellBounds[cellID] = client.CellRect{
+			X:      paddedRect.X,
+			Y:      paddedRect.Y,
+			Width:  paddedRect.Width,
+			Height: paddedRect.Height,
+		}
+		// Debug: log each cellBounds being sent (with padding applied)
 		logging.Debug().
 			Str("cellID", cellID).
-			Float64("x", rect.X).
-			Float64("y", rect.Y).
-			Float64("w", rect.Width).
-			Float64("h", rect.Height).
-			Msg("cellBounds being sent")
+			Float64("x", paddedRect.X).
+			Float64("y", paddedRect.Y).
+			Float64("w", paddedRect.Width).
+			Float64("h", paddedRect.Height).
+			Bool("hasPadding", cellPadding != nil).
+			Msg("cellBounds being sent (with padding)")
 	}
 
 	logging.Debug().

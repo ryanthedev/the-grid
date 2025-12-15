@@ -172,8 +172,14 @@ class CellHighlight {
 
         // Update shape if size changed
         if frame.size != currentBounds.size {
-            var region = CGRect(origin: .zero, size: frame.size)
-            _ = SLSSetWindowShape(connectionID, windowID, 0, 0, &region)
+            // Create CFTypeRef region from CGRect (required by SLSSetWindowShape)
+            var bounds = CGRect(origin: .zero, size: frame.size)
+            var region: CFTypeRef?
+            guard CGSNewRegionWithRect(&bounds, &region) == .success, let shapeRegion = region else {
+                logger.warning("Failed to create region for cell highlight resize", metadata: ["frame": "\(frame)"])
+                return
+            }
+            _ = SLSSetWindowShape(connectionID, windowID, -9999, -9999, shapeRegion)
 
             // Recreate context for new size
             context = SLWindowContextCreate(connectionID, windowID, nil)

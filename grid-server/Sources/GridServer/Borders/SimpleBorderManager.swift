@@ -87,7 +87,10 @@ class SimpleBorderManager {
             let newCellID = cellAssignments[focusedWindow]
             if newCellID != focusedCellID {
                 focusedCellID = newCellID
+                // Update both overlays - cell highlight and window border
+                // This is important after space change when state was cleared
                 updateCellHighlight()
+                updateWindowBorder()
             }
         }
     }
@@ -176,32 +179,26 @@ class SimpleBorderManager {
         updateWindowBorder()
     }
 
-    /// Handle space changed (re-evaluate focus and update overlays)
+    /// Handle space changed (clear space-specific state and hide overlays)
+    ///
+    /// Cell assignments and bounds are space-specific - they're only valid for the space
+    /// where the layout was applied. When changing to a different space:
+    /// 1. Clear all space-specific state (cellBounds, cellAssignments, focusedCellID)
+    /// 2. Hide overlays until CLI sends new data for this space
+    /// 3. Keep focusedWindowID - the OS will send focus events if needed
     func handleSpaceChanged() {
-        logger.debug("Space changed event")
+        logger.info("Space changed - clearing space-specific border state")
 
-        // Re-evaluate focus state for the new space
-        // Windows not on current space should have their overlays hidden
-        guard let windowID = focusedWindowID else {
-            // No focused window, ensure overlays are hidden
-            cellHighlight.hide()
-            windowBorder?.hide()
-            return
-        }
+        // Clear space-specific state (assignments are only valid for one space)
+        cellBounds = [:]
+        cellAssignments = [:]
+        focusedCellID = nil
 
-        // Verify focused window is still valid on current space
-        var windowFrame = CGRect.zero
-        let result = SLSGetWindowBounds(connectionID, windowID, &windowFrame)
+        // Hide both overlays - CLI will send new data if this space has a layout
+        cellHighlight.hide()
+        windowBorder?.hide()
 
-        if result == .success {
-            // Window exists on current space, update overlays
-            updateCellHighlight()
-            updateWindowBorder()
-        } else {
-            // Window not accessible (likely on different space), hide overlays
-            cellHighlight.hide()
-            windowBorder?.hide()
-        }
+        logger.debug("Space change: overlays hidden, waiting for CLI to send new assignments")
     }
 
     /// Handle window destroyed (clear state if focused window destroyed)
@@ -241,8 +238,12 @@ class SimpleBorderManager {
 
     /// Update window border visibility and position
     private func updateWindowBorder() {
-        guard let windowID = focusedWindowID else {
-            // No focused window → hide border
+        // Only show border if:
+        // 1. There IS a focused window
+        // 2. That window is in a managed cell (has cell assignment)
+        guard let windowID = focusedWindowID,
+              focusedCellID != nil else {
+            // No focused window or window not in a managed cell → hide border
             windowBorder?.hide()
             return
         }

@@ -67,7 +67,6 @@ class BorderWindow {
         }
 
         // Create CFTypeRef region from CGRect (required by SLSNewWindow)
-        // Note: Swift manages CF types with ARC, no manual release needed
         var bounds = CGRect(origin: .zero, size: targetBounds.size)
         var region: CFTypeRef?
         guard CGSNewRegionWithRect(&bounds, &region) == .success, let frameRegion = region else {
@@ -178,8 +177,14 @@ class BorderWindow {
 
         // Update shape if size changed
         if borderBounds.size != currentBounds.size {
-            var region = CGRect(origin: .zero, size: borderBounds.size)
-            _ = SLSSetWindowShape(connectionID, windowID, 0, 0, &region)
+            // Create CFTypeRef region from CGRect (required by SLSSetWindowShape)
+            var bounds = CGRect(origin: .zero, size: borderBounds.size)
+            var region: CFTypeRef?
+            guard CGSNewRegionWithRect(&bounds, &region) == .success, let shapeRegion = region else {
+                logger.warning("Failed to create region for border resize", metadata: ["bounds": "\(borderBounds)"])
+                return
+            }
+            _ = SLSSetWindowShape(connectionID, windowID, -9999, -9999, shapeRegion)
 
             // Recreate context for new size
             context = SLWindowContextCreate(connectionID, windowID, nil)
