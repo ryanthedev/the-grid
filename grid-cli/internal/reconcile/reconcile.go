@@ -29,7 +29,9 @@ func Sync(ctx context.Context, c *client.Client, snap *server.Snapshot, rs *stat
 		logging.Debug().
 			Str("spaceID", snap.SpaceID).
 			Msg("reconcile: no local state for space")
-		return nil // Nothing to reconcile - no local state for this space
+		// Still try to sync borders even with no local state
+		syncBorders(ctx, c, snap, rs, cfg)
+		return nil
 	}
 
 	changed := false
@@ -59,8 +61,13 @@ func Sync(ctx context.Context, c *client.Client, snap *server.Snapshot, rs *stat
 
 	if changed {
 		rs.MarkUpdated()
-		return rs.Save()
+		if err := rs.Save(); err != nil {
+			return err
+		}
 	}
+
+	// Sync borders to server (errors logged but don't fail reconcile)
+	syncBorders(ctx, c, snap, rs, cfg)
 
 	return nil
 }
