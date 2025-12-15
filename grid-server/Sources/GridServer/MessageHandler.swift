@@ -697,10 +697,10 @@ class MessageHandler {
             var cellBounds: [String: CGRect] = [:]
             if let cellBoundsDict = params["cellBounds"]?.value as? [String: [String: Any]] {
                 for (cellID, boundsDict) in cellBoundsDict {
-                    if let x = boundsDict["x"] as? Double,
-                       let y = boundsDict["y"] as? Double,
-                       let width = boundsDict["width"] as? Double,
-                       let height = boundsDict["height"] as? Double {
+                    if let x = (boundsDict["x"] as? NSNumber)?.doubleValue,
+                       let y = (boundsDict["y"] as? NSNumber)?.doubleValue,
+                       let width = (boundsDict["width"] as? NSNumber)?.doubleValue,
+                       let height = (boundsDict["height"] as? NSNumber)?.doubleValue {
                         cellBounds[cellID] = CGRect(x: x, y: y, width: width, height: height)
                     }
                 }

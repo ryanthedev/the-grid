@@ -14,12 +14,12 @@ import CoreGraphics
 struct SimpleBorderConfig {
     // MARK: - Cell Highlight (background overlay behind windows)
 
-    /// White background with slight transparency for cell highlight
+    /// Solid white background for cell highlight
     static let highlightFillColor: CGColor = CGColor(
         red: 1.0,
         green: 1.0,
         blue: 1.0,
-        alpha: 0.05
+        alpha: 0.6
     )
 
     /// Blue stroke for cell highlight border
