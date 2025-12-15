@@ -66,8 +66,14 @@ class BorderWindow {
             return false
         }
 
-        // Create region for window (initially at 0,0 - we'll position it later)
-        var region = CGRect(origin: .zero, size: targetBounds.size)
+        // Create CFTypeRef region from CGRect (required by SLSNewWindow)
+        // Note: Swift manages CF types with ARC, no manual release needed
+        var bounds = CGRect(origin: .zero, size: targetBounds.size)
+        var region: CFTypeRef?
+        guard CGSNewRegionWithRect(&bounds, &region) == .success, let frameRegion = region else {
+            logger.error("Failed to create region", metadata: ["targetID": "\(targetWindowID)"])
+            return false
+        }
 
         // Create the window
         // Backing store = 2 (buffered), initial position offscreen
@@ -77,7 +83,7 @@ class BorderWindow {
             2,  // kCGBackingStoreBuffered
             -9999,
             -9999,
-            &region,
+            frameRegion,
             &newWindowID
         )
 

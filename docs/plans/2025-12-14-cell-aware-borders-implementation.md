@@ -1,12 +1,51 @@
 # Cell-Aware Borders Implementation Plan
 
+> **Refined:** 2025-12-15 - Added Phase 4 (IPC Protocol), dynamic corner radius, event coalescing
+> **Updated:** 2025-12-15 - ALL TASKS COMPLETED. Border system is fully integrated.
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Add cell-aware window borders to grid-server with three-tier focus coloring (active window → active cell → inactive).
 
 **Architecture:** Borders are rendered as transparent overlay windows using SkyLight APIs. BorderManager maintains a map of target windows to border overlays and updates them in response to AX events from ApplicationObserver. Color resolution uses hybrid config: per-cell overrides → palette → global defaults.
 
+**Key additions:**
+- CLI pushes cell assignments to server via `borders.setCellAssignments` message
+- CLI sends config to server via `borders.configure` message
+- Dynamic corner radius detection via `SLSWindowIteratorGetCornerRadii`
+- Event coalescing (20ms debounce) for smooth window drags
+- Transaction batching for atomic multi-border focus updates
+
 **Tech Stack:** Swift, SkyLight (private framework), Core Graphics, existing grid-server infrastructure.
+
+---
+
+## Implementation Status
+
+| Task | Description | Status |
+|------|-------------|--------|
+| 1 | SkyLight Window APIs in MacOSAPIs.swift | ✅ DONE |
+| 1b | Dynamic corner radius API | ✅ DONE |
+| 2 | BorderConfig.swift | ✅ DONE |
+| 3 | BorderRenderer.swift | ✅ DONE |
+| 4 | BorderWindow.swift | ✅ DONE |
+| 5 | BorderManager.swift | ✅ DONE |
+| 6 | IPC handlers in MessageHandler.swift | ✅ DONE |
+| 7 | CLI client borders.go | ✅ DONE |
+| 8 | BorderEvents.swift | ✅ DONE |
+| 9 | StateManager integration | ✅ DONE |
+| 10 | main.swift initialization | ✅ DONE |
+| 11 | Add Borders to root Config struct | ✅ DONE |
+| 12 | CLI sends border config on startup | ✅ DONE |
+| 13 | CLI sends cell assignments after layout apply | ✅ DONE |
+
+**What works now:**
+- Server starts and creates borders for all windows
+- Borders respond to focus changes, window moves/resizes, minimize/restore
+- Server accepts `borders.configure` and `borders.setCellAssignments` IPC messages
+- Go client has `SendBorderConfig()` and `SendCellAssignments()` functions
+- CLI reads `borders:` section from config.yaml
+- CLI sends border config and cell assignments on every layout apply
+- Three-tier focus coloring: active window → active cell → inactive
 
 ---
 
@@ -159,6 +198,42 @@ Expected: Build succeeds with no errors related to MacOSAPIs.swift
 git add grid-server/Sources/GridServer/MacOSAPIs.swift
 git commit -m "feat(borders): add SkyLight window creation APIs"
 ```
+
+---
+
+### Task 1b: Add SLSWindowIteratorGetCornerRadii for Dynamic Radius
+
+**Files:**
+- Modify: `grid-server/Sources/GridServer/MacOSAPIs.swift`
+
+**Step 1: Add type definition**
+
+Add after the window creation typedefs:
+
+```swift
+// Corner radius detection
+typealias SLSWindowIteratorGetCornerRadii_t = @convention(c) (UInt32, UnsafeMutablePointer<(CGFloat, CGFloat, CGFloat, CGFloat)>) -> CGError
+```
+
+**Step 2: Load the symbol**
+
+```swift
+private let _SLSWindowIteratorGetCornerRadii: SLSWindowIteratorGetCornerRadii_t? = loadSymbol("SLSWindowIteratorGetCornerRadii")
+```
+
+**Step 3: Add wrapper function**
+
+```swift
+/// Get corner radii for a window (topLeft, topRight, bottomRight, bottomLeft)
+func SLSWindowIteratorGetCornerRadii(_ wid: UInt32, _ radii: UnsafeMutablePointer<(CGFloat, CGFloat, CGFloat, CGFloat)>) -> CGError {
+    return _SLSWindowIteratorGetCornerRadii?(wid, radii) ?? .failure
+}
+```
+
+**Step 4: Build and verify**
+
+Run: `cd /Users/r/repos/theGrid/grid-server && swift build 2>&1 | head -20`
+Expected: Build succeeds
 
 ---
 
@@ -659,6 +734,12 @@ class BorderWindow {
     /// Border padding (space between window edge and border)
     var padding: CGFloat = 2.0
 
+    // MARK: - Event Coalescing (20ms debounce for smooth window drags)
+    private var updateTimer: DispatchSourceTimer?
+    private let coalesceDelay: TimeInterval = 0.02 // 20ms like JankyBorders
+    private var pendingFrame: CGRect?
+    private var pendingStyle: BorderStyle?
+
     init(connectionID: Int32, targetWindowID: UInt32) {
         self.connectionID = connectionID
         self.targetWindowID = targetWindowID
@@ -822,6 +903,36 @@ class BorderWindow {
         updatePosition(targetFrame: targetFrame, borderWidth: style.width)
         redraw(style: style)
     }
+
+    // MARK: - Coalesced Updates
+
+    /// Schedule an update with debouncing (use this during window drags)
+    func scheduleUpdate(frame: CGRect, style: BorderStyle) {
+        pendingFrame = frame
+        pendingStyle = style
+
+        updateTimer?.cancel()
+        updateTimer = DispatchSource.makeTimerSource(queue: .main)
+        updateTimer?.schedule(deadline: .now() + coalesceDelay)
+        updateTimer?.setEventHandler { [weak self] in
+            guard let self = self,
+                  let frame = self.pendingFrame,
+                  let style = self.pendingStyle else { return }
+            self.update(targetFrame: frame, style: style)
+            self.pendingFrame = nil
+            self.pendingStyle = nil
+        }
+        updateTimer?.resume()
+    }
+
+    /// Get dynamic corner radius from target window
+    func getTargetCornerRadius(fallback: CGFloat) -> CGFloat {
+        var radii: (CGFloat, CGFloat, CGFloat, CGFloat) = (0, 0, 0, 0)
+        if SLSWindowIteratorGetCornerRadii(targetWindowID, &radii) == .success {
+            return radii.0  // Top-left corner radius
+        }
+        return fallback
+    }
 }
 ```
 
@@ -834,7 +945,7 @@ Expected: Build succeeds
 
 ```bash
 git add grid-server/Sources/GridServer/Borders/BorderWindow.swift
-git commit -m "feat(borders): add BorderWindow SkyLight overlay"
+git commit -m "feat(borders): add BorderWindow SkyLight overlay with event coalescing"
 ```
 
 ---
@@ -875,11 +986,8 @@ class BorderManager {
     private var focusedWindowID: UInt32?
     private var focusedCellID: String?
 
-    /// Callback to get cell ID for a window
-    var getCellForWindow: ((UInt32) -> String?)?
-
-    /// Callback to get windows in a cell
-    var getWindowsInCell: ((String) -> [UInt32])?
+    /// Cell assignments from CLI (windowID → cellID)
+    private var cellAssignments: [UInt32: String] = [:]
 
     /// Callback to get bundle ID for a window
     var getBundleIDForWindow: ((UInt32) -> String?)?
@@ -887,6 +995,46 @@ class BorderManager {
     init(connectionID: Int32, config: BorderConfig = BorderConfig()) {
         self.connectionID = connectionID
         self.config = config
+    }
+
+    // MARK: - Cell Assignment Management (from CLI via IPC)
+
+    /// Set cell assignments received from CLI
+    func setCellAssignments(_ assignments: [UInt32: String]) {
+        cellAssignments = assignments
+        logger.debug("Cell assignments updated", metadata: ["count": "\(assignments.count)"])
+    }
+
+    /// Set per-cell style override
+    func setCellOverride(cellID: String, config: [String: Any]) {
+        var override = CellBorderStyle()
+        if let colorHex = config["activeCellColor"] as? String {
+            override.activeCellColor = BorderConfig.parseColor(colorHex)
+        }
+        if let colorHex = config["inactiveColor"] as? String {
+            override.inactiveColor = BorderConfig.parseColor(colorHex)
+        }
+        if let styleStr = config["style"] as? String, let style = BorderStyleType(rawValue: styleStr) {
+            override.style = style
+        }
+        self.config.cellOverrides[cellID] = override
+    }
+
+    /// Get cell assignment for a window
+    func getCellAssignment(for windowID: UInt32) -> String? {
+        return cellAssignments[windowID]
+    }
+
+    /// Get all windows in a cell
+    func getWindowsInCell(_ cellID: String) -> [UInt32] {
+        return cellAssignments.filter { $0.value == cellID }.map { $0.key }
+    }
+
+    /// Refresh all borders (after config or cell assignment change)
+    func refreshAllBorders() {
+        for windowID in borders.keys {
+            updateBorder(for: windowID)
+        }
     }
 
     // MARK: - Border Lifecycle
@@ -968,13 +1116,13 @@ class BorderManager {
 
     // MARK: - Focus Management
 
-    /// Handle focus change
+    /// Handle focus change (with transaction batching for performance)
     func updateFocus(newFocusedWindow: UInt32) {
         let oldFocusedWindow = focusedWindowID
         let oldFocusedCell = focusedCellID
 
         focusedWindowID = newFocusedWindow
-        focusedCellID = getCellForWindow?(newFocusedWindow)
+        focusedCellID = cellAssignments[newFocusedWindow]
 
         logger.debug("Focus changed", metadata: [
             "oldWindow": "\(oldFocusedWindow?.description ?? "nil")",
@@ -993,20 +1141,28 @@ class BorderManager {
 
         // Old cell windows (if cell changed)
         if oldFocusedCell != focusedCellID, let oldCell = oldFocusedCell {
-            if let cellWindows = getWindowsInCell?(oldCell) {
-                affectedWindows.formUnion(cellWindows)
-            }
+            let cellWindows = getWindowsInCell(oldCell)
+            affectedWindows.formUnion(cellWindows)
         }
 
         // New cell windows
         if let newCell = focusedCellID {
-            if let cellWindows = getWindowsInCell?(newCell) {
-                affectedWindows.formUnion(cellWindows)
-            }
+            let cellWindows = getWindowsInCell(newCell)
+            affectedWindows.formUnion(cellWindows)
         }
 
         // New focused window
         affectedWindows.insert(newFocusedWindow)
+
+        // Use transaction for atomic batch update (performance optimization)
+        if let transaction = SLSTransactionCreate(connectionID) {
+            for windowID in affectedWindows {
+                if let border = borders[windowID] {
+                    SLSTransactionOrderWindow(transaction, border.windowID, -1, windowID)
+                }
+            }
+            _ = SLSTransactionCommit(transaction, 1)
+        }
 
         // Repaint affected borders
         for windowID in affectedWindows {
@@ -1048,7 +1204,7 @@ class BorderManager {
             return .activeWindow
         }
 
-        let cellID = getCellForWindow?(windowID)
+        let cellID = cellAssignments[windowID]
         if cellID != nil && cellID == focusedCellID {
             return .activeCell
         }
@@ -1059,8 +1215,14 @@ class BorderManager {
     /// Resolve the complete style for a window
     private func resolveStyle(for windowID: UInt32) -> BorderStyle {
         let tier = getFocusTier(for: windowID)
-        let cellID = getCellForWindow?(windowID)
+        let cellID = cellAssignments[windowID]
         let color = config.resolveColor(tier: tier, cellID: cellID)
+
+        // Get dynamic corner radius from target window
+        var cornerRadius = config.cornerRadius
+        if let border = borders[windowID] {
+            cornerRadius = border.getTargetCornerRadius(fallback: config.cornerRadius)
+        }
 
         // Check for per-cell style override
         var styleType = config.style
@@ -1071,7 +1233,7 @@ class BorderManager {
         return BorderStyle(
             color: color,
             width: config.width,
-            cornerRadius: config.cornerRadius,
+            cornerRadius: cornerRadius,
             styleType: styleType
         )
     }
@@ -1092,9 +1254,184 @@ git commit -m "feat(borders): add BorderManager for orchestration"
 
 ---
 
-## Phase 6: Event Integration
+## Phase 6: IPC Protocol (NEW)
 
-### Task 6: Create BorderEvents to Hook into StateManager
+### Task 6: Add Border Message Handlers to MessageHandler.swift
+
+**Files:**
+- Modify: `grid-server/Sources/GridServer/MessageHandler.swift`
+
+**Step 1: Read MessageHandler.swift to understand the pattern**
+
+Find the existing message handler switch/dispatch pattern.
+
+**Step 2: Add handler for borders.configure**
+
+```swift
+// In the message dispatch switch
+case "borders.configure":
+    handleBordersConfig(message: message, client: client)
+
+// New handler function
+private func handleBordersConfig(message: [String: Any], client: ClientConnection) {
+    guard let config = message["config"] as? [String: Any] else {
+        sendError(to: client, error: "Missing config")
+        return
+    }
+
+    let borderConfig = BorderConfig.load(from: config)
+    borderManager?.config = borderConfig
+
+    // Refresh all borders with new config
+    borderManager?.refreshAllBorders()
+
+    sendSuccess(to: client)
+    logger.info("Border config updated")
+}
+```
+
+**Step 3: Add handler for borders.setCellAssignments**
+
+```swift
+case "borders.setCellAssignments":
+    handleBordersSetCellAssignments(message: message, client: client)
+
+// New handler function
+private func handleBordersSetCellAssignments(message: [String: Any], client: ClientConnection) {
+    guard let assignments = message["assignments"] as? [String: String] else {
+        sendError(to: client, error: "Missing assignments")
+        return
+    }
+
+    // Store assignments: windowID (string) → cellID
+    var cellAssignments: [UInt32: String] = [:]
+    for (widStr, cellID) in assignments {
+        if let wid = UInt32(widStr) {
+            cellAssignments[wid] = cellID
+        }
+    }
+    borderManager?.setCellAssignments(cellAssignments)
+
+    // Store per-cell overrides if provided
+    if let cells = message["cells"] as? [String: [String: Any]] {
+        for (cellID, cellConfig) in cells {
+            borderManager?.setCellOverride(cellID: cellID, config: cellConfig)
+        }
+    }
+
+    // Refresh borders with new cell awareness
+    borderManager?.refreshAllBorders()
+
+    sendSuccess(to: client)
+    logger.info("Cell assignments updated", metadata: ["count": "\(cellAssignments.count)"])
+}
+```
+
+**Step 4: Build and verify**
+
+Run: `cd /Users/r/repos/theGrid/grid-server && swift build 2>&1 | head -20`
+Expected: Build succeeds
+
+**Step 5: Commit**
+
+```bash
+git add grid-server/Sources/GridServer/MessageHandler.swift
+git commit -m "feat(borders): add IPC handlers for borders.configure and borders.setCellAssignments"
+```
+
+---
+
+### Task 7: Create CLI Border Client (Go)
+
+**Files:**
+- Create: `grid-cli/internal/client/borders.go`
+
+**Step 1: Create borders.go**
+
+```go
+package client
+
+import (
+    "encoding/json"
+    "fmt"
+
+    "github.com/yourusername/thegrid/grid-cli/internal/config"
+)
+
+// SendBorderConfig sends border configuration to the server
+func (c *Client) SendBorderConfig(cfg *config.BorderConfig) error {
+    if cfg == nil || !cfg.GetEnabled() {
+        return nil
+    }
+
+    msg := map[string]interface{}{
+        "type": "borders.configure",
+        "config": map[string]interface{}{
+            "enabled":           cfg.GetEnabled(),
+            "width":             cfg.GetWidth(),
+            "style":             cfg.GetStyle(),
+            "cornerRadius":      cfg.GetCornerRadius(),
+            "padding":           cfg.GetPadding(),
+            "hidpi":             cfg.GetHiDPI(),
+            "activeWindowColor": cfg.ActiveWindowColor,
+            "activeCellColor":   cfg.ActiveCellColor,
+            "inactiveColor":     cfg.InactiveColor,
+            "palette":           cfg.Palette,
+            "blacklist":         cfg.Blacklist,
+            "whitelist":         cfg.Whitelist,
+        },
+    }
+
+    return c.SendMessage(msg)
+}
+
+// CellAssignment represents a window-to-cell mapping
+type CellAssignment struct {
+    WindowID uint32
+    CellID   string
+}
+
+// CellOverride represents per-cell border config
+type CellOverride struct {
+    ActiveCellColor string `json:"activeCellColor,omitempty"`
+    InactiveColor   string `json:"inactiveColor,omitempty"`
+    Style           string `json:"style,omitempty"`
+}
+
+// SendCellAssignments sends window-to-cell mappings to the server
+func (c *Client) SendCellAssignments(assignments []CellAssignment, overrides map[string]CellOverride) error {
+    assignmentMap := make(map[string]string)
+    for _, a := range assignments {
+        assignmentMap[fmt.Sprintf("%d", a.WindowID)] = a.CellID
+    }
+
+    msg := map[string]interface{}{
+        "type":        "borders.setCellAssignments",
+        "assignments": assignmentMap,
+        "cells":       overrides,
+    }
+
+    return c.SendMessage(msg)
+}
+```
+
+**Step 2: Build and verify**
+
+Run: `cd /Users/r/repos/theGrid/grid-cli && go build ./...`
+Expected: Build succeeds
+
+**Step 3: Commit**
+
+```bash
+git add grid-cli/internal/client/borders.go
+git commit -m "feat(borders): add CLI client for border IPC messages"
+```
+
+---
+
+## Phase 7: Event Integration
+
+### Task 8: Create BorderEvents to Hook into StateManager
 
 **Files:**
 - Create: `grid-server/Sources/GridServer/Borders/BorderEvents.swift`
@@ -1210,19 +1547,13 @@ class BorderEvents {
     // MARK: - State Queries
 
     private func getCellForWindow(_ windowID: UInt32) -> String? {
-        // Query the runtime state to find which cell contains this window
-        // This would be implemented based on your state structure
-        // For now, return nil (no cell awareness)
-
-        // TODO: Integrate with actual cell state from grid-cli
-        // This requires the server to receive cell assignments from the CLI
-        return nil
+        // Get cell assignment from BorderManager (received via IPC)
+        return borderManager?.getCellAssignment(for: windowID)
     }
 
     private func getWindowsInCell(_ cellID: String) -> [UInt32] {
-        // Query the runtime state to find all windows in this cell
-        // TODO: Integrate with actual cell state
-        return []
+        // Get all windows in this cell from BorderManager
+        return borderManager?.getWindowsInCell(cellID) ?? []
     }
 
     private func getBundleIDForWindow(_ windowID: UInt32) -> String? {
@@ -1251,9 +1582,9 @@ git commit -m "feat(borders): add BorderEvents for event routing"
 
 ---
 
-## Phase 7: Integration
+## Phase 8: Integration
 
-### Task 7: Integrate BorderManager into GridServer
+### Task 9: Integrate BorderManager into GridServer
 
 **Files:**
 - Modify: `grid-server/Sources/GridServer/StateManager.swift`
@@ -1312,7 +1643,7 @@ git commit -m "feat(borders): integrate BorderEvents into StateManager"
 
 ---
 
-### Task 8: Initialize BorderManager in GridServer Entry Point
+### Task 10: Initialize BorderManager in GridServer Entry Point
 
 **Files:**
 - Modify: `grid-server/Sources/GridServer/GridServer.swift`
@@ -1367,9 +1698,9 @@ git commit -m "feat(borders): initialize border system in GridServer"
 
 ---
 
-## Phase 8: CLI Config Schema
+## Phase 9: CLI Config Schema
 
-### Task 9: Add Border Config to CLI Types
+### Task 11: Add Border Config to CLI Types
 
 **Files:**
 - Modify: `grid-cli/internal/config/types.go`

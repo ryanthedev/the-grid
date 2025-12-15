@@ -17,8 +17,19 @@ private let SkyLightFramework: UnsafeMutableRawPointer? = {
     return dlopen(path, RTLD_LAZY)
 }()
 
+private let CoreGraphicsFramework: UnsafeMutableRawPointer? = {
+    let path = "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics"
+    return dlopen(path, RTLD_LAZY)
+}()
+
 private func loadSymbol<T>(_ name: String) -> T? {
     guard let handle = SkyLightFramework else { return nil }
+    guard let symbol = dlsym(handle, name) else { return nil }
+    return unsafeBitCast(symbol, to: T.self)
+}
+
+private func loadCGSymbol<T>(_ name: String) -> T? {
+    guard let handle = CoreGraphicsFramework else { return nil }
     guard let symbol = dlsym(handle, name) else { return nil }
     return unsafeBitCast(symbol, to: T.self)
 }
@@ -47,8 +58,12 @@ typealias SLSSpaceSetCompatID_t = @convention(c) (Int32, UInt64, Int32) -> CGErr
 typealias SLSSetWindowListWorkspace_t = @convention(c) (Int32, UnsafePointer<UInt32>, Int32, Int32) -> CGError
 typealias SLSMoveWindowsToManagedSpace_t = @convention(c) (Int32, CFArray, UInt64) -> Void
 
+// Region creation (from CoreGraphics private API)
+typealias CGSNewRegionWithRect_t = @convention(c) (UnsafePointer<CGRect>, UnsafeMutablePointer<CFTypeRef?>) -> CGError
+
 // Window creation and manipulation
-typealias SLSNewWindow_t = @convention(c) (Int32, Int32, CGFloat, CGFloat, UnsafePointer<CGRect>, UnsafeMutablePointer<UInt32>) -> CGError
+// Note: region parameter is CFTypeRef created by CGSNewRegionWithRect, NOT raw CGRect*
+typealias SLSNewWindow_t = @convention(c) (Int32, Int32, CGFloat, CGFloat, CFTypeRef, UnsafeMutablePointer<UInt32>) -> CGError
 typealias SLSReleaseWindow_t = @convention(c) (Int32, UInt32) -> CGError
 typealias SLSSetWindowTags_t = @convention(c) (Int32, UInt32, UnsafeMutablePointer<UInt64>, Int32) -> CGError
 typealias SLSClearWindowTags_t = @convention(c) (Int32, UInt32, UnsafeMutablePointer<UInt64>, Int32) -> CGError
@@ -111,6 +126,9 @@ private let _SLSConnectionGetPID: SLSConnectionGetPID_t? = loadSymbol("SLSConnec
 private let _SLSSpaceSetCompatID: SLSSpaceSetCompatID_t? = loadSymbol("SLSSpaceSetCompatID")
 private let _SLSSetWindowListWorkspace: SLSSetWindowListWorkspace_t? = loadSymbol("SLSSetWindowListWorkspace")
 private let _SLSMoveWindowsToManagedSpace: SLSMoveWindowsToManagedSpace_t? = loadSymbol("SLSMoveWindowsToManagedSpace")
+
+// Region creation API (from CoreGraphics)
+private let _CGSNewRegionWithRect: CGSNewRegionWithRect_t? = loadCGSymbol("CGSNewRegionWithRect")
 
 // Window creation APIs
 private let _SLSNewWindow: SLSNewWindow_t? = loadSymbol("SLSNewWindow")
@@ -234,6 +252,17 @@ func SLSMoveWindowsToManagedSpace(_ cid: Int32, _ windowList: CFArray, _ spaceID
     _SLSMoveWindowsToManagedSpace?(cid, windowList, spaceID)
 }
 
+// MARK: - Region Creation API Wrapper
+
+/// Create a region from a CGRect for use with SLSNewWindow
+/// - Parameters:
+///   - rect: Pointer to the CGRect defining the region
+///   - region: Pointer to store the created CFTypeRef region (must be CFRelease'd when done)
+/// - Returns: CGError.success on success
+func CGSNewRegionWithRect(_ rect: UnsafePointer<CGRect>, _ region: UnsafeMutablePointer<CFTypeRef?>) -> CGError {
+    return _CGSNewRegionWithRect?(rect, region) ?? .failure
+}
+
 // MARK: - SLPS Focus API Wrappers
 
 /// Get ProcessSerialNumber from PID (deprecated but still functional)
@@ -253,7 +282,16 @@ func SLPSPostEventRecordTo(_ psn: UnsafePointer<ProcessSerialNumber>, _ bytes: U
 
 // MARK: - Window Creation API Wrappers
 
-func SLSNewWindow(_ cid: Int32, _ backing: Int32, _ x: CGFloat, _ y: CGFloat, _ region: UnsafePointer<CGRect>, _ wid: UnsafeMutablePointer<UInt32>) -> CGError {
+/// Create a new window
+/// - Parameters:
+///   - cid: Connection ID
+///   - backing: Backing store type (2 = kCGBackingStoreBuffered)
+///   - x: Initial X position (use -9999 to position offscreen initially)
+///   - y: Initial Y position (use -9999 to position offscreen initially)
+///   - region: CFTypeRef region created by CGSNewRegionWithRect
+///   - wid: Pointer to store the new window ID
+/// - Returns: CGError.success on success
+func SLSNewWindow(_ cid: Int32, _ backing: Int32, _ x: CGFloat, _ y: CGFloat, _ region: CFTypeRef, _ wid: UnsafeMutablePointer<UInt32>) -> CGError {
     return _SLSNewWindow?(cid, backing, x, y, region, wid) ?? .failure
 }
 

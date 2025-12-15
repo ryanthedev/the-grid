@@ -1,5 +1,7 @@
 # Cell-Aware Border System Design
 
+> **Refined:** 2025-12-15 - Added cell state sync, config flow, dynamic corner radius, event coalescing
+
 ## Overview
 
 A window border rendering system integrated into grid-server that provides JankyBorders-equivalent functionality with cell-awareness. Borders can display different colors based on both window focus state and cell membership.
@@ -11,6 +13,8 @@ A window border rendering system integrated into grid-server that provides Janky
 - Three-tier focus hierarchy: active window → active cell → inactive cells
 - Hybrid configuration: per-cell overrides + palette fallback + global defaults
 - Incremental MVP approach: basic borders first, advanced features later
+- **Dynamic corner radius** matching actual macOS window corners
+- **Event coalescing** for smooth window drag performance
 
 ## Non-Goals
 
@@ -114,6 +118,58 @@ BorderRenderer (redraws with correct style)
 
 ---
 
+## IPC Protocol (CLI→Server)
+
+The server needs two pieces of information from the CLI:
+1. **Border configuration** - colors, width, style, blacklist
+2. **Cell assignments** - which window belongs to which cell
+
+### borders.configure
+
+Sent by CLI on startup and when config changes:
+
+```json
+{
+    "type": "borders.configure",
+    "config": {
+        "enabled": true,
+        "width": 5.0,
+        "style": "round",
+        "cornerRadius": 8.0,
+        "padding": 2.0,
+        "hidpi": true,
+        "activeWindowColor": "0xffe06c75",
+        "activeCellColor": "0xff61afef",
+        "inactiveColor": "0xff5c6370",
+        "palette": ["0xff61afef", "0xff98c379", "0xffe5c07b"],
+        "blacklist": ["com.apple.finder"],
+        "whitelist": []
+    }
+}
+```
+
+### borders.setCellAssignments
+
+Sent by CLI after each layout apply:
+
+```json
+{
+    "type": "borders.setCellAssignments",
+    "assignments": {
+        "12345": "editor",
+        "12346": "terminal",
+        "12347": "browser"
+    },
+    "cells": {
+        "editor": {"activeCellColor": "0xff98c379"},
+        "terminal": {},
+        "browser": {"style": "square"}
+    }
+}
+```
+
+---
+
 ## SkyLight Border Window
 
 Each target window gets a transparent overlay window for its border.
@@ -167,6 +223,76 @@ CGContextStrokePath(context)
 
 // Flush to screen
 SLSFlushWindowContentRegion(cid, windowID, region)
+```
+
+---
+
+## Dynamic Corner Radius
+
+Query each window's actual corner radius to match macOS rounded corners:
+
+```swift
+// Add to MacOSAPIs.swift
+typealias SLSWindowIteratorGetCornerRadii_t = @convention(c) (UInt32, UnsafeMutablePointer<(CGFloat, CGFloat, CGFloat, CGFloat)>) -> CGError
+
+// In BorderWindow.swift
+func getTargetCornerRadius() -> CGFloat {
+    var radii: (CGFloat, CGFloat, CGFloat, CGFloat) = (0, 0, 0, 0)
+    if SLSWindowIteratorGetCornerRadii(targetWindowID, &radii) == .success {
+        return radii.0  // Top-left corner radius
+    }
+    return config.cornerRadius  // Fallback to config default
+}
+```
+
+---
+
+## Event Coalescing
+
+Debounce rapid resize/move events during window drags (JankyBorders uses 20ms):
+
+```swift
+// In BorderWindow.swift
+private var updateTimer: DispatchSourceTimer?
+private let coalesceDelay: TimeInterval = 0.02 // 20ms
+
+func scheduleUpdate(frame: CGRect, style: BorderStyle) {
+    updateTimer?.cancel()
+    updateTimer = DispatchSource.makeTimerSource(queue: .main)
+    updateTimer?.schedule(deadline: .now() + coalesceDelay)
+    updateTimer?.setEventHandler { [weak self] in
+        self?.update(targetFrame: frame, style: style)
+    }
+    updateTimer?.resume()
+}
+```
+
+---
+
+## Transaction Batching
+
+Use SkyLight transactions for atomic multi-border updates (focus changes):
+
+```swift
+// In BorderManager.swift
+func updateFocus(newFocusedWindow: UInt32) {
+    // ... compute affected windows ...
+
+    guard let transaction = SLSTransactionCreate(connectionID) else { return }
+
+    for windowID in affectedWindows {
+        if let border = borders[windowID] {
+            SLSTransactionOrderWindow(transaction, border.windowID, -1, windowID)
+        }
+    }
+
+    _ = SLSTransactionCommit(transaction, 1)
+
+    // Then redraw colors
+    for windowID in affectedWindows {
+        updateBorder(for: windowID)
+    }
+}
 ```
 
 ---
@@ -299,18 +425,26 @@ enum FocusTier {
 
 ## Files to Modify
 
-### New Files
+### New Files (Server - Swift)
 - `grid-server/Sources/GridServer/Borders/BorderManager.swift`
 - `grid-server/Sources/GridServer/Borders/BorderWindow.swift`
 - `grid-server/Sources/GridServer/Borders/BorderRenderer.swift`
 - `grid-server/Sources/GridServer/Borders/BorderConfig.swift`
 - `grid-server/Sources/GridServer/Borders/BorderEvents.swift`
 
-### Modified Files
+### New Files (CLI - Go)
+- `grid-cli/internal/client/borders.go` - Send config and cell assignments to server
+
+### Modified Files (Server - Swift)
+- `grid-server/Sources/GridServer/MacOSAPIs.swift` - Add window creation + corner radius APIs
+- `grid-server/Sources/GridServer/MessageHandler.swift` - Add `borders.configure` and `borders.setCellAssignments` handlers
+- `grid-server/Sources/GridServer/StateManager.swift` - Wire BorderEvents
 - `grid-server/Sources/GridServer/GridServer.swift` - Initialize BorderManager
-- `grid-server/Sources/GridServer/ApplicationObserver.swift` - Expose event callbacks
-- `grid-cli/internal/config/types.go` - Add borders config schema
-- `grid-cli/internal/types/layout_types.go` - Add per-cell border config
+
+### Modified Files (CLI - Go)
+- `grid-cli/internal/config/types.go` - Add BorderConfig struct
+- `grid-cli/internal/types/layout_types.go` - Add CellBorderConfig
+- `grid-cli/cmd/grid/layout.go` - Send cell assignments after layout apply
 
 ---
 
