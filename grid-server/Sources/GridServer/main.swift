@@ -124,6 +124,25 @@ struct GridServerCommand: ParsableCommand {
             StateManager.shared.start()
             logger.notice("StateManager initialization started")
 
+            // Initialize border system
+            logger.info("Initializing border system...")
+            let connectionID = SLSMainConnectionID()
+            let borderConfig = BorderConfig()
+            let borderManager = BorderManager(connectionID: connectionID, config: borderConfig)
+            let borderEvents = BorderEvents()
+            borderEvents.setup(borderManager: borderManager, stateManager: StateManager.shared)
+            StateManager.shared.borderEvents = borderEvents
+            messageHandler.borderManager = borderManager
+
+            // Create borders for existing windows after initial scan
+            let state = StateManager.shared.getState()
+            for (widStr, _) in state.windows {
+                if let windowID = UInt32(widStr) {
+                    borderManager.createBorder(for: windowID)
+                }
+            }
+            logger.notice("Border system initialized", metadata: ["windowCount": "\(state.windows.count)"])
+
             // Start heartbeat if requested
             if heartbeat {
                 eventBroadcaster.startHeartbeat(interval: heartbeatInterval)
