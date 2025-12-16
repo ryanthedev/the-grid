@@ -118,15 +118,26 @@ class BorderWindow {
         // Create drawing context
         context = SLWindowContextCreate(connectionID, windowID, nil)
 
+        // Diagnostic: Query Window Server for actual bounds
+        var wssBounds = CGRect.zero
+        let getBoundsResult = SLSGetWindowBounds(connectionID, windowID, &wssBounds)
+
         if let ctx = context {
             logger.info("Initial context created", metadata: [
                 "windowID": "\(windowID)",
                 "contextWidth": "\(ctx.width)",
                 "contextHeight": "\(ctx.height)",
-                "expectedSize": "(\(targetBounds.size.width), \(targetBounds.size.height))"
+                "contextIsNil": "false",
+                "expectedSize": "(\(targetBounds.size.width), \(targetBounds.size.height))",
+                "windowServerBounds": "(\(wssBounds.size.width), \(wssBounds.size.height))",
+                "getBoundsResult": "\(getBoundsResult.rawValue)"
             ])
         } else {
-            logger.warning("Failed to create drawing context", metadata: ["windowID": "\(windowID)"])
+            logger.error("Initial context is nil", metadata: [
+                "windowID": "\(windowID)",
+                "windowServerBounds": "(\(wssBounds.size.width), \(wssBounds.size.height))",
+                "getBoundsResult": "\(getBoundsResult.rawValue)"
+            ])
         }
 
         logger.debug("Border window created", metadata: [
@@ -221,11 +232,16 @@ class BorderWindow {
                 return
             }
             let shapeResult = SLSSetWindowShape(connectionID, windowID, -9999, -9999, shapeRegion)
-            logger.debug("Border shape updated", metadata: [
+
+            // Diagnostic: Query Window Server for actual bounds after shape change
+            var wssBounds = CGRect.zero
+            let getBoundsResult = SLSGetWindowBounds(connectionID, windowID, &wssBounds)
+            logger.info("Shape change applied", metadata: [
                 "windowID": "\(windowID)",
-                "oldSize": "(\(currentBounds.size.width), \(currentBounds.size.height))",
-                "newSize": "(\(borderBounds.size.width), \(borderBounds.size.height))",
-                "result": "\(shapeResult.rawValue)"
+                "shapeResult": "\(shapeResult.rawValue)",
+                "requestedSize": "(\(borderBounds.size.width), \(borderBounds.size.height))",
+                "windowServerBounds": "(\(wssBounds.origin.x), \(wssBounds.origin.y), \(wssBounds.size.width), \(wssBounds.size.height))",
+                "getBoundsResult": "\(getBoundsResult.rawValue)"
             ])
 
             // Mark context as needing recreation - DON'T create here (race with Window Server)
@@ -258,9 +274,24 @@ class BorderWindow {
 
         // Attempt to get or create context
         if context == nil {
-            // Flush to commit any pending shape changes to Window Server
-            _ = SLSFlushWindowContentRegion(connectionID, windowID, nil)
+            // Diagnostic: Log flush result and query Window Server bounds
+            let flushResult = SLSFlushWindowContentRegion(connectionID, windowID, nil)
+
+            var wssBounds = CGRect.zero
+            let getBoundsResult = SLSGetWindowBounds(connectionID, windowID, &wssBounds)
+
             context = SLWindowContextCreate(connectionID, windowID, nil)
+
+            logger.info("Context recreation attempt", metadata: [
+                "windowID": "\(windowID)",
+                "flushResult": "\(flushResult.rawValue)",
+                "windowServerBounds": "(\(wssBounds.size.width), \(wssBounds.size.height))",
+                "getBoundsResult": "\(getBoundsResult.rawValue)",
+                "contextIsNil": "\(context == nil)",
+                "contextWidth": "\(context?.width ?? -1)",
+                "contextHeight": "\(context?.height ?? -1)",
+                "expectedBounds": "(\(currentBounds.size.width), \(currentBounds.size.height))"
+            ])
         }
 
         // Validate context dimensions
@@ -269,7 +300,8 @@ class BorderWindow {
             logger.debug("Context has zero dimensions, scheduling retry", metadata: [
                 "windowID": "\(windowID)",
                 "expectedBounds": "(\(currentBounds.size.width), \(currentBounds.size.height))",
-                "retryCount": "\(contextRetryCount)"
+                "retryCount": "\(contextRetryCount)",
+                "contextIsNil": "\(context == nil)"
             ])
             scheduleContextRetry()
             return
