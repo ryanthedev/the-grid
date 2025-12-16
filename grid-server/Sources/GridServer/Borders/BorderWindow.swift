@@ -155,23 +155,35 @@ class BorderWindow {
     func show() {
         guard windowID != 0 else { return }
 
-        // Get spaces for diagnostic logging
+        // Get spaces for diagnostic check
         let borderSpace = queryWindowSpace(windowID) ?? 0
         let targetSpace = queryWindowSpace(targetWindowID) ?? 0
         let targetDisplay = SLSCopyManagedDisplayForWindow(connectionID, targetWindowID) as String? ?? "unknown"
+
+        // If spaces don't match, move border to target's space before showing
+        if borderSpace != targetSpace && targetSpace != 0 {
+            logger.debug("Space mismatch detected, moving border", metadata: [
+                "borderSpace": "\(borderSpace)",
+                "targetSpace": "\(targetSpace)"
+            ])
+            moveToTargetSpace()
+        }
 
         _ = SLSSetWindowAlpha(connectionID, windowID, 1.0)
         let orderResult = SLSOrderWindow(connectionID, windowID, -1, targetWindowID)  // Below target
 
         isVisible = true
 
+        // Re-query after potential move
+        let finalBorderSpace = queryWindowSpace(windowID) ?? 0
+
         logger.debug("Border shown", metadata: [
             "windowID": "\(windowID)",
             "targetID": "\(targetWindowID)",
-            "borderSpace": "\(borderSpace)",
+            "borderSpace": "\(finalBorderSpace)",
             "targetSpace": "\(targetSpace)",
             "targetDisplay": "\(targetDisplay)",
-            "spacesMatch": "\(borderSpace == targetSpace)",
+            "spacesMatch": "\(finalBorderSpace == targetSpace)",
             "orderResult": "\(orderResult.rawValue)"
         ])
     }
@@ -341,25 +353,11 @@ class BorderWindow {
     private func moveToTargetSpace() {
         guard windowID != 0 else { return }
 
-        // Get target window's display for logging
         let targetDisplay = SLSCopyManagedDisplayForWindow(connectionID, targetWindowID) as String? ?? "unknown"
 
-        let state = StateManager.shared.getState()
-
-        // Try state first, fall back to direct API query (not activeSpaceID - wrong for multi-monitor)
-        var spaceID: UInt64?
-        var source: String
-        if let windowState = state.windows[String(targetWindowID)],
-           let firstSpace = windowState.spaces.first {
-            spaceID = firstSpace
-            source = "state"
-        } else {
-            // State doesn't have window - query API directly
-            spaceID = queryWindowSpace(targetWindowID)
-            source = "api"
-        }
-
-        guard let targetSpace = spaceID else {
+        // Always query API directly - avoids deadlock when called from StateManager's queue
+        // (StateManager.getState() uses queue.sync which deadlocks if we're already on that queue)
+        guard let targetSpace = queryWindowSpace(targetWindowID) else {
             logger.debug("No space available for border", metadata: [
                 "targetID": "\(targetWindowID)",
                 "targetDisplay": "\(targetDisplay)"
@@ -374,8 +372,7 @@ class BorderWindow {
             "windowID": "\(windowID)",
             "targetID": "\(targetWindowID)",
             "spaceID": "\(targetSpace)",
-            "targetDisplay": "\(targetDisplay)",
-            "source": "\(source)"
+            "targetDisplay": "\(targetDisplay)"
         ])
     }
 
