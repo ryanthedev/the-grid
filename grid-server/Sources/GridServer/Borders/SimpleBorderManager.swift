@@ -10,6 +10,11 @@
 import Foundation
 import CoreGraphics
 import Logging
+import AppKit  // For NSWorkspace (focus query)
+
+// Private AX API for getting window ID from AX element
+@_silgen_name("_AXUIElementGetWindow")
+private func _AXUIElementGetWindow(_ element: AXUIElement, _ windowID: UnsafeMutablePointer<UInt32>) -> AXError
 
 /// Manages the simplified 2-element border system
 ///
@@ -81,6 +86,18 @@ class SimpleBorderManager {
         cellAssignments = assignments
 
         logger.debug("Cell assignments updated", metadata: ["count": "\(assignments.count)"])
+
+        // If we don't have a focused window yet (startup case), query the OS
+        if focusedWindowID == nil {
+            if let queriedWindowID = queryCurrentFocusedWindow(),
+               cellAssignments[queriedWindowID] != nil {
+                logger.info("Initializing focus from OS query", metadata: [
+                    "windowID": "\(queriedWindowID)"
+                ])
+                focusedWindowID = queriedWindowID
+                focusedCellID = cellAssignments[queriedWindowID]
+            }
+        }
 
         // Re-evaluate focus state (focused window's cell may have changed)
         if let focusedWindow = focusedWindowID {
@@ -355,5 +372,47 @@ class SimpleBorderManager {
         windowBorder = nil
 
         logger.debug("SimpleBorderManager cleaned up")
+    }
+
+    // MARK: - Focus Query
+
+    /// Query the currently focused window from the OS using AX APIs.
+    /// Used during startup when no focus events have been received yet.
+    /// - Returns: The window ID of the currently focused window, or nil if unavailable
+    private func queryCurrentFocusedWindow() -> UInt32? {
+        guard let frontApp = NSWorkspace.shared.frontmostApplication else {
+            logger.debug("No frontmost application found during focus query")
+            return nil
+        }
+
+        let pid = frontApp.processIdentifier
+        let appElement = AXUIElementCreateApplication(pid)
+
+        var focusedWindowRef: AnyObject?
+        let result = AXUIElementCopyAttributeValue(
+            appElement,
+            kAXFocusedWindowAttribute as CFString,
+            &focusedWindowRef
+        )
+
+        guard result == .success else {
+            logger.debug("No focused window for frontmost app", metadata: [
+                "app": "\(frontApp.localizedName ?? "unknown")",
+                "axResult": "\(result.rawValue)"
+            ])
+            return nil
+        }
+
+        var windowID: UInt32 = 0
+        let axResult = _AXUIElementGetWindow(focusedWindowRef as! AXUIElement, &windowID)
+
+        guard axResult == .success, windowID != 0 else {
+            logger.debug("Failed to get window ID from AX element", metadata: [
+                "axResult": "\(axResult.rawValue)"
+            ])
+            return nil
+        }
+
+        return windowID
     }
 }
