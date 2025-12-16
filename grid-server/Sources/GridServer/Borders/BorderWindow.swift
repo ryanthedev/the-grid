@@ -197,6 +197,15 @@ class BorderWindow {
 
         // Update shape if size changed
         if borderBounds.size != currentBounds.size {
+            // CRITICAL: Hide window before shape change to prevent compositor race condition.
+            // Without this, the Window Server may composite the resized window (with empty
+            // backing store) before we can redraw, causing a "white box" flash.
+            // NOTE: We don't update isVisible here - caller's show() restores both alpha
+            // and state consistency. This is a temporary compositor workaround.
+            if isVisible {
+                _ = SLSSetWindowAlpha(connectionID, windowID, 0.0)
+            }
+
             // Create CFTypeRef region from CGRect (required by SLSSetWindowShape)
             var bounds = CGRect(origin: .zero, size: borderBounds.size)
             var region: CFTypeRef?
