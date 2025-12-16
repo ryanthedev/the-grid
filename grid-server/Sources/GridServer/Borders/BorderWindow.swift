@@ -155,6 +155,11 @@ class BorderWindow {
     func show() {
         guard windowID != 0 else { return }
 
+        // Get spaces for diagnostic logging
+        let borderSpace = queryWindowSpace(windowID) ?? 0
+        let targetSpace = queryWindowSpace(targetWindowID) ?? 0
+        let targetDisplay = SLSCopyManagedDisplayForWindow(connectionID, targetWindowID) as String? ?? "unknown"
+
         _ = SLSSetWindowAlpha(connectionID, windowID, 1.0)
         let orderResult = SLSOrderWindow(connectionID, windowID, -1, targetWindowID)  // Below target
 
@@ -163,7 +168,10 @@ class BorderWindow {
         logger.debug("Border shown", metadata: [
             "windowID": "\(windowID)",
             "targetID": "\(targetWindowID)",
-            "currentBounds": "(\(currentBounds.origin.x), \(currentBounds.origin.y), \(currentBounds.size.width), \(currentBounds.size.height))",
+            "borderSpace": "\(borderSpace)",
+            "targetSpace": "\(targetSpace)",
+            "targetDisplay": "\(targetDisplay)",
+            "spacesMatch": "\(borderSpace == targetSpace)",
             "orderResult": "\(orderResult.rawValue)"
         ])
     }

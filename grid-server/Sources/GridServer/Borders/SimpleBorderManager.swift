@@ -291,10 +291,14 @@ class SimpleBorderManager {
             return
         }
 
+        // Get display for diagnostic logging
+        let targetDisplay = SLSCopyManagedDisplayForWindow(connectionID, windowID) as String? ?? "unknown"
+
         logger.debug("Border positioning", metadata: [
             "windowID": "\(windowID)",
             "cellID": "\(focusedCellID ?? "nil")",
             "windowFrame": "(\(windowFrame.origin.x), \(windowFrame.origin.y), \(windowFrame.size.width), \(windowFrame.size.height))",
+            "targetDisplay": "\(targetDisplay)",
             "cellBoundsCount": "\(cellBounds.count)",
             "cellAssignmentsCount": "\(cellAssignments.count)"
         ])
