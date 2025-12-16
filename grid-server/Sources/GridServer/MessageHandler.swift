@@ -672,6 +672,34 @@ class MessageHandler {
 
         // MARK: - Border Configuration Methods
 
+        // Configure border settings (from CLI config)
+        register(method: "borders.configure") { [weak self] request, completion in
+            guard let self = self else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32603, message: "Internal error")))
+                return
+            }
+            guard let params = request.params else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
+                return
+            }
+
+            guard let configDict = params["config"]?.value as? [String: Any] else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Missing config")))
+                return
+            }
+
+            // Update the shared border configuration
+            BorderConfigManager.shared.update(from: configDict)
+
+            self.logger.info("Border configuration updated", metadata: [
+                "enabled": "\(BorderConfigManager.shared.enabled)",
+                "borderWidth": "\(BorderConfigManager.shared.borderWidth)",
+                "style": "\(BorderConfigManager.shared.style)"
+            ])
+
+            completion(Response(id: request.id, result: AnyCodable(["success": true])))
+        }
+
         // Set cell assignments
         register(method: "borders.setCellAssignments") { [weak self] request, completion in
             guard let self = self else { return }

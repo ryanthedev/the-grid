@@ -1140,6 +1140,9 @@ class StateManager {
                 self.restoreFocusForSpace(spaceID)
             }
 
+            // Notify border system of space change (must clear space-specific state)
+            self.borderEvents?.handleSpaceChanged()
+
             self.state.metadata.update()
         }
     }

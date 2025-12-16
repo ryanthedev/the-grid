@@ -84,13 +84,21 @@ class SimpleBorderManager {
 
         // Re-evaluate focus state (focused window's cell may have changed)
         if let focusedWindow = focusedWindowID {
+            let oldCellID = focusedCellID
             let newCellID = cellAssignments[focusedWindow]
-            if newCellID != focusedCellID {
-                focusedCellID = newCellID
-                // Update both overlays - cell highlight and window border
-                // This is important after space change when state was cleared
-                updateCellHighlight()
-                updateWindowBorder()
+            focusedCellID = newCellID
+
+            // Always update border when we have a focused window
+            // This handles the case where assignments arrive after focus change
+            updateCellHighlight()
+            updateWindowBorder()
+
+            if newCellID != oldCellID {
+                logger.debug("Focused window cell changed", metadata: [
+                    "windowID": "\(focusedWindow)",
+                    "oldCell": "\(oldCellID ?? "nil")",
+                    "newCell": "\(newCellID ?? "nil")"
+                ])
             }
         }
     }
@@ -100,6 +108,12 @@ class SimpleBorderManager {
     /// Update focus when a different window becomes active
     /// This is the main entry point for focus changes from BorderEvents
     func updateFocus(newFocusedWindow: UInt32) {
+        // Ignore focus on our own overlay windows
+        if isOurOverlayWindow(newFocusedWindow) {
+            logger.debug("Ignoring focus on our overlay window", metadata: ["windowID": "\(newFocusedWindow)"])
+            return
+        }
+
         let oldFocusedWindow = focusedWindowID
         let oldFocusedCell = focusedCellID
 
@@ -179,26 +193,32 @@ class SimpleBorderManager {
         updateWindowBorder()
     }
 
-    /// Handle space changed (clear space-specific state and hide overlays)
+    /// Handle space changed (clear space-specific state and destroy overlays)
     ///
     /// Cell assignments and bounds are space-specific - they're only valid for the space
     /// where the layout was applied. When changing to a different space:
     /// 1. Clear all space-specific state (cellBounds, cellAssignments, focusedCellID)
-    /// 2. Hide overlays until CLI sends new data for this space
+    /// 2. DESTROY overlays (not just hide) to prevent stale window artifacts
     /// 3. Keep focusedWindowID - the OS will send focus events if needed
     func handleSpaceChanged() {
-        logger.info("Space changed - clearing space-specific border state")
+        logger.info("Space changed - clearing space-specific border state", metadata: [
+            "previousCellBoundsCount": "\(cellBounds.count)",
+            "previousCellAssignmentsCount": "\(cellAssignments.count)",
+            "previousFocusedCellID": "\(focusedCellID ?? "nil")",
+            "focusedWindowID": "\(focusedWindowID?.description ?? "nil")"
+        ])
 
         // Clear space-specific state (assignments are only valid for one space)
         cellBounds = [:]
         cellAssignments = [:]
         focusedCellID = nil
 
-        // Hide both overlays - CLI will send new data if this space has a layout
+        // DESTROY both overlays (not just hide) - prevents stale window artifacts during transitions
         cellHighlight.hide()
-        windowBorder?.hide()
+        windowBorder?.destroy()
+        windowBorder = nil
 
-        logger.debug("Space change: overlays hidden, waiting for CLI to send new assignments")
+        logger.debug("Space change: overlays destroyed, waiting for CLI to send new assignments")
     }
 
     /// Handle window destroyed (clear state if focused window destroyed)
@@ -224,16 +244,9 @@ class SimpleBorderManager {
 
     /// Update cell highlight visibility and position
     private func updateCellHighlight() {
-        guard let cellID = focusedCellID,
-              let frame = cellBounds[cellID] else {
-            // No focused cell or no bounds for it → hide highlight
-            cellHighlight.hide()
-            return
-        }
-
-        // Show highlight at cell bounds
-        cellHighlight.update(frame: frame)
-        cellHighlight.show()
+        // DISABLED: Only showing window border for now
+        cellHighlight.hide()
+        return
     }
 
     /// Update window border visibility and position
@@ -241,9 +254,14 @@ class SimpleBorderManager {
         // Only show border if:
         // 1. There IS a focused window
         // 2. That window is in a managed cell (has cell assignment)
+        // 3. That window is NOT one of our overlay windows
         guard let windowID = focusedWindowID,
-              focusedCellID != nil else {
-            // No focused window or window not in a managed cell → hide border
+              focusedCellID != nil,
+              !isOurOverlayWindow(windowID) else {
+            logger.debug("Border hidden - no valid cell assignment", metadata: [
+                "focusedWindowID": "\(focusedWindowID?.description ?? "nil")",
+                "focusedCellID": "\(focusedCellID ?? "nil")"
+            ])
             windowBorder?.hide()
             return
         }
@@ -256,12 +274,22 @@ class SimpleBorderManager {
             return
         }
 
-        // Create or reuse window border
-        if windowBorder == nil || windowBorder?.targetWindowID != windowID {
-            // Destroy old border if target changed
-            windowBorder?.destroy()
+        logger.debug("Border positioning", metadata: [
+            "windowID": "\(windowID)",
+            "cellID": "\(focusedCellID ?? "nil")",
+            "windowFrame": "(\(windowFrame.origin.x), \(windowFrame.origin.y), \(windowFrame.size.width), \(windowFrame.size.height))",
+            "cellBoundsCount": "\(cellBounds.count)",
+            "cellAssignmentsCount": "\(cellAssignments.count)"
+        ])
 
-            // Create new border for new target
+        // Create or reuse window border
+        if let existingBorder = windowBorder {
+            // Reuse existing border - just retarget if needed
+            if existingBorder.targetWindowID != windowID {
+                existingBorder.retarget(to: windowID)
+            }
+        } else {
+            // No border exists - create new one
             let border = BorderWindow(connectionID: connectionID, targetWindowID: windowID)
             guard border.create() else {
                 logger.error("Failed to create window border", metadata: ["windowID": "\(windowID)"])
@@ -276,19 +304,45 @@ class SimpleBorderManager {
         windowBorder?.show()
     }
 
+    /// Check if a window ID belongs to one of our overlay windows
+    private func isOurOverlayWindow(_ windowID: UInt32) -> Bool {
+        // Check cell highlight
+        if cellHighlight.windowID == windowID {
+            return true
+        }
+        // Check window border
+        if let border = windowBorder, border.windowID == windowID {
+            return true
+        }
+        return false
+    }
+
     /// Create BorderStyle for the focused window border
     private func createWindowBorderStyle() -> BorderStyle {
-        // Get dynamic corner radius from target window if available
-        var cornerRadius: CGFloat = 8.0
+        let config = BorderConfigManager.shared
+
+        // Get dynamic corner radius - prefer target window's radius, fall back to config
+        var cornerRadius = config.cornerRadius
         if let border = windowBorder {
-            cornerRadius = border.getTargetCornerRadius(fallback: 8.0)
+            cornerRadius = border.getTargetCornerRadius(fallback: config.cornerRadius)
+        }
+
+        // Map style string to BorderStyleType
+        let styleType: BorderStyleType
+        switch config.style.lowercased() {
+        case "square":
+            styleType = .square
+        case "uniform":
+            styleType = .uniform
+        default:
+            styleType = .round
         }
 
         return BorderStyle(
             color: SimpleBorderConfig.windowBorderColor,
             width: SimpleBorderConfig.windowBorderWidth,
             cornerRadius: cornerRadius,
-            styleType: .round
+            styleType: styleType
         )
     }
 

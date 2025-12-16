@@ -18,7 +18,7 @@ class BorderWindow {
     private(set) var windowID: UInt32 = 0
 
     /// Target window we're drawing around
-    let targetWindowID: UInt32
+    private(set) var targetWindowID: UInt32
 
     /// Drawing context
     private var context: CGContext?
@@ -33,7 +33,10 @@ class BorderWindow {
     private(set) var isVisible: Bool = false
 
     /// Border padding (space between window edge and border)
-    var padding: CGFloat = 2.0
+    /// Uses dynamic value from config
+    var padding: CGFloat {
+        BorderConfigManager.shared.padding
+    }
 
     // MARK: - Event Coalescing (20ms debounce for smooth window drags)
     private var updateTimer: DispatchSourceTimer?
@@ -110,13 +113,21 @@ class BorderWindow {
         // Create drawing context
         context = SLWindowContextCreate(connectionID, windowID, nil)
 
-        if context == nil {
+        if let ctx = context {
+            logger.info("Initial context created", metadata: [
+                "windowID": "\(windowID)",
+                "contextWidth": "\(ctx.width)",
+                "contextHeight": "\(ctx.height)",
+                "expectedSize": "(\(targetBounds.size.width), \(targetBounds.size.height))"
+            ])
+        } else {
             logger.warning("Failed to create drawing context", metadata: ["windowID": "\(windowID)"])
         }
 
         logger.debug("Border window created", metadata: [
             "windowID": "\(windowID)",
-            "targetID": "\(targetWindowID)"
+            "targetID": "\(targetWindowID)",
+            "initialSize": "(\(targetBounds.size.width), \(targetBounds.size.height))"
         ])
 
         return true
@@ -129,6 +140,9 @@ class BorderWindow {
         // Cancel any pending updates
         updateTimer?.cancel()
         updateTimer = nil
+
+        // CRITICAL: Hide window before releasing (removes from screen)
+        hide()
 
         context = nil
         _ = SLSReleaseWindow(connectionID, windowID)
@@ -146,9 +160,16 @@ class BorderWindow {
         guard windowID != 0 else { return }
 
         _ = SLSSetWindowAlpha(connectionID, windowID, 1.0)
-        _ = SLSOrderWindow(connectionID, windowID, -1, targetWindowID)  // Below target
+        let orderResult = SLSOrderWindow(connectionID, windowID, -1, targetWindowID)  // Below target
 
         isVisible = true
+
+        logger.debug("Border shown", metadata: [
+            "windowID": "\(windowID)",
+            "targetID": "\(targetWindowID)",
+            "currentBounds": "(\(currentBounds.origin.x), \(currentBounds.origin.y), \(currentBounds.size.width), \(currentBounds.size.height))",
+            "orderResult": "\(orderResult.rawValue)"
+        ])
     }
 
     /// Hide the border
@@ -171,6 +192,12 @@ class BorderWindow {
         let expansion = borderWidth + padding
         let borderBounds = targetFrame.insetBy(dx: -expansion, dy: -expansion)
 
+        logger.debug("Border position update", metadata: [
+            "targetFrame": "(\(targetFrame.origin.x), \(targetFrame.origin.y), \(targetFrame.size.width), \(targetFrame.size.height))",
+            "borderBounds": "(\(borderBounds.origin.x), \(borderBounds.origin.y), \(borderBounds.size.width), \(borderBounds.size.height))",
+            "expansion": "\(expansion)"
+        ])
+
         // Move the window
         var origin = borderBounds.origin
         _ = SLSMoveWindow(connectionID, windowID, &origin)
@@ -184,10 +211,31 @@ class BorderWindow {
                 logger.warning("Failed to create region for border resize", metadata: ["bounds": "\(borderBounds)"])
                 return
             }
-            _ = SLSSetWindowShape(connectionID, windowID, -9999, -9999, shapeRegion)
+            let shapeResult = SLSSetWindowShape(connectionID, windowID, -9999, -9999, shapeRegion)
+            logger.debug("Border shape updated", metadata: [
+                "windowID": "\(windowID)",
+                "oldSize": "(\(currentBounds.size.width), \(currentBounds.size.height))",
+                "newSize": "(\(borderBounds.size.width), \(borderBounds.size.height))",
+                "result": "\(shapeResult.rawValue)"
+            ])
+
+            // CRITICAL FIX: Flush the window content region BEFORE recreating context
+            // This ensures the window server has processed the shape change
+            _ = SLSFlushWindowContentRegion(connectionID, windowID, nil)
 
             // Recreate context for new size
             context = SLWindowContextCreate(connectionID, windowID, nil)
+
+            if let ctx = context {
+                logger.info("Context after shape change", metadata: [
+                    "windowID": "\(windowID)",
+                    "contextWidth": "\(ctx.width)",
+                    "contextHeight": "\(ctx.height)",
+                    "expectedSize": "(\(borderBounds.size.width), \(borderBounds.size.height))"
+                ])
+            } else {
+                logger.warning("Failed to create context after border resize", metadata: ["windowID": "\(windowID)"])
+            }
         }
 
         currentBounds = borderBounds
@@ -200,13 +248,73 @@ class BorderWindow {
 
     /// Redraw the border with the given style
     func redraw(style: BorderStyle) {
-        guard windowID != 0, let context = context else { return }
-        guard currentBounds.size.width > 0 && currentBounds.size.height > 0 else { return }
+        guard windowID != 0 else {
+            logger.warning("Border redraw skipped - no windowID")
+            return
+        }
+        guard currentBounds.size.width > 0 && currentBounds.size.height > 0 else {
+            logger.warning("Border redraw skipped - invalid bounds", metadata: ["bounds": "\(currentBounds)"])
+            return
+        }
+
+        // Get or recreate context if needed
+        var drawContext = context
+
+        // Check if context has valid dimensions
+        if let ctx = drawContext {
+            if ctx.width == 0 || ctx.height == 0 {
+                logger.warning("Context has zero dimensions, attempting to recreate", metadata: [
+                    "windowID": "\(windowID)",
+                    "currentContextSize": "(\(ctx.width), \(ctx.height))"
+                ])
+                // Flush and try to recreate
+                _ = SLSFlushWindowContentRegion(connectionID, windowID, nil)
+                context = SLWindowContextCreate(connectionID, windowID, nil)
+                drawContext = context
+
+                if let newCtx = drawContext {
+                    logger.info("Context recreated", metadata: [
+                        "windowID": "\(windowID)",
+                        "newContextSize": "(\(newCtx.width), \(newCtx.height))"
+                    ])
+                }
+            }
+        } else {
+            // No context at all, try to create one
+            logger.warning("No context, attempting to create", metadata: ["windowID": "\(windowID)"])
+            context = SLWindowContextCreate(connectionID, windowID, nil)
+            drawContext = context
+        }
+
+        guard let finalContext = drawContext else {
+            logger.error("Border redraw failed - could not get valid context", metadata: ["windowID": "\(windowID)"])
+            return
+        }
+
+        // Final check - if still zero dimensions, log error but try anyway
+        let ctxWidth = finalContext.width
+        let ctxHeight = finalContext.height
+        if ctxWidth == 0 || ctxHeight == 0 {
+            logger.error("Context STILL has zero dimensions after recreation", metadata: [
+                "windowID": "\(windowID)",
+                "contextSize": "(\(ctxWidth), \(ctxHeight))",
+                "expectedBounds": "(\(currentBounds.size.width), \(currentBounds.size.height))"
+            ])
+            // Continue anyway - maybe it will work
+        }
 
         // Draw into our bounds (0,0 to size)
         let drawBounds = CGRect(origin: .zero, size: currentBounds.size)
 
-        BorderRenderer.draw(in: context, bounds: drawBounds, style: style)
+        logger.debug("Border redraw", metadata: [
+            "windowID": "\(windowID)",
+            "drawBounds": "(\(drawBounds.width), \(drawBounds.height))",
+            "contextSize": "(\(ctxWidth), \(ctxHeight))",
+            "borderWidth": "\(style.width)",
+            "cornerRadius": "\(style.cornerRadius)"
+        ])
+
+        BorderRenderer.draw(in: finalContext, bounds: drawBounds, style: style)
 
         // Flush to screen
         _ = SLSFlushWindowContentRegion(connectionID, windowID, nil)
@@ -248,5 +356,20 @@ class BorderWindow {
             return radii[0]  // Top-left corner radius
         }
         return fallback
+    }
+
+    // MARK: - Retargeting
+
+    /// Retarget this border window to a different target window
+    /// This allows reusing the same border overlay instead of destroying/recreating
+    func retarget(to newTargetID: UInt32) {
+        let oldTargetID = targetWindowID
+        targetWindowID = newTargetID
+
+        logger.info("Border retargeted", metadata: [
+            "windowID": "\(windowID)",
+            "oldTarget": "\(oldTargetID)",
+            "newTarget": "\(newTargetID)"
+        ])
     }
 }

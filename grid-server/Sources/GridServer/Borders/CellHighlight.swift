@@ -121,6 +121,9 @@ class CellHighlight {
         updateTimer?.cancel()
         updateTimer = nil
 
+        // CRITICAL: Hide window before releasing (removes from screen)
+        hide()
+
         context = nil
         _ = SLSReleaseWindow(connectionID, windowID)
 
@@ -179,10 +182,19 @@ class CellHighlight {
                 logger.warning("Failed to create region for cell highlight resize", metadata: ["frame": "\(frame)"])
                 return
             }
-            _ = SLSSetWindowShape(connectionID, windowID, -9999, -9999, shapeRegion)
+            let shapeResult = SLSSetWindowShape(connectionID, windowID, -9999, -9999, shapeRegion)
+            logger.debug("Cell highlight shape updated", metadata: [
+                "windowID": "\(windowID)",
+                "oldSize": "(\(currentBounds.size.width), \(currentBounds.size.height))",
+                "newSize": "(\(frame.size.width), \(frame.size.height))",
+                "result": "\(shapeResult.rawValue)"
+            ])
 
             // Recreate context for new size
             context = SLWindowContextCreate(connectionID, windowID, nil)
+            if context == nil {
+                logger.warning("Failed to create context after cell highlight resize", metadata: ["windowID": "\(windowID)"])
+            }
         }
 
         currentBounds = frame
