@@ -236,7 +236,13 @@ class BorderWindow {
                 logger.warning("Failed to create region for border resize", metadata: ["bounds": "\(borderBounds)"])
                 return
             }
-            _ = SLSSetWindowShape(connectionID, windowID, -9999, -9999, shapeRegion)
+            _ = SLSSetWindowShape(connectionID, windowID, 0, 0, shapeRegion)
+
+            // CRITICAL: Re-apply position after shape change.
+            // SLSSetWindowShape can reset the window position, so we must call
+            // SLSMoveWindow again to ensure the border is at the correct location.
+            var shapeOrigin = borderBounds.origin
+            _ = SLSMoveWindow(connectionID, windowID, &shapeOrigin)
 
             // Mark context as needing recreation after shape change
             context = nil

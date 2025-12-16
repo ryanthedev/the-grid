@@ -182,7 +182,14 @@ class CellHighlight {
                 logger.warning("Failed to create region for cell highlight resize", metadata: ["frame": "\(frame)"])
                 return
             }
-            let shapeResult = SLSSetWindowShape(connectionID, windowID, -9999, -9999, shapeRegion)
+            let shapeResult = SLSSetWindowShape(connectionID, windowID, 0, 0, shapeRegion)
+
+            // CRITICAL: Re-apply position after shape change.
+            // SLSSetWindowShape can reset the window position on multi-monitor setups,
+            // so we must call SLSMoveWindow again to ensure correct location.
+            var shapeOrigin = frame.origin
+            _ = SLSMoveWindow(connectionID, windowID, &shapeOrigin)
+
             logger.debug("Cell highlight shape updated", metadata: [
                 "windowID": "\(windowID)",
                 "oldSize": "(\(currentBounds.size.width), \(currentBounds.size.height))",
