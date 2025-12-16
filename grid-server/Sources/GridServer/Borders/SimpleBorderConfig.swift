@@ -90,7 +90,9 @@ class BorderConfigManager {
         }
     }
 
-    /// Parse hex color string (e.g., "#FF0000", "0xFF0000", "FF0000")
+    /// Parse hex color string
+    /// Accepts: "#RRGGBB", "0xRRGGBB", "RRGGBB" (6 chars, alpha=1.0)
+    ///          "#AARRGGBB", "0xAARRGGBB", "AARRGGBB" (8 chars, with alpha)
     private func parseHexColor(_ hex: String) -> CGColor? {
         var hexSanitized = hex.trimmingCharacters(in: .whitespacesAndNewlines)
         if hexSanitized.hasPrefix("#") {
@@ -99,13 +101,28 @@ class BorderConfigManager {
             hexSanitized.removeFirst(2)
         }
 
-        // Ensure we have 6 characters
-        guard hexSanitized.count == 6 else {
-            logger.warning("Invalid hex color format", metadata: ["hex": "\(hex)"])
+        var alpha: CGFloat = 1.0
+        var rgbHex: String
+
+        switch hexSanitized.count {
+        case 6:
+            // RRGGBB format
+            rgbHex = hexSanitized
+        case 8:
+            // AARRGGBB format
+            let alphaStr = String(hexSanitized.prefix(2))
+            rgbHex = String(hexSanitized.dropFirst(2))
+            guard let alphaInt = UInt8(alphaStr, radix: 16) else {
+                logger.warning("Failed to parse alpha in hex color", metadata: ["hex": "\(hex)"])
+                return nil
+            }
+            alpha = CGFloat(alphaInt) / 255.0
+        default:
+            logger.warning("Invalid hex color format (expected 6 or 8 chars)", metadata: ["hex": "\(hex)"])
             return nil
         }
 
-        guard let hexInt = UInt32(hexSanitized, radix: 16) else {
+        guard let hexInt = UInt32(rgbHex, radix: 16) else {
             logger.warning("Failed to parse hex color", metadata: ["hex": "\(hex)"])
             return nil
         }
@@ -114,7 +131,7 @@ class BorderConfigManager {
         let green = CGFloat((hexInt >> 8) & 0xFF) / 255.0
         let blue = CGFloat(hexInt & 0xFF) / 255.0
 
-        return CGColor(red: red, green: green, blue: blue, alpha: 1.0)
+        return CGColor(red: red, green: green, blue: blue, alpha: alpha)
     }
 }
 
