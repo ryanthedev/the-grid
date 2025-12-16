@@ -417,7 +417,7 @@ class WindowManipulator {
     /// Focus a window by raising it and activating its app
     /// Uses yabai-style event synthesis for reliable same-app window focus
     func focusWindow(pid: pid_t, windowID: UInt32) -> Bool {
-        logger.info("Focusing window", metadata: [
+        logger.debug("Focusing window", metadata: [
             "pid": "\(pid)",
             "windowID": "\(windowID)"
         ])

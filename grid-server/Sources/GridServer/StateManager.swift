@@ -1056,7 +1056,7 @@ class StateManager {
 
     func handleWindowFocused(_ windowID: UInt32) {
         queue.async {
-            self.logger.info("Window focused", metadata: ["windowID": "\(windowID)"])
+            self.logger.trace("Window focused", metadata: ["windowID": "\(windowID)"])
 
             // Store focused window ID
             self.state.metadata.focusedWindowID = windowID
