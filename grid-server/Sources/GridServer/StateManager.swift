@@ -748,7 +748,7 @@ class StateManager {
         // Remove windows no longer in CGWindowList
         for windowKey in state.windows.keys {
             if let windowID = UInt32(windowKey), !seenWindowIDs.contains(windowID) {
-                logger.debug("Poll removing stale window", metadata: ["windowID": "\(windowID)"])
+                logger.trace("Poll removing stale window", metadata: ["windowID": "\(windowID)"])
                 // Inline removal logic (don't call handleWindowDestroyed to avoid log confusion)
                 let pid = state.windows[windowKey]?.pid
                 if state.metadata.focusedWindowID == windowID {
@@ -838,7 +838,7 @@ class StateManager {
         state.windows[String(windowID)] = window
         updateWindowSpaces(windowID)
 
-        logger.debug("Poll discovered window", metadata: [
+        logger.trace("Poll discovered window", metadata: [
             "windowID": "\(windowID)",
             "app": "\(window.appName ?? "?")"
         ])
@@ -973,7 +973,7 @@ class StateManager {
 
     func handleWindowResized(_ windowID: UInt32, frame: CGRect) {
         queue.async {
-            self.logger.debug("Window resized", metadata: [
+            self.logger.trace("Window resized", metadata: [
                 "windowID": "\(windowID)",
                 "frame": "\(Int(frame.origin.x)),\(Int(frame.origin.y)) \(Int(frame.width))x\(Int(frame.height))"
             ])

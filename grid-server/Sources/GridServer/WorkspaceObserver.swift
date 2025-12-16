@@ -136,7 +136,7 @@ class WorkspaceObserver {
             return
         }
 
-        logger.debug("Application activated", metadata: [
+        logger.trace("Application activated", metadata: [
             "app": "\(app.localizedName ?? "Unknown")",
             "pid": "\(app.processIdentifier)"
         ])

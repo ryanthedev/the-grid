@@ -148,7 +148,7 @@ class ApplicationObserver {
             return
         }
 
-        logger.debug("AX notification received", metadata: [
+        logger.trace("AX notification received", metadata: [
             "notification": "\(notifName)",
             "windowID": "\(windowID)",
             "pid": "\(pid)"
