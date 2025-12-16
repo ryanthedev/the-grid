@@ -117,6 +117,9 @@ class BorderWindow {
             logger.warning("Failed to create initial drawing context", metadata: ["windowID": "\(windowID)"])
         }
 
+        // Move border to same space as target window
+        moveToTargetSpace()
+
         logger.debug("Border window created", metadata: [
             "windowID": "\(windowID)",
             "targetID": "\(targetWindowID)",
@@ -316,10 +319,40 @@ class BorderWindow {
         // Force context recreation for new target
         context = nil
 
+        // Move border to new target's space (may be different from old target)
+        moveToTargetSpace()
+
         logger.info("Border retargeted", metadata: [
             "windowID": "\(windowID)",
             "oldTarget": "\(oldTargetID)",
             "newTarget": "\(newTargetID)"
+        ])
+    }
+
+    /// Move the border window to the same space as the target window
+    private func moveToTargetSpace() {
+        guard windowID != 0 else { return }
+
+        let windowArray = createWindowIDArray([targetWindowID])
+        guard let spaces = SLSCopySpacesForWindows(connectionID, 0x7, windowArray),
+              CFArrayGetCount(spaces) > 0,
+              let spacePtr = CFArrayGetValueAtIndex(spaces, 0) else {
+            logger.debug("Could not get target window space")
+            return
+        }
+
+        // Safe extraction of space ID from CFNumber
+        let spaceNumber = Unmanaged<CFNumber>.fromOpaque(spacePtr).takeUnretainedValue()
+        var spaceID: UInt64 = 0
+        CFNumberGetValue(spaceNumber, .sInt64Type, &spaceID)
+
+        let borderArray = createWindowIDArray([windowID])
+        SLSMoveWindowsToManagedSpace(connectionID, borderArray, spaceID)
+
+        logger.debug("Border moved to target space", metadata: [
+            "windowID": "\(windowID)",
+            "targetID": "\(targetWindowID)",
+            "spaceID": "\(spaceID)"
         ])
     }
 }
