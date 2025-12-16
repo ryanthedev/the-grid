@@ -333,18 +333,29 @@ class BorderWindow {
     private func moveToTargetSpace() {
         guard windowID != 0 else { return }
 
+        // Get target window's display for logging
+        let targetDisplay = SLSCopyManagedDisplayForWindow(connectionID, targetWindowID) as String? ?? "unknown"
+
         let state = StateManager.shared.getState()
 
-        // Get space from existing state - window's space or active space
-        let spaceID: UInt64?
-        if let windowState = state.windows[String(targetWindowID)] {
-            spaceID = windowState.spaces.first
+        // Try state first, fall back to direct API query (not activeSpaceID - wrong for multi-monitor)
+        var spaceID: UInt64?
+        var source: String
+        if let windowState = state.windows[String(targetWindowID)],
+           let firstSpace = windowState.spaces.first {
+            spaceID = firstSpace
+            source = "state"
         } else {
-            spaceID = state.metadata.activeSpaceID
+            // State doesn't have window - query API directly
+            spaceID = queryWindowSpace(targetWindowID)
+            source = "api"
         }
 
         guard let targetSpace = spaceID else {
-            logger.debug("No space available for border")
+            logger.debug("No space available for border", metadata: [
+                "targetID": "\(targetWindowID)",
+                "targetDisplay": "\(targetDisplay)"
+            ])
             return
         }
 
@@ -354,7 +365,23 @@ class BorderWindow {
         logger.debug("Border moved to target space", metadata: [
             "windowID": "\(windowID)",
             "targetID": "\(targetWindowID)",
-            "spaceID": "\(targetSpace)"
+            "spaceID": "\(targetSpace)",
+            "targetDisplay": "\(targetDisplay)",
+            "source": "\(source)"
         ])
+    }
+
+    /// Query window's space directly from SkyLight API
+    private func queryWindowSpace(_ windowID: UInt32) -> UInt64? {
+        let windowArray = createWindowIDArray([windowID])
+        guard let spaces = SLSCopySpacesForWindows(connectionID, 0x7, windowArray),
+              CFArrayGetCount(spaces) > 0,
+              let spacePtr = CFArrayGetValueAtIndex(spaces, 0) else {
+            return nil
+        }
+        let spaceNumber = Unmanaged<CFNumber>.fromOpaque(spacePtr).takeUnretainedValue()
+        var spaceID: UInt64 = 0
+        CFNumberGetValue(spaceNumber, .sInt64Type, &spaceID)
+        return spaceID
     }
 }
