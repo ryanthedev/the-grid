@@ -44,6 +44,11 @@ class BorderWindow {
     private var pendingFrame: CGRect?
     private var pendingStyle: BorderStyle?
 
+    // MARK: - Context Retry (handles Window Server timing race)
+    private var contextRetryCount = 0
+    private let maxContextRetries = 3
+    private var pendingRedrawStyle: BorderStyle?
+
     init(connectionID: Int32, targetWindowID: UInt32) {
         self.connectionID = connectionID
         self.targetWindowID = targetWindowID
@@ -141,6 +146,10 @@ class BorderWindow {
         updateTimer?.cancel()
         updateTimer = nil
 
+        // Clear retry state
+        contextRetryCount = 0
+        pendingRedrawStyle = nil
+
         // CRITICAL: Hide window before releasing (removes from screen)
         hide()
 
@@ -219,23 +228,10 @@ class BorderWindow {
                 "result": "\(shapeResult.rawValue)"
             ])
 
-            // CRITICAL FIX: Flush the window content region BEFORE recreating context
-            // This ensures the window server has processed the shape change
-            _ = SLSFlushWindowContentRegion(connectionID, windowID, nil)
-
-            // Recreate context for new size
-            context = SLWindowContextCreate(connectionID, windowID, nil)
-
-            if let ctx = context {
-                logger.info("Context after shape change", metadata: [
-                    "windowID": "\(windowID)",
-                    "contextWidth": "\(ctx.width)",
-                    "contextHeight": "\(ctx.height)",
-                    "expectedSize": "(\(borderBounds.size.width), \(borderBounds.size.height))"
-                ])
-            } else {
-                logger.warning("Failed to create context after border resize", metadata: ["windowID": "\(windowID)"])
-            }
+            // Mark context as needing recreation - DON'T create here (race with Window Server)
+            // Context will be recreated lazily in redraw() with retry support
+            context = nil
+            contextRetryCount = 0
         }
 
         currentBounds = borderBounds
@@ -257,51 +253,29 @@ class BorderWindow {
             return
         }
 
-        // Get or recreate context if needed
-        var drawContext = context
+        // Store style for potential retries
+        pendingRedrawStyle = style
 
-        // Check if context has valid dimensions
-        if let ctx = drawContext {
-            if ctx.width == 0 || ctx.height == 0 {
-                logger.warning("Context has zero dimensions, attempting to recreate", metadata: [
-                    "windowID": "\(windowID)",
-                    "currentContextSize": "(\(ctx.width), \(ctx.height))"
-                ])
-                // Flush and try to recreate
-                _ = SLSFlushWindowContentRegion(connectionID, windowID, nil)
-                context = SLWindowContextCreate(connectionID, windowID, nil)
-                drawContext = context
-
-                if let newCtx = drawContext {
-                    logger.info("Context recreated", metadata: [
-                        "windowID": "\(windowID)",
-                        "newContextSize": "(\(newCtx.width), \(newCtx.height))"
-                    ])
-                }
-            }
-        } else {
-            // No context at all, try to create one
-            logger.warning("No context, attempting to create", metadata: ["windowID": "\(windowID)"])
+        // Attempt to get or create context
+        if context == nil {
             context = SLWindowContextCreate(connectionID, windowID, nil)
-            drawContext = context
         }
 
-        guard let finalContext = drawContext else {
-            logger.error("Border redraw failed - could not get valid context", metadata: ["windowID": "\(windowID)"])
+        // Validate context dimensions
+        guard let drawContext = context, drawContext.width > 0 && drawContext.height > 0 else {
+            // Context invalid - Window Server may not have processed shape change yet
+            logger.debug("Context has zero dimensions, scheduling retry", metadata: [
+                "windowID": "\(windowID)",
+                "expectedBounds": "(\(currentBounds.size.width), \(currentBounds.size.height))",
+                "retryCount": "\(contextRetryCount)"
+            ])
+            scheduleContextRetry()
             return
         }
 
-        // Final check - if still zero dimensions, log error but try anyway
-        let ctxWidth = finalContext.width
-        let ctxHeight = finalContext.height
-        if ctxWidth == 0 || ctxHeight == 0 {
-            logger.error("Context STILL has zero dimensions after recreation", metadata: [
-                "windowID": "\(windowID)",
-                "contextSize": "(\(ctxWidth), \(ctxHeight))",
-                "expectedBounds": "(\(currentBounds.size.width), \(currentBounds.size.height))"
-            ])
-            // Continue anyway - maybe it will work
-        }
+        // Valid context - reset retry state and proceed with drawing
+        contextRetryCount = 0
+        pendingRedrawStyle = nil
 
         // Draw into our bounds (0,0 to size)
         let drawBounds = CGRect(origin: .zero, size: currentBounds.size)
@@ -309,12 +283,12 @@ class BorderWindow {
         logger.debug("Border redraw", metadata: [
             "windowID": "\(windowID)",
             "drawBounds": "(\(drawBounds.width), \(drawBounds.height))",
-            "contextSize": "(\(ctxWidth), \(ctxHeight))",
+            "contextSize": "(\(drawContext.width), \(drawContext.height))",
             "borderWidth": "\(style.width)",
             "cornerRadius": "\(style.cornerRadius)"
         ])
 
-        BorderRenderer.draw(in: finalContext, bounds: drawBounds, style: style)
+        BorderRenderer.draw(in: drawContext, bounds: drawBounds, style: style)
 
         // Flush to screen
         _ = SLSFlushWindowContentRegion(connectionID, windowID, nil)
@@ -326,6 +300,30 @@ class BorderWindow {
     func update(targetFrame: CGRect, style: BorderStyle) {
         updatePosition(targetFrame: targetFrame, borderWidth: style.width)
         redraw(style: style)
+    }
+
+    /// Schedule a retry for context creation after Window Server processes shape change
+    private func scheduleContextRetry() {
+        guard contextRetryCount < maxContextRetries else {
+            logger.error("Context creation failed after \(maxContextRetries) retries", metadata: [
+                "windowID": "\(windowID)",
+                "expectedBounds": "(\(currentBounds.size.width), \(currentBounds.size.height))"
+            ])
+            contextRetryCount = 0
+            pendingRedrawStyle = nil
+            return
+        }
+
+        contextRetryCount += 1
+        // Exponential backoff: 8ms, 16ms, 32ms
+        let delay = 0.008 * Double(1 << (contextRetryCount - 1))
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self = self, let style = self.pendingRedrawStyle else { return }
+            // Clear context to force recreation attempt
+            self.context = nil
+            self.redraw(style: style)
+        }
     }
 
     // MARK: - Coalesced Updates
@@ -365,6 +363,11 @@ class BorderWindow {
     func retarget(to newTargetID: UInt32) {
         let oldTargetID = targetWindowID
         targetWindowID = newTargetID
+
+        // Cancel any pending retry state from old target
+        contextRetryCount = 0
+        pendingRedrawStyle = nil
+        context = nil  // Force context recreation for new target
 
         logger.info("Border retargeted", metadata: [
             "windowID": "\(windowID)",
