@@ -268,6 +268,92 @@ func syncBorders(ctx context.Context, c *client.Client, snap *server.Snapshot, r
 		Msg("syncBorders: sent cell assignments to server")
 }
 
+// SyncBordersForDisplay sends cell assignments for a specific display/space.
+// Used when focus crosses displays and we need to sync borders for the target.
+// This is similar to syncBorders but uses a DisplayInfo instead of a Snapshot,
+// which is necessary when syncing borders for a display other than the current one.
+//
+// Error handling: Errors are logged but not returned. Border sync is best-effort
+// and should not block focus operations.
+func SyncBordersForDisplay(ctx context.Context, c *client.Client, displayInfo server.DisplayInfo, spaceID string, rs *state.RuntimeState, cfg *config.Config) {
+	logging.Debug().
+		Str("displayUUID", displayInfo.UUID).
+		Str("spaceID", spaceID).
+		Msg("SyncBordersForDisplay: starting border sync for target display")
+
+	if cfg == nil || cfg.Borders == nil || !cfg.Borders.GetEnabled() {
+		logging.Debug().Msg("SyncBordersForDisplay: borders not enabled, skipping")
+		return
+	}
+
+	spaceState := rs.GetSpaceReadOnly(spaceID)
+	if spaceState == nil || spaceState.CurrentLayoutID == "" {
+		logging.Debug().
+			Str("spaceID", spaceID).
+			Msg("SyncBordersForDisplay: no local state or layout for space, skipping")
+		return
+	}
+
+	layoutDef, err := cfg.GetLayout(spaceState.CurrentLayoutID)
+	if err != nil {
+		logging.Warn().
+			Err(err).
+			Str("layoutID", spaceState.CurrentLayoutID).
+			Msg("SyncBordersForDisplay: layout not found")
+		return
+	}
+
+	// Use display's visible frame for bounds calculation
+	displayBounds := displayInfo.VisibleFrame
+	if displayBounds == (types.Rect{}) {
+		displayBounds = displayInfo.Frame
+		logging.Debug().
+			Str("displayUUID", displayInfo.UUID).
+			Msg("SyncBordersForDisplay: using Frame fallback (VisibleFrame empty)")
+	}
+	if displayBounds == (types.Rect{}) {
+		logging.Warn().
+			Str("displayUUID", displayInfo.UUID).
+			Msg("SyncBordersForDisplay: display has no frame information")
+		return
+	}
+
+	// Create a minimal Snapshot with only the fields needed by calculateCellBounds.
+	// calculateCellBounds only uses SpaceID (for logging) and DisplayBounds (for layout calculation).
+	pseudoSnap := &server.Snapshot{
+		SpaceID:       spaceID,
+		DisplayBounds: displayBounds,
+	}
+
+	cellBounds := calculateCellBounds(layoutDef, pseudoSnap, spaceState)
+	if cellBounds == nil {
+		logging.Debug().Msg("SyncBordersForDisplay: no cell bounds calculated")
+		return
+	}
+
+	assignments := buildCellAssignments(spaceState)
+	if len(assignments) == 0 {
+		logging.Debug().Msg("SyncBordersForDisplay: no cell assignments to send")
+		return
+	}
+
+	baseSpacing := cfg.GetBaseSpacing()
+	settingsPadding, _ := cfg.GetSettingsPadding()
+	paddedBounds := applyCellPadding(cellBounds, layoutDef, baseSpacing, settingsPadding)
+
+	if err := c.SendCellAssignments(ctx, assignments, nil, paddedBounds); err != nil {
+		logging.Warn().Err(err).Msg("SyncBordersForDisplay: failed to send cell assignments")
+		return
+	}
+
+	logging.Debug().
+		Str("displayUUID", displayInfo.UUID).
+		Str("spaceID", spaceID).
+		Int("assignments", len(assignments)).
+		Int("cellBounds", len(paddedBounds)).
+		Msg("SyncBordersForDisplay: sent cell assignments for target display")
+}
+
 // applyCellPadding applies padding to cell bounds to match window placement areas.
 // Uses layout.GetEffectivePadding to ensure consistent padding resolution.
 func applyCellPadding(cellBounds map[string]client.CellRect, layoutDef *types.Layout, baseSpacing float64, settingsPadding *types.Padding) map[string]client.CellRect {

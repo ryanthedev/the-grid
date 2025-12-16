@@ -8,6 +8,7 @@ import (
 	"github.com/yourusername/grid-cli/internal/client"
 	"github.com/yourusername/grid-cli/internal/config"
 	"github.com/yourusername/grid-cli/internal/layout"
+	"github.com/yourusername/grid-cli/internal/reconcile"
 	"github.com/yourusername/grid-cli/internal/server"
 	"github.com/yourusername/grid-cli/internal/state"
 	"github.com/yourusername/grid-cli/internal/types"
@@ -262,7 +263,15 @@ func moveFocusCrossDisplay(
 	}
 
 	// Focus the cell on the target space
-	return focusCellByID(ctx, c, rs, targetSpaceIDStr, targetCell)
+	windowID, err := focusCellByID(ctx, c, rs, targetSpaceIDStr, targetCell)
+	if err != nil {
+		return 0, err
+	}
+
+	// Sync borders for target display so border appears immediately
+	reconcile.SyncBordersForDisplay(ctx, c, *adjacentDisplay, targetSpaceIDStr, rs, cfg)
+
+	return windowID, nil
 }
 
 // FindOppositeDisplay finds a display on the opposite edge for wrap-around.
