@@ -61,13 +61,27 @@ class SimpleBorderManager {
     }
 
     deinit {
-        cleanup()
+        // Call implementation directly - deinit already has exclusive access
+        // Must be synchronous to ensure cleanup before deallocation
+        if Thread.isMainThread {
+            cleanupImpl()
+        } else {
+            DispatchQueue.main.sync {
+                self.cleanupImpl()
+            }
+        }
     }
 
     // MARK: - IPC Handlers (receive data from CLI)
 
     /// Set cell bounds received from CLI
     func setCellBounds(_ bounds: [String: CGRect]) {
+        DispatchQueue.main.async { [weak self] in
+            self?.setCellBoundsImpl(bounds)
+        }
+    }
+
+    private func setCellBoundsImpl(_ bounds: [String: CGRect]) {
         cellBounds = bounds
 
         logger.info("Cell bounds updated", metadata: [
@@ -83,6 +97,12 @@ class SimpleBorderManager {
 
     /// Set cell assignments received from CLI
     func setCellAssignments(_ assignments: [UInt32: String]) {
+        DispatchQueue.main.async { [weak self] in
+            self?.setCellAssignmentsImpl(assignments)
+        }
+    }
+
+    private func setCellAssignmentsImpl(_ assignments: [UInt32: String]) {
         cellAssignments = assignments
 
         logger.debug("Cell assignments updated", metadata: ["count": "\(assignments.count)"])
@@ -125,6 +145,12 @@ class SimpleBorderManager {
     /// Update focus when a different window becomes active
     /// This is the main entry point for focus changes from BorderEvents
     func updateFocus(newFocusedWindow: UInt32) {
+        DispatchQueue.main.async { [weak self] in
+            self?.updateFocusImpl(newFocusedWindow: newFocusedWindow)
+        }
+    }
+
+    private func updateFocusImpl(newFocusedWindow: UInt32) {
         // Ignore focus on our own overlay windows
         if isOurOverlayWindow(newFocusedWindow) {
             logger.debug("Ignoring focus on our overlay window", metadata: ["windowID": "\(newFocusedWindow)"])
@@ -152,6 +178,12 @@ class SimpleBorderManager {
 
     /// Handle window moved (update window border position)
     func handleWindowMoved(windowID: UInt32, newFrame: CGRect) {
+        DispatchQueue.main.async { [weak self] in
+            self?.handleWindowMovedImpl(windowID: windowID, newFrame: newFrame)
+        }
+    }
+
+    private func handleWindowMovedImpl(windowID: UInt32, newFrame: CGRect) {
         guard windowID == focusedWindowID else { return }
 
         // Only the focused window has a border, update it
@@ -163,6 +195,12 @@ class SimpleBorderManager {
 
     /// Handle window minimized (hide overlays if focused window is minimized)
     func handleWindowMinimized(windowID: UInt32) {
+        DispatchQueue.main.async { [weak self] in
+            self?.handleWindowMinimizedImpl(windowID: windowID)
+        }
+    }
+
+    private func handleWindowMinimizedImpl(windowID: UInt32) {
         guard windowID == focusedWindowID else { return }
 
         logger.debug("Focused window minimized", metadata: ["windowID": "\(windowID)"])
@@ -174,6 +212,12 @@ class SimpleBorderManager {
 
     /// Handle window deminimized (show overlays if it regains focus)
     func handleWindowDeminimized(windowID: UInt32) {
+        DispatchQueue.main.async { [weak self] in
+            self?.handleWindowDeminimizedImpl(windowID: windowID)
+        }
+    }
+
+    private func handleWindowDeminimizedImpl(windowID: UInt32) {
         // Focus will be updated separately via handleWindowFocused
         // This is just for logging
         logger.debug("Window deminimized", metadata: ["windowID": "\(windowID)"])
@@ -181,6 +225,12 @@ class SimpleBorderManager {
 
     /// Handle app hidden (hide overlays if focused window's app matches)
     func handleAppHidden(bundleID: String) {
+        DispatchQueue.main.async { [weak self] in
+            self?.handleAppHiddenImpl(bundleID: bundleID)
+        }
+    }
+
+    private func handleAppHiddenImpl(bundleID: String) {
         guard let windowID = focusedWindowID else { return }
 
         // Check if focused window belongs to the hidden app
@@ -198,6 +248,12 @@ class SimpleBorderManager {
 
     /// Handle app unhidden (restore overlays if needed)
     func handleAppUnhidden(bundleID: String) {
+        DispatchQueue.main.async { [weak self] in
+            self?.handleAppUnhiddenImpl(bundleID: bundleID)
+        }
+    }
+
+    private func handleAppUnhiddenImpl(bundleID: String) {
         guard let windowID = focusedWindowID else { return }
 
         logger.debug("App unhidden event", metadata: [
@@ -218,6 +274,12 @@ class SimpleBorderManager {
     /// 2. DESTROY overlays (not just hide) to prevent stale window artifacts
     /// 3. Keep focusedWindowID - the OS will send focus events if needed
     func handleSpaceChanged() {
+        DispatchQueue.main.async { [weak self] in
+            self?.handleSpaceChangedImpl()
+        }
+    }
+
+    private func handleSpaceChangedImpl() {
         logger.info("Space changed - clearing space-specific border state", metadata: [
             "previousCellBoundsCount": "\(cellBounds.count)",
             "previousCellAssignmentsCount": "\(cellAssignments.count)",
@@ -240,6 +302,12 @@ class SimpleBorderManager {
 
     /// Handle window destroyed (clear state if focused window destroyed)
     func handleWindowDestroyed(windowID: UInt32) {
+        DispatchQueue.main.async { [weak self] in
+            self?.handleWindowDestroyedImpl(windowID: windowID)
+        }
+    }
+
+    private func handleWindowDestroyedImpl(windowID: UInt32) {
         guard windowID == focusedWindowID else { return }
 
         logger.debug("Focused window destroyed", metadata: ["windowID": "\(windowID)"])
@@ -371,6 +439,12 @@ class SimpleBorderManager {
 
     /// Clean up all resources
     func cleanup() {
+        DispatchQueue.main.async { [weak self] in
+            self?.cleanupImpl()
+        }
+    }
+
+    private func cleanupImpl() {
         cellHighlight.destroy()
         windowBorder?.destroy()
         windowBorder = nil
