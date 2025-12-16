@@ -113,8 +113,73 @@ class StateManager {
         // Initialize activeDisplayUUID from active space (needed before any focus events)
         updateActiveDisplayFromSpaces()
 
+        // Query the currently focused window so CLI has correct focus state
+        initializeFocusState()
+
         state.metadata.update()
         logger.info("Complete state refresh finished")
+    }
+
+    /// Query the currently focused window on startup and set initial focus state.
+    /// This ensures focusedWindowID is set before any CLI commands run.
+    private func initializeFocusState() {
+        guard let frontApp = NSWorkspace.shared.frontmostApplication else {
+            logger.info("No frontmost application at startup")
+            return
+        }
+
+        let pid = frontApp.processIdentifier
+        let appElement = AXUIElementCreateApplication(pid)
+
+        var focusedWindowRef: AnyObject?
+        let result = AXUIElementCopyAttributeValue(
+            appElement,
+            kAXFocusedWindowAttribute as CFString,
+            &focusedWindowRef
+        )
+
+        guard result == .success,
+              let windowElement = focusedWindowRef else {
+            logger.info("Could not get focused window for frontmost app", metadata: [
+                "app": "\(frontApp.localizedName ?? "unknown")",
+                "pid": "\(pid)"
+            ])
+            return
+        }
+
+        var windowID: UInt32 = 0
+        let axResult = _AXUIElementGetWindow(windowElement as! AXUIElement, &windowID)
+
+        guard axResult == .success, windowID != 0 else {
+            logger.debug("Could not get window ID from AX element")
+            return
+        }
+
+        // Set focused window
+        state.metadata.focusedWindowID = windowID
+
+        // Update display and space from focused window
+        if let displayUUID = SLSCopyManagedDisplayForWindow(connectionID, windowID) {
+            let displayStr = displayUUID as String
+            state.metadata.activeDisplayUUID = displayStr
+
+            let spaceID = SLSManagedDisplayGetCurrentSpace(connectionID, displayUUID)
+            if spaceID != 0 {
+                state.metadata.activeSpaceID = spaceID
+            }
+
+            logger.info("Initial focus state", metadata: [
+                "windowID": "\(windowID)",
+                "app": "\(frontApp.localizedName ?? "unknown")",
+                "spaceID": "\(spaceID)",
+                "display": "\(displayStr)"
+            ])
+        } else {
+            logger.info("Initial focus state (no display)", metadata: [
+                "windowID": "\(windowID)",
+                "app": "\(frontApp.localizedName ?? "unknown")"
+            ])
+        }
     }
 
     private func refreshApplications() {
