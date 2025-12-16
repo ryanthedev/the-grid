@@ -258,6 +258,8 @@ class BorderWindow {
 
         // Attempt to get or create context
         if context == nil {
+            // Flush to commit any pending shape changes to Window Server
+            _ = SLSFlushWindowContentRegion(connectionID, windowID, nil)
             context = SLWindowContextCreate(connectionID, windowID, nil)
         }
 
