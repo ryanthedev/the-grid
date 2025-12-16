@@ -333,26 +333,28 @@ class BorderWindow {
     private func moveToTargetSpace() {
         guard windowID != 0 else { return }
 
-        let windowArray = createWindowIDArray([targetWindowID])
-        guard let spaces = SLSCopySpacesForWindows(connectionID, 0x7, windowArray),
-              CFArrayGetCount(spaces) > 0,
-              let spacePtr = CFArrayGetValueAtIndex(spaces, 0) else {
-            logger.debug("Could not get target window space")
+        let state = StateManager.shared.getState()
+
+        // Get space from existing state - window's space or active space
+        let spaceID: UInt64?
+        if let windowState = state.windows[String(targetWindowID)] {
+            spaceID = windowState.spaces.first
+        } else {
+            spaceID = state.metadata.activeSpaceID
+        }
+
+        guard let targetSpace = spaceID else {
+            logger.debug("No space available for border")
             return
         }
 
-        // Safe extraction of space ID from CFNumber
-        let spaceNumber = Unmanaged<CFNumber>.fromOpaque(spacePtr).takeUnretainedValue()
-        var spaceID: UInt64 = 0
-        CFNumberGetValue(spaceNumber, .sInt64Type, &spaceID)
-
         let borderArray = createWindowIDArray([windowID])
-        SLSMoveWindowsToManagedSpace(connectionID, borderArray, spaceID)
+        SLSMoveWindowsToManagedSpace(connectionID, borderArray, targetSpace)
 
         logger.debug("Border moved to target space", metadata: [
             "windowID": "\(windowID)",
             "targetID": "\(targetWindowID)",
-            "spaceID": "\(spaceID)"
+            "spaceID": "\(targetSpace)"
         ])
     }
 }
