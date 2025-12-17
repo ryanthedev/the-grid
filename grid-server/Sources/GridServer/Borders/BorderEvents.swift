@@ -7,14 +7,12 @@
 
 import Foundation
 import CoreGraphics
-import Logging
 
 /// Routes window events from StateManager to SimpleBorderManager
 ///
 /// **Thread Safety**: All methods must be called on the main queue.
 /// The weak references to managers are not thread-safe.
 class BorderEvents {
-    private let logger = Logger(label: "com.grid.BorderEvents")
     private weak var simpleBorderManager: SimpleBorderManager?
     private weak var stateManager: StateManager?
 
@@ -25,7 +23,7 @@ class BorderEvents {
         self.simpleBorderManager = simpleBorderManager
         self.stateManager = stateManager
 
-        logger.info("BorderEvents connected to SimpleBorderManager")
+        Task { await EventLog.shared.log("bdr.events.init", [:]) }
     }
 
     // MARK: - Event Handlers (called by StateManager)

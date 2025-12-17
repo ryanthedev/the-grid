@@ -4,7 +4,6 @@ import Logging
 /// Unix domain socket server that handles multiple client connections
 class SocketServer {
     private let socketPath: String
-    private let logger: Logger
     private var serverSocket: Int32?
     private var isRunning = false
     private var clientSockets: Set<Int32> = []
@@ -14,9 +13,8 @@ class SocketServer {
     weak var messageHandler: MessageHandler?
     weak var eventBroadcaster: EventBroadcaster?
 
-    init(socketPath: String, logger: Logger) {
+    init(socketPath: String, logger: Logger? = nil) {
         self.socketPath = socketPath
-        self.logger = logger
     }
 
     /// Start the socket server
@@ -65,7 +63,9 @@ class SocketServer {
         }
 
         isRunning = true
-        logger.info("Socket server started", metadata: ["path": "\(socketPath)"])
+        Task {
+            await EventLog.shared.log("sock.start", ["path": socketPath])
+        }
 
         // Accept connections on background queue
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
@@ -92,7 +92,9 @@ class SocketServer {
         }
 
         cleanupSocket()
-        logger.info("Socket server stopped")
+        Task {
+            await EventLog.shared.log("sock.stop", [:])
+        }
     }
 
     /// Accept incoming connections
@@ -111,14 +113,16 @@ class SocketServer {
 
             guard clientSocket >= 0 else {
                 if isRunning {
-                    logger.error("Failed to accept connection", metadata: ["errno": "\(errno)"])
+                    Task {
+                        await EventLog.shared.log("sock.err", ["op": "accept", "errno": errno])
+                    }
                 }
                 continue
             }
 
             // Log client connect event
             Task {
-                await EventLog.shared.log("client.connect", ["cid": clientSocket])
+                await EventLog.shared.log("sock.connect", ["cid": clientSocket])
             }
 
             socketQueue.async(flags: .barrier) { [weak self] in
@@ -142,7 +146,7 @@ class SocketServer {
 
             // Log client disconnect event
             Task {
-                await EventLog.shared.log("client.disconnect", ["cid": socket])
+                await EventLog.shared.log("sock.disconnect", ["cid": socket])
             }
         }
 
@@ -191,10 +195,14 @@ class SocketServer {
                 }
             case .response:
                 // Responses from client (not typical in server mode, but supported)
-                logger.warning("Received response from client", metadata: ["socket": "\(clientSocket)"])
+                Task {
+                    await EventLog.shared.log("warn.client_response", ["socket": clientSocket])
+                }
             }
         } catch {
-            logger.error("Failed to parse message", metadata: ["error": "\(error)", "socket": "\(clientSocket)"])
+            Task {
+                await EventLog.shared.log("msg.err", ["op": "parse", "socket": clientSocket, "error": "\(error)"])
+            }
 
             // Send error response if possible
             let errorResponse = Response(
@@ -234,10 +242,14 @@ class SocketServer {
             }
 
             if sent < 0 {
-                logger.error("Failed to send message", metadata: ["errno": "\(errno)", "socket": "\(socket)"])
+                Task {
+                    await EventLog.shared.log("sock.err", ["op": "send", "socket": socket, "errno": errno])
+                }
             }
         } catch {
-            logger.error("Failed to encode message", metadata: ["error": "\(error)"])
+            Task {
+                await EventLog.shared.log("msg.err", ["op": "encode", "error": "\(error)"])
+            }
         }
     }
 

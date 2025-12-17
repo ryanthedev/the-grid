@@ -9,13 +9,10 @@
 
 import Foundation
 import CoreGraphics
-import Logging
 
 /// Shared runtime border configuration (mutable at runtime via RPC)
 class BorderConfigManager {
     static let shared = BorderConfigManager()
-
-    private let logger = Logger(label: "com.grid.BorderConfigManager")
 
     // MARK: - Configurable Properties
 
@@ -102,17 +99,17 @@ class BorderConfigManager {
             let alphaStr = String(hexSanitized.prefix(2))
             rgbHex = String(hexSanitized.dropFirst(2))
             guard let alphaInt = UInt8(alphaStr, radix: 16) else {
-                logger.warning("Failed to parse alpha in hex color", metadata: ["hex": "\(hex)"])
+                Task { await EventLog.shared.log("warn.config", ["msg": "failed to parse alpha in hex color", "hex": hex]) }
                 return nil
             }
             alpha = CGFloat(alphaInt) / 255.0
         default:
-            logger.warning("Invalid hex color format (expected 6 or 8 chars)", metadata: ["hex": "\(hex)"])
+            Task { await EventLog.shared.log("warn.config", ["msg": "invalid hex color format (expected 6 or 8 chars)", "hex": hex]) }
             return nil
         }
 
         guard let hexInt = UInt32(rgbHex, radix: 16) else {
-            logger.warning("Failed to parse hex color", metadata: ["hex": "\(hex)"])
+            Task { await EventLog.shared.log("warn.config", ["msg": "failed to parse hex color", "hex": hex]) }
             return nil
         }
 

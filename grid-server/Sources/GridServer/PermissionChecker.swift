@@ -7,18 +7,15 @@
 
 import Foundation
 import ApplicationServices
-import Logging
 
 class PermissionChecker {
-    private static let logger = Logger(label: "com.grid.PermissionChecker")
-
     static func checkAccessibilityPermission() -> Bool {
         let trusted = AXIsProcessTrusted()
 
         if trusted {
-            logger.debug("Accessibility permission granted")
+            Task { await EventLog.shared.log("ax.permission.granted", [:]) }
         } else {
-            logger.warning("Accessibility permission NOT granted - add grid-server to System Settings > Privacy & Security > Accessibility")
+            Task { await EventLog.shared.log("ax.permission.denied", ["msg": "add grid-server to System Settings > Privacy & Security > Accessibility"]) }
         }
 
         return trusted
@@ -29,8 +26,7 @@ class PermissionChecker {
         let trusted = AXIsProcessTrustedWithOptions(options)
 
         if !trusted {
-            logger.notice("Accessibility permission dialog should appear...")
-            logger.notice("Please grant permission and restart the application")
+            Task { await EventLog.shared.log("ax.permission.request", ["msg": "dialog should appear - grant permission and restart"]) }
         }
     }
 }

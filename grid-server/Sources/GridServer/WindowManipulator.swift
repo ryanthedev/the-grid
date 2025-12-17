@@ -8,18 +8,15 @@
 import Foundation
 import CoreGraphics
 import AppKit
-import Logging
 
 /// Helper class for window manipulation operations
 class WindowManipulator {
     private let connectionID: Int32
-    private let logger: Logger
     let mssClient: MSSClient  // Internal access for MessageHandler
 
-    init(connectionID: Int32, logger: Logger) {
+    init(connectionID: Int32) {
         self.connectionID = connectionID
-        self.logger = logger
-        self.mssClient = MSSClient(logger: logger)
+        self.mssClient = MSSClient()
     }
 
     // MARK: - AX Element Lookup
@@ -33,7 +30,7 @@ class WindowManipulator {
         let result = AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &windowsValue)
 
         guard result == .success, let windows = windowsValue as? [AXUIElement] else {
-            logger.debug("Failed to get windows for app", metadata: ["pid": "\(pid)"])
+            Task { await EventLog.shared.log("ax.fail", ["pid": pid, "reason": "windows_list"]) }
             return nil
         }
 
@@ -44,10 +41,7 @@ class WindowManipulator {
             }
         }
 
-        logger.debug("Window not found in app's window list", metadata: [
-            "pid": "\(pid)",
-            "windowID": "\(windowID)"
-        ])
+        Task { await EventLog.shared.log("ax.fail", ["pid": pid, "wid": windowID, "reason": "not_in_list"]) }
         StateManager.shared.handleWindowDestroyed(windowID)
         return nil
     }
@@ -69,11 +63,7 @@ class WindowManipulator {
         let result = AXUIElementSetAttributeValue(element, kAXPositionAttribute as CFString, axValue)
 
         if result != AXError.success {
-            logger.debug("Failed to set window position", metadata: [
-                "error": "\(result.rawValue)",
-                "x": "\(point.x)",
-                "y": "\(point.y)"
-            ])
+            Task { await EventLog.shared.log("ax.fail", ["op": "position", "err": result.rawValue, "x": point.x, "y": point.y]) }
             return false
         }
 
@@ -88,11 +78,7 @@ class WindowManipulator {
         let result = AXUIElementSetAttributeValue(element, kAXSizeAttribute as CFString, axValue)
 
         if result != AXError.success {
-            logger.debug("Failed to set window size", metadata: [
-                "error": "\(result.rawValue)",
-                "width": "\(size.width)",
-                "height": "\(size.height)"
-            ])
+            Task { await EventLog.shared.log("ax.fail", ["op": "size", "err": result.rawValue, "w": size.width, "h": size.height]) }
             return false
         }
 
@@ -161,65 +147,31 @@ class WindowManipulator {
 
     /// Move window using compatibility workspace IDs (for modern macOS)
     private func moveWindowViaCompatibilityWorkspace(windowID: UInt32, spaceID: UInt64) -> Bool {
-        logger.debug("Using compat workspace method", metadata: [
-            "windowID": "\(windowID)",
-            "spaceID": "\(spaceID)"
-        ])
+        Task { await EventLog.shared.log("sls.compat", ["wid": windowID, "sid": spaceID]) }
 
         // Use "grid" as magic constant (0x67726964)
         let compatID: Int32 = 0x67726964
-        logger.debug("Setting compat ID on space", metadata: [
-            "compatID": "0x\(String(compatID, radix: 16))",
-            "compatIDDecimal": "\(compatID)",
-            "connectionID": "\(connectionID)"
-        ])
 
         // Set space compatibility ID
         var result = SLSSpaceSetCompatID(connectionID, spaceID, compatID)
-        logger.debug("SLSSpaceSetCompatID returned", metadata: [
-            "CGError": "\(result.rawValue)",
-            "CGErrorHex": "0x\(String(result.rawValue, radix: 16))",
-            "description": result == .success ? "success" : "FAILED"
-        ])
 
         if result != .success {
-            logger.error("SLSSpaceSetCompatID failed", metadata: [
-                "error": "\(result.rawValue)",
-                "spaceID": "\(spaceID)",
-                "compatID": "\(compatID)"
-            ])
+            Task { await EventLog.shared.log("err.sls", ["op": "set_compat", "err": result.rawValue, "sid": spaceID]) }
             return false
         }
 
         // Move window to workspace
         var wid = windowID
-        logger.debug("Calling SLSSetWindowListWorkspace", metadata: [
-            "windowID": "\(wid)",
-            "count": "1",
-            "workspaceID": "\(compatID)"
-        ])
-
         result = SLSSetWindowListWorkspace(connectionID, &wid, 1, compatID)
-        logger.debug("SLSSetWindowListWorkspace returned", metadata: [
-            "CGError": "\(result.rawValue)",
-            "description": result == .success ? "success" : "FAILED"
-        ])
 
         // Always clean up - reset compat ID to 0
-        logger.debug("Resetting compat ID to 0")
         let resetResult = SLSSpaceSetCompatID(connectionID, spaceID, 0)
         if resetResult != .success {
-            logger.warning("Reset compat ID failed (non-fatal)", metadata: [
-                "error": "\(resetResult.rawValue)"
-            ])
+            Task { await EventLog.shared.log("warn.sls", ["op": "reset_compat", "err": resetResult.rawValue]) }
         }
 
         if result != .success {
-            logger.error("SLSSetWindowListWorkspace failed", metadata: [
-                "error": "\(result.rawValue)",
-                "windowID": "\(windowID)",
-                "workspaceID": "\(compatID)"
-            ])
+            Task { await EventLog.shared.log("err.sls", ["op": "workspace", "err": result.rawValue, "wid": windowID]) }
             return false
         }
 
@@ -228,7 +180,7 @@ class WindowManipulator {
 
     /// Move window using direct SLSMoveWindowsToManagedSpace API
     private func moveWindowViaSkyLightAPI(windowID: UInt32, spaceID: UInt64) -> Bool {
-        logger.debug("Using direct SLSMoveWindowsToManagedSpace API")
+        Task { await EventLog.shared.log("sls.move", ["wid": windowID, "sid": spaceID]) }
 
         // Create CFArray with proper kCFTypeArrayCallBacks
         let windowArray = createWindowArray(windowIDs: [windowID])
@@ -237,40 +189,26 @@ class WindowManipulator {
         // Call the API
         SLSMoveWindowsToManagedSpace(connectionID, windowArray, spaceID)
 
-        logger.debug("Called SLSMoveWindowsToManagedSpace")
         return true
     }
 
     /// Move a window to a specific space
     func moveWindowToSpace(windowID: UInt32, spaceID: UInt64) -> Bool {
-        logger.debug("Moving window to space", metadata: [
-            "windowID": "\(windowID)",
-            "spaceID": "\(spaceID)"
-        ])
+        Task { await EventLog.shared.log("win.space", ["wid": windowID, "sid": spaceID]) }
 
         // Validate space type - don't allow moves to fullscreen spaces
         let spaceType = SLSSpaceGetType(connectionID, spaceID)
-        let spaceTypeName = SpaceType(rawValue: spaceType)?.description ?? "unknown"
-        logger.debug("Target space type", metadata: [
-            "spaceID": "\(spaceID)",
-            "typeRaw": "\(spaceType)",
-            "typeName": "\(spaceTypeName)"
-        ])
 
         if spaceType == SpaceType.fullscreen.rawValue {
-            logger.error("Cannot move to fullscreen space", metadata: ["spaceID": "\(spaceID)"])
+            Task { await EventLog.shared.log("err.space", ["reason": "fullscreen", "sid": spaceID]) }
             return false
         }
 
         // Check current space
         let currentSpace = getWindowSpace(windowID: windowID)
-        logger.debug("Window current space", metadata: [
-            "windowID": "\(windowID)",
-            "currentSpace": "\(currentSpace?.description ?? "unknown")"
-        ])
 
         if currentSpace == spaceID {
-            logger.debug("Window already on target space", metadata: ["windowID": "\(windowID)"])
+            Task { await EventLog.shared.log("dbg.space", ["reason": "already_there", "wid": windowID]) }
             return true
         }
 
@@ -285,7 +223,7 @@ class WindowManipulator {
                 let success = mssClient.moveWindowToSpace(windowID: windowID, spaceID: spaceID)
 
                 if !success {
-                    logger.error("MSS move failed", metadata: ["windowID": "\(windowID)", "spaceID": "\(spaceID)"])
+                    Task { await EventLog.shared.log("mss.fail", ["op": "move", "wid": windowID, "sid": spaceID]) }
                     return false
                 }
 
@@ -294,24 +232,16 @@ class WindowManipulator {
                 let verified = newSpace == spaceID
 
                 if verified {
-                    logger.debug("Window moved via MSS", metadata: [
-                        "windowID": "\(windowID)",
-                        "from": "\(currentSpace?.description ?? "?")",
-                        "to": "\(spaceID)"
-                    ])
+                    Task { await EventLog.shared.log("mss.move", ["wid": windowID, "sid": spaceID]) }
                     return true
                 } else {
-                    logger.error("MSS move verification failed", metadata: [
-                        "windowID": "\(windowID)",
-                        "expected": "\(spaceID)",
-                        "actual": "\(newSpace?.description ?? "?")"
-                    ])
+                    Task { await EventLog.shared.log("err.verify", ["wid": windowID, "expected": spaceID, "actual": newSpace as Any]) }
                     return false
                 }
 
             } else {
                 // MSS not available
-                logger.warning("MSS not available - window move to space requires MSS on macOS 12.7+")
+                Task { await EventLog.shared.log("warn.mss", ["reason": "not_available"]) }
                 return false
             }
         } else {
@@ -320,7 +250,7 @@ class WindowManipulator {
             let success = moveWindowViaSkyLightAPI(windowID: windowID, spaceID: spaceID)
 
             if !success {
-                logger.error("Direct SLS API failed")
+                Task { await EventLog.shared.log("err.sls", ["op": "move"]) }
                 return false
             }
 
@@ -328,11 +258,7 @@ class WindowManipulator {
             let verified = newSpace == spaceID
 
             if !verified {
-                logger.error("Move verification failed", metadata: [
-                    "windowID": "\(windowID)",
-                    "expected": "\(spaceID)",
-                    "actual": "\(newSpace?.description ?? "?")"
-                ])
+                Task { await EventLog.shared.log("err.verify", ["wid": windowID, "expected": spaceID, "actual": newSpace as Any]) }
             }
 
             return verified
@@ -377,7 +303,7 @@ class WindowManipulator {
         // 1. Get PSN from PID
         var psn = ProcessSerialNumber(highLongOfPSN: 0, lowLongOfPSN: 0)
         guard GetProcessForPID(pid, &psn) == 0 else {
-            logger.warning("GetProcessForPID failed, using fallback", metadata: ["pid": "\(pid)"])
+            Task { await EventLog.shared.log("warn.focus", ["reason": "psn_fail", "pid": pid]) }
             return focusWindowFallback(pid: pid, windowID: windowID)
         }
 
@@ -417,14 +343,13 @@ class WindowManipulator {
     /// Focus a window by raising it and activating its app
     /// Uses yabai-style event synthesis for reliable same-app window focus
     func focusWindow(pid: pid_t, windowID: UInt32) -> Bool {
-        logger.debug("Focusing window", metadata: [
-            "pid": "\(pid)",
-            "windowID": "\(windowID)"
-        ])
+        Task { await EventLog.shared.log("win.focus", ["pid": pid, "wid": windowID]) }
 
         let result = focusWindowWithRaise(pid: pid, windowID: windowID)
 
-        logger.info("Window focused", metadata: ["windowID": "\(windowID)", "success": "\(result)"])
+        if !result {
+            Task { await EventLog.shared.log("err.focus", ["wid": windowID]) }
+        }
         return result
     }
 
@@ -434,15 +359,11 @@ class WindowManipulator {
     func moveWindowToDisplay(windowID: UInt32, displayUUID: String, position: CGPoint?, stateManager: StateManager) -> Bool {
         // Find a space on the target display
         guard let targetSpace = stateManager.getState().spaces.values.first(where: { $0.displayUUID == displayUUID }) else {
-            logger.error("No space found on target display", metadata: ["displayUUID": "\(displayUUID)"])
+            Task { await EventLog.shared.log("err.display", ["reason": "no_space", "uuid": displayUUID]) }
             return false
         }
 
-        logger.debug("Moving window to display", metadata: [
-            "windowID": "\(windowID)",
-            "displayUUID": "\(displayUUID)",
-            "targetSpaceID": "\(targetSpace.id)"
-        ])
+        Task { await EventLog.shared.log("win.move", ["wid": windowID, "display": displayUUID, "sid": targetSpace.id]) }
 
         // First, move the window to a space on that display
         if !moveWindowToSpace(windowID: windowID, spaceID: targetSpace.id) {
@@ -454,21 +375,16 @@ class WindowManipulator {
             // Get the window from state to find its PID
             guard let windowState = stateManager.getState().windows[String(windowID)],
                   let element = getAXElement(pid: windowState.pid, windowID: windowID) else {
-                logger.error("Failed to get AX element for position update")
+                Task { await EventLog.shared.log("err.ax", ["op": "get_element", "wid": windowID]) }
                 return false
             }
 
             // Set the position
             if !setWindowPosition(element: element, point: position) {
-                logger.warning("Window moved to display but position update failed")
+                Task { await EventLog.shared.log("warn.move", ["reason": "position_fail", "wid": windowID]) }
                 return false
             }
         }
-
-        logger.debug("Window moved to display", metadata: [
-            "windowID": "\(windowID)",
-            "display": "\(displayUUID)"
-        ])
 
         // Re-query space assignment after successful move
         stateManager.updateWindowSpacesPublic(windowID)

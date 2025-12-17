@@ -1,9 +1,10 @@
 import Foundation
 
-/// Thread-safe event logger that writes compact JSON-lines to disk
-/// - Writes to ~/.local/state/thegrid/events.jsonl
+/// Thread-safe event logger that writes compact JSON-lines
+/// - Writes to stdout (for console output)
+/// - Writes to ~/.local/state/thegrid/events.jsonl (for post-mortem analysis)
 /// - Append-only, synchronous flush after each write
-/// - Auto-rotates when file exceeds 1MB
+/// - Auto-rotates file when it exceeds 1MB
 actor EventLog {
     static let shared = EventLog()
 
@@ -11,6 +12,8 @@ actor EventLog {
     private let maxFileSize: UInt64 = 1_048_576 // 1MB
     private var fileHandle: FileHandle?
     private var isInitialized = false
+    private var writeToStdout: Bool = true
+    private var writeToFile: Bool = true
 
     private init() {
         let homeDir = FileManager.default.homeDirectoryForCurrentUser.path
@@ -19,6 +22,12 @@ actor EventLog {
 
         // Ensure directory exists
         try? FileManager.default.createDirectory(atPath: logDir, withIntermediateDirectories: true)
+    }
+
+    /// Configure output destinations
+    func configure(stdout: Bool = true, file: Bool = true) {
+        writeToStdout = stdout
+        writeToFile = file
     }
 
     /// Log an event with arbitrary data
@@ -49,21 +58,28 @@ actor EventLog {
             return
         }
 
-        // Write line to file
-        let line = jsonString + "\n"
-        guard let lineData = line.data(using: .utf8) else { return }
-
-        // Ensure file handle is open
-        if fileHandle == nil {
-            openFileHandle()
+        // Write to stdout if enabled
+        if writeToStdout {
+            print(jsonString)
         }
 
-        // Write and flush
-        fileHandle?.write(lineData)
-        fileHandle?.synchronizeFile() // Synchronous flush for crash safety
+        // Write to file if enabled
+        if writeToFile {
+            let line = jsonString + "\n"
+            guard let lineData = line.data(using: .utf8) else { return }
 
-        // Check if rotation is needed
-        checkRotation()
+            // Ensure file handle is open
+            if fileHandle == nil {
+                openFileHandle()
+            }
+
+            // Write and flush
+            fileHandle?.write(lineData)
+            fileHandle?.synchronizeFile() // Synchronous flush for crash safety
+
+            // Check if rotation is needed
+            checkRotation()
+        }
     }
 
     /// Open or create the file handle for appending

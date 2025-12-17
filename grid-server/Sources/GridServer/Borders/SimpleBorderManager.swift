@@ -9,7 +9,6 @@
 
 import Foundation
 import CoreGraphics
-import Logging
 import AppKit  // For NSWorkspace (focus query)
 
 // Private AX API for getting window ID from AX element
@@ -25,7 +24,6 @@ private func _AXUIElementGetWindow(_ element: AXUIElement, _ windowID: UnsafeMut
 ///
 /// **Thread Safety**: All methods must be called on the main queue.
 class SimpleBorderManager {
-    private let logger = Logger(label: "com.grid.SimpleBorderManager")
     private let connectionID: Int32
 
     // MARK: - State from CLI (via IPC) - Per-Display Storage
@@ -214,7 +212,7 @@ class SimpleBorderManager {
 
             // Log border move event
             Task {
-                await EventLog.shared.log("border.move", [
+                await EventLog.shared.log("bdr.move", [
                     "wid": windowID,
                     "frame": [newFrame.origin.x, newFrame.origin.y, newFrame.size.width, newFrame.size.height]
                 ])
@@ -238,7 +236,7 @@ class SimpleBorderManager {
 
         // Log border hide event
         Task {
-            await EventLog.shared.log("border.hide", [
+            await EventLog.shared.log("bdr.hide", [
                 "wid": windowID,
                 "reason": "minimized"
             ])
@@ -272,7 +270,7 @@ class SimpleBorderManager {
 
         // Log border hide event
         Task {
-            await EventLog.shared.log("border.hide", [
+            await EventLog.shared.log("bdr.hide", [
                 "wid": windowID,
                 "reason": "app_hidden"
             ])
@@ -339,7 +337,7 @@ class SimpleBorderManager {
 
         // Log border hide event
         Task {
-            await EventLog.shared.log("border.hide", [
+            await EventLog.shared.log("bdr.hide", [
                 "wid": windowID,
                 "reason": "destroyed"
             ])
@@ -385,7 +383,7 @@ class SimpleBorderManager {
             // Log border hide event if there was a focused window
             if let wid = focusedWindowID {
                 Task {
-                    await EventLog.shared.log("border.hide", [
+                    await EventLog.shared.log("bdr.hide", [
                         "wid": wid,
                         "reason": "no_cell"
                     ])
@@ -397,12 +395,11 @@ class SimpleBorderManager {
         // Get window frame from SkyLight
         var windowFrame = CGRect.zero
         guard SLSGetWindowBounds(connectionID, windowID, &windowFrame) == .success else {
-            logger.warning("Failed to get window bounds", metadata: ["windowID": "\(windowID)"])
             windowBorder?.hide()
 
             // Log border hide event
             Task {
-                await EventLog.shared.log("border.hide", [
+                await EventLog.shared.log("bdr.hide", [
                     "wid": windowID,
                     "reason": "no_bounds"
                 ])
@@ -420,7 +417,7 @@ class SimpleBorderManager {
             // No border exists - create new one
             let border = BorderWindow(connectionID: connectionID, targetWindowID: windowID)
             guard border.create() else {
-                logger.error("Failed to create window border", metadata: ["windowID": "\(windowID)"])
+                Task { await EventLog.shared.log("bdr.fail", ["wid": windowID, "reason": "create_failed"]) }
                 return
             }
             windowBorder = border
@@ -433,7 +430,7 @@ class SimpleBorderManager {
 
         // Log border show event
         Task {
-            await EventLog.shared.log("border.show", [
+            await EventLog.shared.log("bdr.show", [
                 "wid": windowID,
                 "cell": focusedCellID ?? "",
                 "frame": [windowFrame.origin.x, windowFrame.origin.y, windowFrame.size.width, windowFrame.size.height]

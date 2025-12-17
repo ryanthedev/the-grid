@@ -4,12 +4,10 @@ import Logging
 /// Manages broadcasting events to connected clients
 class EventBroadcaster {
     private weak var socketServer: SocketServer?
-    private let logger: Logger
     private var eventTimer: DispatchSourceTimer?
     private let timerQueue = DispatchQueue(label: "com.thegrid.eventtimer")
 
-    init(logger: Logger) {
-        self.logger = logger
+    init(logger: Logger? = nil) {
     }
 
     /// Set the socket server reference
@@ -20,11 +18,15 @@ class EventBroadcaster {
     /// Broadcast an event to all connected clients
     func broadcast(event: Event, excludeSocket: Int32? = nil) {
         guard let server = socketServer else {
-            logger.warning("Cannot broadcast event: No socket server")
+            Task {
+                await EventLog.shared.log("warn.broadcast", ["msg": "no_socket_server"])
+            }
             return
         }
 
-        logger.debug("Broadcasting event", metadata: ["type": "\(event.eventType)"])
+        Task {
+            await EventLog.shared.log("event.broadcast", ["type": event.eventType])
+        }
 
         let message = Message(event: event)
         let clientSockets = server.getClientSockets()
@@ -50,7 +52,9 @@ class EventBroadcaster {
     func startHeartbeat(interval: TimeInterval = 10.0) {
         stopHeartbeat()
 
-        logger.info("Starting heartbeat events", metadata: ["interval": "\(interval)s"])
+        Task {
+            await EventLog.shared.log("event.heartbeat", ["op": "start", "interval": interval])
+        }
 
         let timer = DispatchSource.makeTimerSource(queue: timerQueue)
         timer.schedule(deadline: .now() + interval, repeating: interval)
@@ -66,7 +70,9 @@ class EventBroadcaster {
     func stopHeartbeat() {
         eventTimer?.cancel()
         eventTimer = nil
-        logger.debug("Stopped heartbeat events")
+        Task {
+            await EventLog.shared.log("event.heartbeat", ["op": "stop"])
+        }
     }
 
     /// Send a heartbeat event

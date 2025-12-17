@@ -8,7 +8,6 @@
 
 import Foundation
 import AppKit
-import Logging
 
 /// Visual overlay for resize mode
 class ResizeOverlay {
@@ -16,7 +15,6 @@ class ResizeOverlay {
 
     private var window: NSWindow?
     private var textField: NSTextField?
-    private let logger: Logger
 
     /// Size of the overlay
     private let overlaySize = NSSize(width: 160, height: 36)
@@ -26,8 +24,7 @@ class ResizeOverlay {
 
     // MARK: - Initialization
 
-    init(logger: Logger = Logger(label: "com.grid.ResizeOverlay")) {
-        self.logger = logger
+    init() {
     }
 
     // MARK: - Public Methods
@@ -57,7 +54,7 @@ class ResizeOverlay {
         // Show the window
         window?.orderFront(nil)
 
-        logger.debug("Resize overlay shown: \(mode)")
+        Task { await EventLog.shared.log("resize.overlay.show", ["mode": mode]) }
     }
 
     /// Hide the overlay
@@ -70,7 +67,7 @@ class ResizeOverlay {
         }
 
         window?.orderOut(nil)
-        logger.debug("Resize overlay hidden")
+        Task { await EventLog.shared.log("resize.overlay.hide", [:]) }
     }
 
     /// Update the overlay position (e.g., to follow cursor)
@@ -151,7 +148,7 @@ class ResizeOverlay {
         self.window = window
         self.textField = textField
 
-        logger.debug("Resize overlay window created")
+        Task { await EventLog.shared.log("dbg.resize.overlay.created", [:]) }
     }
 
     private func positionWindow() {

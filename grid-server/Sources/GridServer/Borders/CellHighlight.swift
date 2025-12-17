@@ -7,11 +7,9 @@
 
 import Foundation
 import CoreGraphics
-import Logging
 
 /// A single highlight overlay window that fills a cell grid area
 class CellHighlight {
-    private let logger = Logger(label: "com.grid.CellHighlight")
     private let connectionID: Int32
 
     /// Our overlay window ID
@@ -53,7 +51,7 @@ class CellHighlight {
     /// Create the overlay window
     func create() -> Bool {
         guard windowID == 0 else {
-            logger.warning("Cell highlight window already created")
+            Task { await EventLog.shared.log("warn.cell.exists", [:]) }
             return true
         }
 
@@ -64,7 +62,7 @@ class CellHighlight {
         var bounds = CGRect(origin: .zero, size: initialSize)
         var region: CFTypeRef?
         guard CGSNewRegionWithRect(&bounds, &region) == .success, let frameRegion = region else {
-            logger.error("Failed to create region for cell highlight")
+            Task { await EventLog.shared.log("cell.fail", ["reason": "region_failed"]) }
             return false
         }
 
@@ -81,9 +79,7 @@ class CellHighlight {
         )
 
         guard result == .success, newWindowID != 0 else {
-            logger.error("SLSNewWindow failed for cell highlight", metadata: [
-                "error": "\(result.rawValue)"
-            ])
+            Task { await EventLog.shared.log("cell.fail", ["error": result.rawValue, "reason": "window_create_failed"]) }
             return false
         }
 
@@ -105,9 +101,10 @@ class CellHighlight {
         context = SLWindowContextCreate(connectionID, windowID, nil)
 
         if context == nil {
-            logger.warning("Failed to create drawing context for cell highlight", metadata: ["windowID": "\(windowID)"])
+            Task { await EventLog.shared.log("warn.cell.no_ctx", ["wid": windowID]) }
         }
 
+        Task { await EventLog.shared.log("cell.create", ["wid": windowID]) }
         return true
     }
 
@@ -157,7 +154,7 @@ class CellHighlight {
     func update(frame: CGRect) {
         guard windowID != 0 else { return }
         guard frame.size.width > 0 && frame.size.height > 0 else {
-            logger.warning("Ignoring invalid frame for cell highlight", metadata: ["frame": "\(frame)"])
+            Task { await EventLog.shared.log("warn.cell.bad_frame", ["frame": [frame.origin.x, frame.origin.y, frame.size.width, frame.size.height]]) }
             return
         }
 
@@ -171,7 +168,7 @@ class CellHighlight {
             var bounds = CGRect(origin: .zero, size: frame.size)
             var region: CFTypeRef?
             guard CGSNewRegionWithRect(&bounds, &region) == .success, let shapeRegion = region else {
-                logger.warning("Failed to create region for cell highlight resize", metadata: ["frame": "\(frame)"])
+                Task { await EventLog.shared.log("cell.fail", ["reason": "resize_region_failed", "frame": [frame.origin.x, frame.origin.y, frame.size.width, frame.size.height]]) }
                 return
             }
             let shapeResult = SLSSetWindowShape(connectionID, windowID, 0, 0, shapeRegion)
@@ -185,7 +182,7 @@ class CellHighlight {
             // Recreate context for new size
             context = SLWindowContextCreate(connectionID, windowID, nil)
             if context == nil {
-                logger.warning("Failed to create context after cell highlight resize", metadata: ["windowID": "\(windowID)"])
+                Task { await EventLog.shared.log("warn.cell.no_ctx", ["wid": windowID]) }
             }
         }
 
@@ -193,6 +190,8 @@ class CellHighlight {
 
         // Redraw with new bounds
         render()
+
+        Task { await EventLog.shared.log("cell.resize", ["wid": windowID, "frame": [frame.origin.x, frame.origin.y, frame.size.width, frame.size.height]]) }
     }
 
     /// Redraw the highlight
@@ -232,7 +231,7 @@ class CellHighlight {
     /// Schedule an update with debouncing (use this during smooth animations)
     func scheduleUpdate(frame: CGRect) {
         guard frame.size.width > 0 && frame.size.height > 0 else {
-            logger.warning("Ignoring invalid frame for scheduled update", metadata: ["frame": "\(frame)"])
+            Task { await EventLog.shared.log("warn.cell.bad_frame", ["frame": [frame.origin.x, frame.origin.y, frame.size.width, frame.size.height]]) }
             return
         }
         pendingFrame = frame
