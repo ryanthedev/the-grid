@@ -157,6 +157,12 @@ struct GridServerCommand: ParsableCommand {
 }
 
 /// Custom log handler that writes to stdout
+/// Shared ISO8601 formatter for all log handlers
+private let sharedISO8601Formatter: ISO8601DateFormatter = {
+    let formatter = ISO8601DateFormatter()
+    return formatter
+}()
+
 struct StreamLogHandler: LogHandler {
     var logLevel: Logger.Level = .info
     var metadata: Logger.Metadata = [:]
@@ -182,21 +188,27 @@ struct StreamLogHandler: LogHandler {
         function: String,
         line: UInt
     ) {
-        let timestamp = ISO8601DateFormatter().string(from: Date())
-        let levelStr = levelString(level)
+        let timestamp = sharedISO8601Formatter.string(from: Date())
 
-        var output = "[\(timestamp)] [\(levelStr)] \(message)"
+        var dict: [String: Any] = [
+            "t": timestamp,
+            "lvl": levelString(level),
+            "msg": "\(message)"
+        ]
 
         let combinedMetadata = self.metadata.merging(metadata ?? [:]) { _, new in new }
-        if !combinedMetadata.isEmpty {
-            let metadataStr = combinedMetadata
-                .map { "\($0.key)=\($0.value)" }
-                .joined(separator: " ")
-            output += " | \(metadataStr)"
+        for (key, value) in combinedMetadata {
+            dict[key] = "\(value)"
         }
 
         var stream = self.stream
-        stream.write(output + "\n")
+        if let data = try? JSONSerialization.data(withJSONObject: dict, options: [.sortedKeys]),
+           let json = String(data: data, encoding: .utf8) {
+            stream.write(json + "\n")
+        } else {
+            // Fallback: ensure log is never lost
+            stream.write("{\"t\":\"\(timestamp)\",\"lvl\":\"\(levelString(level))\",\"msg\":\"[serialization failed]\"}\n")
+        }
     }
 
     subscript(metadataKey key: String) -> Logger.Metadata.Value? {
@@ -247,26 +259,34 @@ struct FileLogHandler: LogHandler {
         function: String,
         line: UInt
     ) {
-        let timestamp = ISO8601DateFormatter().string(from: Date())
-        let levelStr = levelString(level)
+        let timestamp = sharedISO8601Formatter.string(from: Date())
 
-        var output = "[\(timestamp)] [\(levelStr)] \(message)"
+        var dict: [String: Any] = [
+            "t": timestamp,
+            "lvl": levelString(level),
+            "msg": "\(message)"
+        ]
 
         let combinedMetadata = self.metadata.merging(metadata ?? [:]) { _, new in new }
-        if !combinedMetadata.isEmpty {
-            let metadataStr = combinedMetadata
-                .map { "\($0.key)=\($0.value)" }
-                .joined(separator: " ")
-            output += " | \(metadataStr)"
+        for (key, value) in combinedMetadata {
+            dict[key] = "\(value)"
         }
 
-        let logLine = output + "\n"
+        // Build JSON data directly, avoiding double UTF-8 conversion
+        var data: Data
+        if let jsonData = try? JSONSerialization.data(withJSONObject: dict, options: [.sortedKeys]) {
+            data = jsonData
+        } else {
+            // Fallback: ensure log is never lost
+            let fallback = "{\"t\":\"\(timestamp)\",\"lvl\":\"\(levelString(level))\",\"msg\":\"[serialization failed]\"}"
+            data = Data(fallback.utf8)
+        }
+        data.append(contentsOf: "\n".utf8)
+
         let filePath = self.filePath
 
         // Write to file asynchronously to avoid blocking
         writeQueue.async {
-            guard let data = logLine.data(using: .utf8) else { return }
-
             if !FileManager.default.fileExists(atPath: filePath) {
                 FileManager.default.createFile(atPath: filePath, contents: nil, attributes: nil)
             }
