@@ -108,8 +108,6 @@ class CellHighlight {
             logger.warning("Failed to create drawing context for cell highlight", metadata: ["windowID": "\(windowID)"])
         }
 
-        logger.debug("Cell highlight window created", metadata: ["windowID": "\(windowID)"])
-
         return true
     }
 
@@ -127,8 +125,6 @@ class CellHighlight {
         context = nil
         _ = SLSReleaseWindow(connectionID, windowID)
 
-        logger.debug("Cell highlight window destroyed", metadata: ["windowID": "\(windowID)"])
-
         windowID = 0
         isVisible = false
     }
@@ -143,8 +139,6 @@ class CellHighlight {
         _ = SLSOrderWindow(connectionID, windowID, 1, 0)  // Order above background
 
         isVisible = true
-
-        logger.debug("Cell highlight shown", metadata: ["bounds": "\(currentBounds)"])
     }
 
     /// Hide the highlight
@@ -155,8 +149,6 @@ class CellHighlight {
         _ = SLSOrderWindow(connectionID, windowID, 0, 0)  // Remove from ordering
 
         isVisible = false
-
-        logger.debug("Cell highlight hidden")
     }
 
     // MARK: - Update
@@ -190,13 +182,6 @@ class CellHighlight {
             var shapeOrigin = frame.origin
             _ = SLSMoveWindow(connectionID, windowID, &shapeOrigin)
 
-            logger.debug("Cell highlight shape updated", metadata: [
-                "windowID": "\(windowID)",
-                "oldSize": "(\(currentBounds.size.width), \(currentBounds.size.height))",
-                "newSize": "(\(frame.size.width), \(frame.size.height))",
-                "result": "\(shapeResult.rawValue)"
-            ])
-
             // Recreate context for new size
             context = SLWindowContextCreate(connectionID, windowID, nil)
             if context == nil {
@@ -208,10 +193,6 @@ class CellHighlight {
 
         // Redraw with new bounds
         render()
-
-        logger.debug("Cell highlight updated", metadata: [
-            "frame": "(\(frame.origin.x), \(frame.origin.y), \(frame.size.width), \(frame.size.height))"
-        ])
     }
 
     /// Redraw the highlight

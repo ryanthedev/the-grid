@@ -78,7 +78,6 @@ class MSSClient {
     deinit {
         if let ctx = ctx {
             mss_destroy(ctx)
-            logger.trace("MSS client destroyed")
         }
     }
 

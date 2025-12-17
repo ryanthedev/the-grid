@@ -89,12 +89,6 @@ class SimpleBorderManager {
     private func setCellBoundsImpl(_ bounds: [String: CGRect], forDisplay displayUUID: String) {
         cellBoundsPerDisplay[displayUUID] = bounds
 
-        logger.info("Cell bounds updated", metadata: [
-            "displayUUID": "\(displayUUID)",
-            "count": "\(bounds.count)",
-            "cells": "\(bounds.keys.sorted().joined(separator: ", "))"
-        ])
-
         // If we have a focused cell on this display, update highlight position
         if currentDisplayUUID == displayUUID,
            let cellID = focusedCellID,
@@ -113,21 +107,12 @@ class SimpleBorderManager {
     private func setCellAssignmentsImpl(_ assignments: [UInt32: String], forDisplay displayUUID: String) {
         cellAssignmentsPerDisplay[displayUUID] = assignments
 
-        logger.debug("Cell assignments updated", metadata: [
-            "displayUUID": "\(displayUUID)",
-            "count": "\(assignments.count)"
-        ])
-
         // If we don't have a focused window yet (startup case), query the OS
         if focusedWindowID == nil {
             if let queriedWindowID = queryCurrentFocusedWindow() {
                 // Check if this window is in ANY display's assignments
                 let (foundDisplayUUID, cellID) = findAssignment(for: queriedWindowID)
                 if let cellID = cellID {
-                    logger.info("Initializing focus from OS query", metadata: [
-                        "windowID": "\(queriedWindowID)",
-                        "displayUUID": "\(foundDisplayUUID ?? "unknown")"
-                    ])
                     focusedWindowID = queriedWindowID
                     focusedCellID = cellID
                     currentDisplayUUID = foundDisplayUUID
@@ -139,22 +124,12 @@ class SimpleBorderManager {
         if let focusedWindow = focusedWindowID {
             // Check if focused window is in this display's assignments
             if let newCellID = assignments[focusedWindow] {
-                let oldCellID = focusedCellID
                 focusedCellID = newCellID
                 currentDisplayUUID = displayUUID
 
                 // Always update border when we have a focused window
                 updateCellHighlight()
                 updateWindowBorder()
-
-                if newCellID != oldCellID {
-                    logger.debug("Focused window cell changed", metadata: [
-                        "windowID": "\(focusedWindow)",
-                        "displayUUID": "\(displayUUID)",
-                        "oldCell": "\(oldCellID ?? "nil")",
-                        "newCell": "\(newCellID)"
-                    ])
-                }
             }
         }
     }
@@ -182,7 +157,6 @@ class SimpleBorderManager {
     private func updateFocusImpl(newFocusedWindow: UInt32) {
         // Ignore focus on our own overlay windows
         if isOurOverlayWindow(newFocusedWindow) {
-            logger.debug("Ignoring focus on our overlay window", metadata: ["windowID": "\(newFocusedWindow)"])
             return
         }
 
@@ -218,15 +192,6 @@ class SimpleBorderManager {
         focusedCellID = foundCellID
         currentDisplayUUID = foundDisplay
 
-        logger.info("Focus changed", metadata: [
-            "oldWindow": "\(oldFocusedWindow?.description ?? "nil")",
-            "newWindow": "\(newFocusedWindow)",
-            "oldCell": "\(oldFocusedCell ?? "nil")",
-            "newCell": "\(focusedCellID ?? "nil")",
-            "displayUUID": "\(currentDisplayUUID ?? "unknown")",
-            "displayChanged": "\(oldDisplayUUID != currentDisplayUUID)"
-        ])
-
         // Update both visual elements
         updateCellHighlight()
         updateWindowBorder()
@@ -246,6 +211,14 @@ class SimpleBorderManager {
         if let border = windowBorder {
             let style = createWindowBorderStyle()
             border.scheduleUpdate(frame: newFrame, style: style)
+
+            // Log border move event
+            Task {
+                await EventLog.shared.log("border.move", [
+                    "wid": windowID,
+                    "frame": [newFrame.origin.x, newFrame.origin.y, newFrame.size.width, newFrame.size.height]
+                ])
+            }
         }
     }
 
@@ -259,11 +232,17 @@ class SimpleBorderManager {
     private func handleWindowMinimizedImpl(windowID: UInt32) {
         guard windowID == focusedWindowID else { return }
 
-        logger.debug("Focused window minimized", metadata: ["windowID": "\(windowID)"])
-
         // Hide both overlays
         cellHighlight.hide()
         windowBorder?.hide()
+
+        // Log border hide event
+        Task {
+            await EventLog.shared.log("border.hide", [
+                "wid": windowID,
+                "reason": "minimized"
+            ])
+        }
     }
 
     /// Handle window deminimized (show overlays if it regains focus)
@@ -275,8 +254,6 @@ class SimpleBorderManager {
 
     private func handleWindowDeminimizedImpl(windowID: UInt32) {
         // Focus will be updated separately via handleWindowFocused
-        // This is just for logging
-        logger.debug("Window deminimized", metadata: ["windowID": "\(windowID)"])
     }
 
     /// Handle app hidden (hide overlays if focused window's app matches)
@@ -289,17 +266,17 @@ class SimpleBorderManager {
     private func handleAppHiddenImpl(bundleID: String) {
         guard let windowID = focusedWindowID else { return }
 
-        // Check if focused window belongs to the hidden app
-        // We don't have direct access to bundleID mapping here, but BorderEvents
-        // will only call this if relevant. Hide overlays defensively.
-        logger.debug("App hidden event", metadata: [
-            "bundleID": "\(bundleID)",
-            "focusedWindow": "\(windowID)"
-        ])
-
         // Hide both overlays
         cellHighlight.hide()
         windowBorder?.hide()
+
+        // Log border hide event
+        Task {
+            await EventLog.shared.log("border.hide", [
+                "wid": windowID,
+                "reason": "app_hidden"
+            ])
+        }
     }
 
     /// Handle app unhidden (restore overlays if needed)
@@ -310,12 +287,7 @@ class SimpleBorderManager {
     }
 
     private func handleAppUnhiddenImpl(bundleID: String) {
-        guard let windowID = focusedWindowID else { return }
-
-        logger.debug("App unhidden event", metadata: [
-            "bundleID": "\(bundleID)",
-            "focusedWindow": "\(windowID)"
-        ])
+        guard focusedWindowID != nil else { return }
 
         // Re-evaluate focus state to restore overlays if needed
         updateCellHighlight()
@@ -337,17 +309,6 @@ class SimpleBorderManager {
     }
 
     private func handleSpaceChangedImpl() {
-        let totalBounds = cellBoundsPerDisplay.values.reduce(0) { $0 + $1.count }
-        let totalAssignments = cellAssignmentsPerDisplay.values.reduce(0) { $0 + $1.count }
-
-        logger.info("Space changed - resetting focus state", metadata: [
-            "cachedDisplays": "\(cellAssignmentsPerDisplay.keys.count)",
-            "totalCellBounds": "\(totalBounds)",
-            "totalCellAssignments": "\(totalAssignments)",
-            "previousFocusedCellID": "\(focusedCellID ?? "nil")",
-            "focusedWindowID": "\(focusedWindowID?.description ?? "nil")"
-        ])
-
         // Clear focus state (will be re-established by next focus event)
         focusedCellID = nil
         // NOTE: Keep per-display caches - they remain valid for their respective displays
@@ -356,8 +317,6 @@ class SimpleBorderManager {
         cellHighlight.hide()
         windowBorder?.destroy()
         windowBorder = nil
-
-        logger.debug("Space change: overlays destroyed, per-display caches preserved")
     }
 
     /// Handle window destroyed (clear state if focused window destroyed)
@@ -370,8 +329,6 @@ class SimpleBorderManager {
     private func handleWindowDestroyedImpl(windowID: UInt32) {
         guard windowID == focusedWindowID else { return }
 
-        logger.debug("Focused window destroyed", metadata: ["windowID": "\(windowID)"])
-
         // Clear focus state
         focusedWindowID = nil
         focusedCellID = nil
@@ -379,6 +336,14 @@ class SimpleBorderManager {
         // Hide both overlays
         cellHighlight.hide()
         windowBorder?.hide()
+
+        // Log border hide event
+        Task {
+            await EventLog.shared.log("border.hide", [
+                "wid": windowID,
+                "reason": "destroyed"
+            ])
+        }
 
         // Destroy window border since target is gone
         windowBorder?.destroy()
@@ -415,11 +380,17 @@ class SimpleBorderManager {
         guard let windowID = focusedWindowID,
               focusedCellID != nil,
               !isOurOverlayWindow(windowID) else {
-            logger.debug("Border hidden - no valid cell assignment", metadata: [
-                "focusedWindowID": "\(focusedWindowID?.description ?? "nil")",
-                "focusedCellID": "\(focusedCellID ?? "nil")"
-            ])
             windowBorder?.hide()
+
+            // Log border hide event if there was a focused window
+            if let wid = focusedWindowID {
+                Task {
+                    await EventLog.shared.log("border.hide", [
+                        "wid": wid,
+                        "reason": "no_cell"
+                    ])
+                }
+            }
             return
         }
 
@@ -428,23 +399,16 @@ class SimpleBorderManager {
         guard SLSGetWindowBounds(connectionID, windowID, &windowFrame) == .success else {
             logger.warning("Failed to get window bounds", metadata: ["windowID": "\(windowID)"])
             windowBorder?.hide()
+
+            // Log border hide event
+            Task {
+                await EventLog.shared.log("border.hide", [
+                    "wid": windowID,
+                    "reason": "no_bounds"
+                ])
+            }
             return
         }
-
-        // Get display for diagnostic logging
-        let targetDisplay = SLSCopyManagedDisplayForWindow(connectionID, windowID) as String? ?? "unknown"
-
-        let displayBounds = currentDisplayUUID.flatMap { cellBoundsPerDisplay[$0] } ?? [:]
-        let displayAssignments = currentDisplayUUID.flatMap { cellAssignmentsPerDisplay[$0] } ?? [:]
-
-        logger.debug("Border positioning", metadata: [
-            "windowID": "\(windowID)",
-            "cellID": "\(focusedCellID ?? "nil")",
-            "windowFrame": "(\(windowFrame.origin.x), \(windowFrame.origin.y), \(windowFrame.size.width), \(windowFrame.size.height))",
-            "targetDisplay": "\(targetDisplay)",
-            "cellBoundsCount": "\(displayBounds.count)",
-            "cellAssignmentsCount": "\(displayAssignments.count)"
-        ])
 
         // Create or reuse window border
         if let existingBorder = windowBorder {
@@ -466,6 +430,15 @@ class SimpleBorderManager {
         let style = createWindowBorderStyle()
         windowBorder?.update(targetFrame: windowFrame, style: style)
         windowBorder?.show()
+
+        // Log border show event
+        Task {
+            await EventLog.shared.log("border.show", [
+                "wid": windowID,
+                "cell": focusedCellID ?? "",
+                "frame": [windowFrame.origin.x, windowFrame.origin.y, windowFrame.size.width, windowFrame.size.height]
+            ])
+        }
     }
 
     /// Check if a window ID belongs to one of our overlay windows
@@ -523,8 +496,6 @@ class SimpleBorderManager {
         cellHighlight.destroy()
         windowBorder?.destroy()
         windowBorder = nil
-
-        logger.debug("SimpleBorderManager cleaned up")
     }
 
     // MARK: - Focus Query
@@ -534,7 +505,6 @@ class SimpleBorderManager {
     /// - Returns: The window ID of the currently focused window, or nil if unavailable
     private func queryCurrentFocusedWindow() -> UInt32? {
         guard let frontApp = NSWorkspace.shared.frontmostApplication else {
-            logger.debug("No frontmost application found during focus query")
             return nil
         }
 
@@ -549,10 +519,6 @@ class SimpleBorderManager {
         )
 
         guard result == .success else {
-            logger.debug("No focused window for frontmost app", metadata: [
-                "app": "\(frontApp.localizedName ?? "unknown")",
-                "axResult": "\(result.rawValue)"
-            ])
             return nil
         }
 
@@ -560,9 +526,6 @@ class SimpleBorderManager {
         let axResult = _AXUIElementGetWindow(focusedWindowRef as! AXUIElement, &windowID)
 
         guard axResult == .success, windowID != 0 else {
-            logger.debug("Failed to get window ID from AX element", metadata: [
-                "axResult": "\(axResult.rawValue)"
-            ])
             return nil
         }
 

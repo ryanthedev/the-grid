@@ -18,17 +18,8 @@ import (
 // This should be called before any command execution to ensure
 // local state is accurate.
 func Sync(ctx context.Context, c *client.Client, snap *server.Snapshot, rs *state.RuntimeState, cfg *config.Config) error {
-	logging.Debug().
-		Str("spaceID", snap.SpaceID).
-		Uint32("focusedWindowID", snap.FocusedWindowID).
-		Int("windowCount", len(snap.Windows)).
-		Msg("reconcile: starting sync")
-
 	spaceState := rs.GetSpaceReadOnly(snap.SpaceID)
 	if spaceState == nil {
-		logging.Debug().
-			Str("spaceID", snap.SpaceID).
-			Msg("reconcile: no local state for space")
 		// Still try to sync borders even with no local state
 		syncBorders(ctx, c, snap, rs, cfg)
 		return nil
@@ -77,24 +68,12 @@ func Sync(ctx context.Context, c *client.Client, snap *server.Snapshot, rs *stat
 func syncFocus(snap *server.Snapshot, rs *state.RuntimeState) bool {
 	spaceState := rs.GetSpaceReadOnly(snap.SpaceID)
 	if spaceState == nil {
-		logging.Debug().
-			Str("spaceID", snap.SpaceID).
-			Msg("syncFocus: no local state for space")
 		return false
 	}
-
-	logging.Debug().
-		Uint32("focusedWindowID", snap.FocusedWindowID).
-		Str("spaceID", snap.SpaceID).
-		Str("currentFocusedCell", spaceState.FocusedCell).
-		Msg("syncFocus: checking focus")
 
 	// Find which cell contains the OS-focused window
 	focusedCell := spaceState.GetWindowCell(snap.FocusedWindowID)
 	if focusedCell == "" {
-		logging.Debug().
-			Uint32("focusedWindowID", snap.FocusedWindowID).
-			Msg("syncFocus: focused window not in any cell")
 		return false // focused window not in any cell
 	}
 
@@ -117,21 +96,10 @@ func syncFocus(snap *server.Snapshot, rs *state.RuntimeState) bool {
 
 	// Already correct?
 	if focusedCell == spaceState.FocusedCell && windowIndex == spaceState.FocusedWindow {
-		logging.Debug().
-			Str("cell", focusedCell).
-			Int("windowIndex", windowIndex).
-			Msg("syncFocus: focus already in sync")
 		return false
 	}
 
 	// Update focus
-	logging.Debug().
-		Str("oldCell", spaceState.FocusedCell).
-		Str("newCell", focusedCell).
-		Int("oldWindowIndex", spaceState.FocusedWindow).
-		Int("newWindowIndex", windowIndex).
-		Uint32("windowID", snap.FocusedWindowID).
-		Msg("syncFocus: updating focus to match OS")
 
 	rs.GetSpace(snap.SpaceID).SetFocus(focusedCell, windowIndex)
 	return true
@@ -205,25 +173,18 @@ func buildCellAssignments(spaceState *state.SpaceState) []client.CellAssignment 
 func syncBorders(ctx context.Context, c *client.Client, snap *server.Snapshot, rs *state.RuntimeState, cfg *config.Config) {
 	// 1. Check if borders are configured
 	if cfg == nil || cfg.Borders == nil || !cfg.Borders.GetEnabled() {
-		logging.Debug().Msg("syncBorders: borders not enabled, skipping")
 		return
 	}
 
 	// 2. Get space state
 	spaceState := rs.GetSpaceReadOnly(snap.SpaceID)
 	if spaceState == nil {
-		logging.Debug().
-			Str("spaceID", snap.SpaceID).
-			Msg("syncBorders: no local state for space, skipping")
 		return
 	}
 
 	// 3. Get current layout ID
 	layoutID := spaceState.CurrentLayoutID
 	if layoutID == "" {
-		logging.Debug().
-			Str("spaceID", snap.SpaceID).
-			Msg("syncBorders: no layout applied to space, skipping")
 		return
 	}
 
@@ -240,14 +201,12 @@ func syncBorders(ctx context.Context, c *client.Client, snap *server.Snapshot, r
 	// 5. Calculate cell bounds
 	calculated := calculateCellBounds(layoutDef, snap, spaceState)
 	if calculated == nil {
-		logging.Debug().Msg("syncBorders: no cell bounds calculated")
 		return
 	}
 
 	// 6. Build cell assignments from space state
 	assignments := buildCellAssignments(spaceState)
 	if len(assignments) == 0 {
-		logging.Debug().Msg("syncBorders: no cell assignments to send")
 		return
 	}
 
@@ -268,12 +227,6 @@ func syncBorders(ctx context.Context, c *client.Client, snap *server.Snapshot, r
 		logging.Warn().Err(err).Msg("syncBorders: failed to send cell assignments")
 		return
 	}
-
-	logging.Debug().
-		Str("displayUUID", displayUUID).
-		Int("assignments", len(assignments)).
-		Int("cellBounds", len(paddedCellBounds)).
-		Msg("syncBorders: sent cell assignments to server")
 }
 
 // SyncBordersForDisplay sends cell assignments for a specific display/space.
@@ -284,21 +237,12 @@ func syncBorders(ctx context.Context, c *client.Client, snap *server.Snapshot, r
 // Error handling: Errors are logged but not returned. Border sync is best-effort
 // and should not block focus operations.
 func SyncBordersForDisplay(ctx context.Context, c *client.Client, displayInfo server.DisplayInfo, spaceID string, rs *state.RuntimeState, cfg *config.Config) {
-	logging.Debug().
-		Str("displayUUID", displayInfo.UUID).
-		Str("spaceID", spaceID).
-		Msg("SyncBordersForDisplay: starting border sync for target display")
-
 	if cfg == nil || cfg.Borders == nil || !cfg.Borders.GetEnabled() {
-		logging.Debug().Msg("SyncBordersForDisplay: borders not enabled, skipping")
 		return
 	}
 
 	spaceState := rs.GetSpaceReadOnly(spaceID)
 	if spaceState == nil || spaceState.CurrentLayoutID == "" {
-		logging.Debug().
-			Str("spaceID", spaceID).
-			Msg("SyncBordersForDisplay: no local state or layout for space, skipping")
 		return
 	}
 
@@ -315,9 +259,6 @@ func SyncBordersForDisplay(ctx context.Context, c *client.Client, displayInfo se
 	displayBounds := displayInfo.VisibleFrame
 	if displayBounds == (types.Rect{}) {
 		displayBounds = displayInfo.Frame
-		logging.Debug().
-			Str("displayUUID", displayInfo.UUID).
-			Msg("SyncBordersForDisplay: using Frame fallback (VisibleFrame empty)")
 	}
 	if displayBounds == (types.Rect{}) {
 		logging.Warn().
@@ -335,13 +276,11 @@ func SyncBordersForDisplay(ctx context.Context, c *client.Client, displayInfo se
 
 	cellBounds := calculateCellBounds(layoutDef, pseudoSnap, spaceState)
 	if cellBounds == nil {
-		logging.Debug().Msg("SyncBordersForDisplay: no cell bounds calculated")
 		return
 	}
 
 	assignments := buildCellAssignments(spaceState)
 	if len(assignments) == 0 {
-		logging.Debug().Msg("SyncBordersForDisplay: no cell assignments to send")
 		return
 	}
 
@@ -353,13 +292,6 @@ func SyncBordersForDisplay(ctx context.Context, c *client.Client, displayInfo se
 		logging.Warn().Err(err).Msg("SyncBordersForDisplay: failed to send cell assignments")
 		return
 	}
-
-	logging.Debug().
-		Str("displayUUID", displayInfo.UUID).
-		Str("spaceID", spaceID).
-		Int("assignments", len(assignments)).
-		Int("cellBounds", len(paddedBounds)).
-		Msg("SyncBordersForDisplay: sent cell assignments for target display")
 }
 
 // applyCellPadding applies padding to cell bounds to match window placement areas.

@@ -4,7 +4,7 @@ import (
 	"sort"
 
 	"github.com/yourusername/grid-cli/internal/config"
-	"github.com/yourusername/grid-cli/internal/logging"
+	"github.com/yourusername/grid-cli/internal/eventlog"
 	"github.com/yourusername/grid-cli/internal/types"
 )
 
@@ -204,26 +204,12 @@ func shouldFloat(w Window, rules []config.AppRule) bool {
 	// Check app rules first
 	for _, rule := range rules {
 		if matchesAppRule(w, rule) && rule.Float {
-			logging.Debug().
-				Uint32("windowID", w.ID).
-				Str("app", w.AppName).
-				Str("reason", "app rule").
-				Msg("window marked as floating")
 			return true
 		}
 	}
 
 	// Use window classification with PIP detection
 	category := ClassifyWindowWithPIPDetection(w)
-	if category == WindowFloating {
-		logging.Debug().
-			Uint32("windowID", w.ID).
-			Str("app", w.AppName).
-			Bool("hasFullscreenButton", w.HasFullscreenButton).
-			Str("role", w.Role).
-			Str("subrole", w.Subrole).
-			Msg("window classified as floating")
-	}
 	return category == WindowFloating
 }
 
@@ -258,6 +244,10 @@ func assignAutoFlow(windows []Window, layout *types.Layout, cellBounds map[strin
 	for i, w := range windows {
 		cellID := sortedCells[i%len(sortedCells)]
 		result.Assignments[cellID] = append(result.Assignments[cellID], w.ID)
+		eventlog.Log("cell.assign", map[string]any{
+			"wid":  w.ID,
+			"cell": cellID,
+		})
 	}
 }
 
@@ -273,6 +263,10 @@ func assignPinned(windows []Window, layout *types.Layout, rules []config.AppRule
 				// Check if cell exists in layout
 				if _, ok := result.Assignments[rule.PreferredCell]; ok {
 					result.Assignments[rule.PreferredCell] = append(result.Assignments[rule.PreferredCell], w.ID)
+					eventlog.Log("cell.assign", map[string]any{
+						"wid":  w.ID,
+						"cell": rule.PreferredCell,
+					})
 					assigned = true
 					break
 				}
@@ -306,6 +300,10 @@ func assignPinned(windows []Window, layout *types.Layout, rules []config.AppRule
 				cellID = findLeastPopulatedCell(result.Assignments)
 			}
 			result.Assignments[cellID] = append(result.Assignments[cellID], w.ID)
+			eventlog.Log("cell.assign", map[string]any{
+				"wid":  w.ID,
+				"cell": cellID,
+			})
 		}
 	}
 }
@@ -328,14 +326,15 @@ func assignPreserve(windows []Window, layout *types.Layout, previous map[string]
 		currentWindowSet[w.ID] = true
 	}
 
-	// DEBUG: Detect ghost windows (in previous but not in current)
+	// Detect ghost windows (in previous but not in current)
 	for cellID, windowIDs := range previous {
 		for _, wid := range windowIDs {
 			if !currentWindowSet[wid] {
-				logging.Debug().
-					Str("cell", cellID).
-					Uint32("windowID", wid).
-					Msg("GHOST: previous assignment references non-existent window")
+				// Log cell clear event for ghost windows
+				eventlog.Log("cell.clear", map[string]any{
+					"cell": cellID,
+					"wid":  wid,
+				})
 			}
 		}
 	}
@@ -346,6 +345,12 @@ func assignPreserve(windows []Window, layout *types.Layout, previous map[string]
 			// Check if cell exists in new layout
 			if _, cellExists := result.Assignments[prevCellID]; cellExists {
 				result.Assignments[prevCellID] = append(result.Assignments[prevCellID], w.ID)
+				// Log cell assignment event (preserving previous assignment)
+				eventlog.Log("cell.assign", map[string]any{
+					"wid":  w.ID,
+					"cell": prevCellID,
+					"prev": prevCellID, // Same cell, preserved
+				})
 				continue
 			}
 		}
@@ -355,8 +360,24 @@ func assignPreserve(windows []Window, layout *types.Layout, previous map[string]
 	// Second pass: auto-flow unassigned windows
 	if len(unassigned) > 0 {
 		for _, w := range unassigned {
+			// Find previous cell if any
+			prevCell := ""
+			if prev, ok := prevCellMap[w.ID]; ok {
+				prevCell = prev
+			}
+
 			cellID := findLeastPopulatedCell(result.Assignments)
 			result.Assignments[cellID] = append(result.Assignments[cellID], w.ID)
+
+			// Log cell assignment event (new assignment or moved)
+			data := map[string]any{
+				"wid":  w.ID,
+				"cell": cellID,
+			}
+			if prevCell != "" {
+				data["prev"] = prevCell
+			}
+			eventlog.Log("cell.assign", data)
 		}
 	}
 
@@ -397,31 +418,12 @@ func assignPreserve(windows []Window, layout *types.Layout, previous map[string]
 
 // assignByPosition assigns windows to cells based on maximum overlap with current position.
 func assignByPosition(windows []Window, cellBounds map[string]types.Rect, result *AssignmentResult) {
-	logging.Debug().Int("windows", len(windows)).Int("cells", len(cellBounds)).Msg("assign by position")
-
 	for _, w := range windows {
-		logging.Debug().
-			Uint32("wid", w.ID).
-			Str("app", w.AppName).
-			Float64("x", w.Frame.X).
-			Float64("y", w.Frame.Y).
-			Float64("w", w.Frame.Width).
-			Float64("h", w.Frame.Height).
-			Msg("window frame")
-
 		bestCell := ""
 		bestOverlap := 0.0
 
 		for cellID, bounds := range cellBounds {
 			overlap := w.Frame.Overlap(bounds)
-			logging.Debug().
-				Str("cell", cellID).
-				Float64("x", bounds.X).
-				Float64("y", bounds.Y).
-				Float64("w", bounds.Width).
-				Float64("h", bounds.Height).
-				Float64("overlap", overlap).
-				Msg("cell overlap")
 			if overlap > bestOverlap {
 				bestOverlap = overlap
 				bestCell = cellID
@@ -429,12 +431,18 @@ func assignByPosition(windows []Window, cellBounds map[string]types.Rect, result
 		}
 
 		if bestCell != "" {
-			logging.Debug().Str("cell", bestCell).Float64("overlap", bestOverlap).Msg("assigned")
 			result.Assignments[bestCell] = append(result.Assignments[bestCell], w.ID)
+			eventlog.Log("cell.assign", map[string]any{
+				"wid":  w.ID,
+				"cell": bestCell,
+			})
 		} else {
 			cellID := findLeastPopulatedCell(result.Assignments)
-			logging.Debug().Str("cell", cellID).Msg("no overlap, fallback")
 			result.Assignments[cellID] = append(result.Assignments[cellID], w.ID)
+			eventlog.Log("cell.assign", map[string]any{
+				"wid":  w.ID,
+				"cell": cellID,
+			})
 		}
 	}
 }

@@ -120,12 +120,6 @@ class BorderWindow {
         // Move border to same space as target window
         moveToTargetSpace()
 
-        logger.debug("Border window created", metadata: [
-            "windowID": "\(windowID)",
-            "targetID": "\(targetWindowID)",
-            "initialSize": "(\(targetBounds.size.width), \(targetBounds.size.height))"
-        ])
-
         return true
     }
 
@@ -143,8 +137,6 @@ class BorderWindow {
         context = nil
         _ = SLSReleaseWindow(connectionID, windowID)
 
-        logger.debug("Border window destroyed", metadata: ["windowID": "\(windowID)"])
-
         windowID = 0
         isVisible = false
     }
@@ -158,34 +150,16 @@ class BorderWindow {
         // Get spaces for diagnostic check
         let borderSpace = queryWindowSpace(windowID) ?? 0
         let targetSpace = queryWindowSpace(targetWindowID) ?? 0
-        let targetDisplay = SLSCopyManagedDisplayForWindow(connectionID, targetWindowID) as String? ?? "unknown"
 
         // If spaces don't match, move border to target's space before showing
         if borderSpace != targetSpace && targetSpace != 0 {
-            logger.debug("Space mismatch detected, moving border", metadata: [
-                "borderSpace": "\(borderSpace)",
-                "targetSpace": "\(targetSpace)"
-            ])
             moveToTargetSpace()
         }
 
         _ = SLSSetWindowAlpha(connectionID, windowID, 1.0)
-        let orderResult = SLSOrderWindow(connectionID, windowID, -1, targetWindowID)  // Below target
+        _ = SLSOrderWindow(connectionID, windowID, -1, targetWindowID)  // Below target
 
         isVisible = true
-
-        // Re-query after potential move
-        let finalBorderSpace = queryWindowSpace(windowID) ?? 0
-
-        logger.debug("Border shown", metadata: [
-            "windowID": "\(windowID)",
-            "targetID": "\(targetWindowID)",
-            "borderSpace": "\(finalBorderSpace)",
-            "targetSpace": "\(targetSpace)",
-            "targetDisplay": "\(targetDisplay)",
-            "spacesMatch": "\(finalBorderSpace == targetSpace)",
-            "orderResult": "\(orderResult.rawValue)"
-        ])
     }
 
     /// Hide the border
@@ -207,12 +181,6 @@ class BorderWindow {
         // Calculate border bounds (larger than target by width + padding on each side)
         let expansion = borderWidth + padding
         let borderBounds = targetFrame.insetBy(dx: -expansion, dy: -expansion)
-
-        logger.debug("Border position update", metadata: [
-            "targetFrame": "(\(targetFrame.origin.x), \(targetFrame.origin.y), \(targetFrame.size.width), \(targetFrame.size.height))",
-            "borderBounds": "(\(borderBounds.origin.x), \(borderBounds.origin.y), \(borderBounds.size.width), \(borderBounds.size.height))",
-            "expansion": "\(expansion)"
-        ])
 
         // Move the window
         var origin = borderBounds.origin
@@ -282,13 +250,6 @@ class BorderWindow {
 
         // Draw using currentBounds (not context dimensions)
         let drawBounds = CGRect(origin: .zero, size: currentBounds.size)
-
-        logger.debug("Border redraw", metadata: [
-            "windowID": "\(windowID)",
-            "drawBounds": "(\(drawBounds.width), \(drawBounds.height))",
-            "borderWidth": "\(style.width)",
-            "cornerRadius": "\(style.cornerRadius)"
-        ])
 
         BorderRenderer.draw(in: drawContext, bounds: drawBounds, style: style)
 
@@ -364,22 +325,11 @@ class BorderWindow {
         // Always query API directly - avoids deadlock when called from StateManager's queue
         // (StateManager.getState() uses queue.sync which deadlocks if we're already on that queue)
         guard let targetSpace = queryWindowSpace(targetWindowID) else {
-            logger.debug("No space available for border", metadata: [
-                "targetID": "\(targetWindowID)",
-                "targetDisplay": "\(targetDisplay)"
-            ])
             return
         }
 
         let borderArray = createWindowIDArray([windowID])
         SLSMoveWindowsToManagedSpace(connectionID, borderArray, targetSpace)
-
-        logger.debug("Border moved to target space", metadata: [
-            "windowID": "\(windowID)",
-            "targetID": "\(targetWindowID)",
-            "spaceID": "\(targetSpace)",
-            "targetDisplay": "\(targetDisplay)"
-        ])
     }
 
     /// Query window's space directly from SkyLight API

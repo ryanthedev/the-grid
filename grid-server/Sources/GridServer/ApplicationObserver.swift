@@ -148,12 +148,6 @@ class ApplicationObserver {
             return
         }
 
-        logger.trace("AX notification received", metadata: [
-            "notification": "\(notifName)",
-            "windowID": "\(windowID)",
-            "pid": "\(pid)"
-        ])
-
         // Route to appropriate handler based on notification type
         switch notifName {
         case kAXCreatedNotification as String:

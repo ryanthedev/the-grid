@@ -36,6 +36,16 @@ class MessageHandler {
                     message: "Method not found: \(request.method)"
                 )
             )
+
+            // Log error event
+            Task {
+                await EventLog.shared.log("error", [
+                    "ctx": "method_not_found",
+                    "msg": "Method not found: \(request.method)",
+                    "rid": request.id
+                ])
+            }
+
             completion(response)
             return
         }
@@ -89,8 +99,6 @@ class MessageHandler {
 
         // Dump - returns complete window manager state
         register(method: "dump") { [weak self] request, completion in
-            self?.logger.trace("dump called - returning complete state")
-
             do {
                 // Get state from StateManager (Codable type preserves all type information)
                 let state = try StateManager.shared.getStateDictionary()
@@ -151,6 +159,17 @@ class MessageHandler {
                     id: request.id,
                     error: ErrorInfo(code: -32001, message: "Window not found: \(windowID)")
                 )
+
+                // Log error event
+                Task {
+                    await EventLog.shared.log("error", [
+                        "ctx": "updateWindow",
+                        "msg": "Window not found",
+                        "wid": windowID,
+                        "rid": request.id
+                    ])
+                }
+
                 completion(response)
                 return
             }
@@ -240,6 +259,17 @@ class MessageHandler {
                         message: "Window update partially failed: \(errors.joined(separator: ", "))"
                     )
                 )
+
+                // Log error event
+                Task {
+                    await EventLog.shared.log("error", [
+                        "ctx": "updateWindow",
+                        "msg": errors.joined(separator: ", "),
+                        "wid": windowID,
+                        "rid": request.id
+                    ])
+                }
+
                 completion(response)
             }
         }
@@ -528,6 +558,15 @@ class MessageHandler {
             // Get window state to find PID
             let state = StateManager.shared.getState()
             guard let windowState = state.windows[String(wid)] else {
+                // Log error event
+                Task {
+                    await EventLog.shared.log("error", [
+                        "ctx": "window.focus",
+                        "msg": "Window not found",
+                        "wid": wid,
+                        "rid": request.id
+                    ])
+                }
                 completion(Response(id: request.id, error: ErrorInfo(code: -32001, message: "Window not found: \(wid)")))
                 return
             }
@@ -539,6 +578,15 @@ class MessageHandler {
                 StateManager.shared.handleWindowFocused(wid)
                 completion(Response(id: request.id, result: AnyCodable(["success": true, "windowId": wid])))
             } else {
+                // Log error event
+                Task {
+                    await EventLog.shared.log("error", [
+                        "ctx": "window.focus",
+                        "msg": "Failed to focus window",
+                        "wid": wid,
+                        "rid": request.id
+                    ])
+                }
                 completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to focus window")))
             }
         }
@@ -730,34 +778,16 @@ class MessageHandler {
             // Parse cellBounds if provided (new field for simplified border system)
             var cellBounds: [String: CGRect] = [:]
             if let cellBoundsDict = params["cellBounds"]?.value as? [String: [String: Any]] {
-                self.logger.debug("Raw cellBounds dict received", metadata: ["keys": "\(cellBoundsDict.keys.sorted())"])
                 for (cellID, boundsDict) in cellBoundsDict {
-                    self.logger.debug("Parsing cellBounds for cell", metadata: [
-                        "cellID": "\(cellID)",
-                        "rawX": "\(boundsDict["x"] ?? "nil")",
-                        "rawY": "\(boundsDict["y"] ?? "nil")",
-                        "rawW": "\(boundsDict["width"] ?? "nil")",
-                        "rawH": "\(boundsDict["height"] ?? "nil")"
-                    ])
                     if let x = (boundsDict["x"] as? NSNumber)?.doubleValue,
                        let y = (boundsDict["y"] as? NSNumber)?.doubleValue,
                        let width = (boundsDict["width"] as? NSNumber)?.doubleValue,
                        let height = (boundsDict["height"] as? NSNumber)?.doubleValue {
                         cellBounds[cellID] = CGRect(x: x, y: y, width: width, height: height)
-                        self.logger.debug("Parsed cellBounds", metadata: [
-                            "cellID": "\(cellID)",
-                            "x": "\(x)",
-                            "y": "\(y)",
-                            "width": "\(width)",
-                            "height": "\(height)"
-                        ])
                     } else {
                         self.logger.warning("Failed to parse cellBounds for cell", metadata: ["cellID": "\(cellID)"])
                     }
                 }
-                self.logger.info("Cell bounds parsed", metadata: ["count": "\(cellBounds.count)"])
-            } else {
-                self.logger.debug("No cellBounds in params or wrong type")
             }
 
             // Update SimpleBorderManager with per-display data

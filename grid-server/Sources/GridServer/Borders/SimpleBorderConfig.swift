@@ -35,57 +35,46 @@ class BorderConfigManager {
 
     /// Update configuration from RPC params
     func update(from config: [String: Any]) {
-        logger.info("Updating border config", metadata: ["keys": "\(config.keys.sorted())"])
-
         if let enabled = config["enabled"] as? Bool {
             self.enabled = enabled
-            logger.debug("Set enabled", metadata: ["value": "\(enabled)"])
         }
 
         if let width = (config["width"] as? NSNumber)?.doubleValue {
             self.borderWidth = CGFloat(width)
-            logger.debug("Set borderWidth", metadata: ["value": "\(width)"])
         }
 
         if let cornerRadius = (config["corner_radius"] as? NSNumber)?.doubleValue {
             self.cornerRadius = CGFloat(cornerRadius)
-            logger.debug("Set cornerRadius", metadata: ["value": "\(cornerRadius)"])
         }
 
         if let padding = (config["padding"] as? NSNumber)?.doubleValue {
             self.padding = CGFloat(padding)
-            logger.debug("Set padding", metadata: ["value": "\(padding)"])
         }
 
         if let style = config["style"] as? String {
             self.style = style
-            logger.debug("Set style", metadata: ["value": "\(style)"])
         }
 
         if let hidpi = config["hidpi"] as? Bool {
             self.hidpi = hidpi
-            logger.debug("Set hidpi", metadata: ["value": "\(hidpi)"])
         }
 
         // Parse colors (expect hex strings like "#FF0000" or "0xFF0000")
         if let colorStr = config["active_window_color"] as? String {
             if let color = parseHexColor(colorStr) {
                 self.activeWindowColor = color
-                logger.debug("Set activeWindowColor", metadata: ["value": "\(colorStr)"])
             }
         }
 
         if let colorStr = config["active_cell_color"] as? String {
             if let color = parseHexColor(colorStr) {
                 self.activeCellColor = color
-                logger.debug("Set activeCellColor", metadata: ["value": "\(colorStr)"])
             }
         }
 
         if let colorStr = config["inactive_color"] as? String {
             if let color = parseHexColor(colorStr) {
                 self.inactiveColor = color
-                logger.debug("Set inactiveColor", metadata: ["value": "\(colorStr)"])
             }
         }
     }

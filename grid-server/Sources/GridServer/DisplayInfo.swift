@@ -30,12 +30,6 @@ class DisplayInfoHelper {
         // Formula: quartz_y = main_screen_height - (cocoa_y + rect_height)
         let mainScreenHeight = NSScreen.main?.frame.height ?? screen.frame.height
 
-        logger.trace("Cocoa coords", metadata: [
-            "frame": "\(Int(screen.frame.origin.x)),\(Int(screen.frame.origin.y)) \(Int(screen.frame.width))x\(Int(screen.frame.height))",
-            "visible": "\(Int(screen.visibleFrame.origin.x)),\(Int(screen.visibleFrame.origin.y)) \(Int(screen.visibleFrame.width))x\(Int(screen.visibleFrame.height))",
-            "mainH": "\(Int(mainScreenHeight))"
-        ])
-
         // Convert frame from Cocoa to Quartz
         let frameQuartzY = mainScreenHeight - (screen.frame.origin.y + screen.frame.height)
         display.frame = CGRect(
@@ -53,11 +47,6 @@ class DisplayInfoHelper {
             width: screen.visibleFrame.width,
             height: screen.visibleFrame.height
         )
-
-        logger.trace("Quartz coords", metadata: [
-            "frame": "\(Int(display.frame!.origin.x)),\(Int(display.frame!.origin.y)) \(Int(display.frame!.width))x\(Int(display.frame!.height))",
-            "visible": "\(Int(display.visibleFrame!.origin.x)),\(Int(display.visibleFrame!.origin.y)) \(Int(display.visibleFrame!.width))x\(Int(display.visibleFrame!.height))"
-        ])
 
         display.backingScaleFactor = screen.backingScaleFactor
 

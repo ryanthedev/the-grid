@@ -136,11 +136,6 @@ class WorkspaceObserver {
             return
         }
 
-        logger.trace("Application activated", metadata: [
-            "app": "\(app.localizedName ?? "Unknown")",
-            "pid": "\(app.processIdentifier)"
-        ])
-
         stateManager?.handleApplicationActivated(app)
     }
 

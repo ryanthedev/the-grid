@@ -390,11 +390,8 @@ class StateManager {
 
         guard windowsResult == .success,
               let windows = windowsValue as? [AXUIElement] else {
-            logger.trace("AX windows query failed", metadata: ["pid": "\(pid)", "windowID": "\(windowID)", "error": "\(windowsResult.rawValue)"])
             return props
         }
-
-        logger.trace("AX window search", metadata: ["pid": "\(pid)", "axCount": "\(windows.count)", "targetCG": "\(windowID)"])
 
         // Find the matching window element
         for windowElement in windows {
@@ -460,7 +457,6 @@ class StateManager {
             }
         }
 
-        logger.trace("AX no match", metadata: ["windowID": "\(windowID)", "pid": "\(pid)", "checked": "\(windows.count)"])
         return props
     }
 
@@ -485,25 +481,15 @@ class StateManager {
                 // Success - update with actual spaces
                 window.spaces = spaceNumbers.map { $0.uint64Value }
                 state.windows[String(windowID)] = window
-                logger.trace("Updated window space assignment", metadata: [
-                    "windowID": "\(windowID)",
-                    "spaces": "\(spaceNumbers.map { $0.uint64Value })"
-                ])
             } else {
                 // API returned empty - mark as unknown
                 window.spaces = []
                 state.windows[String(windowID)] = window
-                logger.trace("Window spaces unknown after re-query", metadata: [
-                    "windowID": "\(windowID)"
-                ])
             }
         } else {
             // API call failed - mark as unknown
             window.spaces = []
             state.windows[String(windowID)] = window
-            logger.trace("SLSCopySpacesForWindows failed during re-query", metadata: [
-                "windowID": "\(windowID)"
-            ])
         }
     }
 
@@ -638,11 +624,6 @@ class StateManager {
                     if !spaceNumbers.isEmpty {
                         // Success - we know the actual spaces
                         windowState.spaces = spaceNumbers.map { $0.uint64Value }
-                        logger.trace("Window spaces resolved", metadata: [
-                            "windowID": "\(windowID)",
-                            "app": "\(windowState.appName ?? "?")",
-                            "spaces": "\(spaceNumbers.map { $0.uint64Value })"
-                        ])
                     } else {
                         // API returned empty - we don't know which spaces this window is on
                         // Leave as empty array, will be updated via events when we get definitive info
@@ -813,7 +794,6 @@ class StateManager {
         // Remove windows no longer in CGWindowList
         for windowKey in state.windows.keys {
             if let windowID = UInt32(windowKey), !seenWindowIDs.contains(windowID) {
-                logger.trace("Poll removing stale window", metadata: ["windowID": "\(windowID)"])
                 // Inline removal logic (don't call handleWindowDestroyed to avoid log confusion)
                 let pid = state.windows[windowKey]?.pid
                 if state.metadata.focusedWindowID == windowID {
@@ -902,11 +882,6 @@ class StateManager {
 
         state.windows[String(windowID)] = window
         updateWindowSpaces(windowID)
-
-        logger.trace("Poll discovered window", metadata: [
-            "windowID": "\(windowID)",
-            "app": "\(window.appName ?? "?")"
-        ])
     }
 
     // MARK: - AX Event Handlers (Per-Window Events)
@@ -971,6 +946,17 @@ class StateManager {
 
             self.state.metadata.update()
 
+            // Log window created event
+            let appName = window.appName ?? "unknown"
+            let frame = window.frame
+            Task {
+                await EventLog.shared.log("create", [
+                    "wid": windowID,
+                    "app": appName,
+                    "frame": [frame.origin.x, frame.origin.y, frame.size.width, frame.size.height]
+                ])
+            }
+
             // Notify border system with bundleID to avoid re-entrant queue access
             let bundleID = self.state.applications[pidKey]?.bundleIdentifier
             self.borderEvents?.handleWindowCreated(windowID, bundleID: bundleID)
@@ -980,6 +966,11 @@ class StateManager {
     func handleWindowDestroyed(_ windowID: UInt32) {
         queue.async {
             self.logger.info("Window destroyed", metadata: ["windowID": "\(windowID)"])
+
+            // Log window destroyed event
+            Task {
+                await EventLog.shared.log("destroy", ["wid": windowID])
+            }
 
             // Get PID before removing window
             let pid = self.state.windows[String(windowID)]?.pid
@@ -1031,6 +1022,14 @@ class StateManager {
 
             self.state.metadata.update()
 
+            // Log window moved event
+            Task {
+                await EventLog.shared.log("move", [
+                    "wid": windowID,
+                    "frame": [frame.origin.x, frame.origin.y, frame.size.width, frame.size.height]
+                ])
+            }
+
             // Notify border system
             self.borderEvents?.handleWindowMoved(windowID, frame: frame)
         }
@@ -1038,11 +1037,6 @@ class StateManager {
 
     func handleWindowResized(_ windowID: UInt32, frame: CGRect) {
         queue.async {
-            self.logger.trace("Window resized", metadata: [
-                "windowID": "\(windowID)",
-                "frame": "\(Int(frame.origin.x)),\(Int(frame.origin.y)) \(Int(frame.width))x\(Int(frame.height))"
-            ])
-
             guard var window = self.state.windows[String(windowID)] else { return }
             window.frame = frame
             window.lastUpdated = Date()
@@ -1056,7 +1050,8 @@ class StateManager {
 
     func handleWindowFocused(_ windowID: UInt32) {
         queue.async {
-            self.logger.trace("Window focused", metadata: ["windowID": "\(windowID)"])
+            // Store previous focused window for event logging
+            let previousWindowID = self.state.metadata.focusedWindowID
 
             // Store focused window ID
             self.state.metadata.focusedWindowID = windowID
@@ -1084,15 +1079,21 @@ class StateManager {
                     let spaceKey = String(spaceID)
                     if self.state.spaces[spaceKey] != nil {
                         self.state.spaces[spaceKey]?.lastFocusedWindowID = windowID
-                        self.logger.trace("Saved lastFocusedWindowID", metadata: [
-                            "spaceID": "\(spaceID)",
-                            "windowID": "\(windowID)"
-                        ])
                     }
                 }
             }
 
             self.state.metadata.update()
+
+            // Log focus event
+            let appName = self.state.windows[String(windowID)]?.appName ?? "unknown"
+            Task {
+                await EventLog.shared.log("focus", [
+                    "wid": windowID,
+                    "app": appName,
+                    "prev": previousWindowID ?? 0
+                ])
+            }
 
             // Notify border system
             self.borderEvents?.handleWindowFocused(windowID)
@@ -1133,11 +1134,6 @@ class StateManager {
 
     func handleWindowTitleChanged(_ windowID: UInt32, title: String) {
         queue.async {
-            self.logger.trace("Window title changed", metadata: [
-                "windowID": "\(windowID)",
-                "title": "\(title)"
-            ])
-
             guard var window = self.state.windows[String(windowID)] else { return }
             window.title = title
             window.lastUpdated = Date()
@@ -1178,6 +1174,14 @@ class StateManager {
                         "from": "\(oldSpaceID)",
                         "to": "\(display.currentSpaceID)"
                     ])
+
+                    // Log space change event
+                    Task {
+                        await EventLog.shared.log("space", [
+                            "sid": display.currentSpaceID,
+                            "from": oldSpaceID
+                        ])
+                    }
                     break
                 }
             }
@@ -1392,10 +1396,6 @@ class StateManager {
                 let spaceKey = String(spaceID)
                 if self.state.spaces[spaceKey] != nil {
                     self.state.spaces[spaceKey]?.lastFocusedWindowID = windowID
-                    self.logger.trace("Saved lastFocusedWindowID", metadata: [
-                        "spaceID": "\(spaceID)",
-                        "windowID": "\(windowID)"
-                    ])
                 }
             }
         }

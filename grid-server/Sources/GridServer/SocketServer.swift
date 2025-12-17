@@ -116,7 +116,10 @@ class SocketServer {
                 continue
             }
 
-            logger.trace("Client connected", metadata: ["socket": "\(clientSocket)"])
+            // Log client connect event
+            Task {
+                await EventLog.shared.log("client.connect", ["cid": clientSocket])
+            }
 
             socketQueue.async(flags: .barrier) { [weak self] in
                 self?.clientSockets.insert(clientSocket)
@@ -136,7 +139,11 @@ class SocketServer {
             socketQueue.async(flags: .barrier) { [weak self] in
                 self?.clientSockets.remove(socket)
             }
-            logger.trace("Client disconnected", metadata: ["socket": "\(socket)"])
+
+            // Log client disconnect event
+            Task {
+                await EventLog.shared.log("client.disconnect", ["cid": socket])
+            }
         }
 
         var buffer = Data()
@@ -171,8 +178,6 @@ class SocketServer {
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
             let message = try decoder.decode(Message.self, from: data)
-
-            logger.trace("Received message", metadata: ["type": "\(message.type)", "socket": "\(clientSocket)"])
 
             switch message.type {
             case .request:

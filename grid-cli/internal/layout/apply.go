@@ -6,6 +6,7 @@ import (
 
 	"github.com/yourusername/grid-cli/internal/client"
 	"github.com/yourusername/grid-cli/internal/config"
+	"github.com/yourusername/grid-cli/internal/eventlog"
 	"github.com/yourusername/grid-cli/internal/logging"
 	"github.com/yourusername/grid-cli/internal/server"
 	"github.com/yourusername/grid-cli/internal/state"
@@ -62,12 +63,6 @@ func ApplyLayout(
 	}
 
 	// 3. Calculate grid layout using snapshot's display bounds (gap=0, padding handles spacing)
-	logging.Debug().
-		Float64("displayX", snap.DisplayBounds.X).
-		Float64("displayY", snap.DisplayBounds.Y).
-		Float64("displayW", snap.DisplayBounds.Width).
-		Float64("displayH", snap.DisplayBounds.Height).
-		Msg("using display bounds for layout")
 	calculatedLayout := CalculateLayoutWithRatios(layout, snap.DisplayBounds, 0, columnRatios, rowRatios)
 
 	// 4. Filter and convert windows (exclude transient windows)
@@ -75,22 +70,12 @@ func ApplyLayout(
 	tileableWindows := snap.FilterTileable(exclusions)
 	windows := convertWindows(tileableWindows)
 
-	// DEBUG: Log tileable window IDs
-	var tileableIDs []uint32
-	for _, w := range tileableWindows {
-		tileableIDs = append(tileableIDs, w.ID)
-	}
-	logging.Debug().Interface("tileableWindowIDs", tileableIDs).Int("count", len(tileableIDs)).Msg("filtered tileable windows")
-
 	// 4. Get previous assignments from local state
 	spaceState := rs.GetSpace(snap.SpaceID)
 	previousAssignments := make(map[string][]uint32)
 	for cellID, cellState := range spaceState.Cells {
 		previousAssignments[cellID] = cellState.Windows
 	}
-
-	// DEBUG: Log previous assignments from state (may contain ghost windows)
-	logging.Debug().Interface("previousAssignments", previousAssignments).Msg("loaded previous assignments from state")
 
 	// 5. Assign windows to cells
 	assignment := AssignWindows(
@@ -101,9 +86,6 @@ func ApplyLayout(
 		previousAssignments,
 		opts.Strategy,
 	)
-
-	// DEBUG: Log new assignments (should only contain existing windows)
-	logging.Debug().Interface("newAssignments", assignment.Assignments).Msg("computed new assignments")
 
 	// 6. Get cell modes and ratios from config/state
 	cellModes := make(map[string]types.StackMode)
@@ -139,17 +121,7 @@ func ApplyLayout(
 	for cellID, windowIDs := range assignment.Assignments {
 		if existingRatios, ok := cellRatios[cellID]; ok {
 			if len(existingRatios) != len(windowIDs) {
-				logging.Debug().
-					Str("cell", cellID).
-					Int("ratioCount", len(existingRatios)).
-					Int("windowCount", len(windowIDs)).
-					Interface("oldRatios", existingRatios).
-					Msg("MISMATCH: adjusting ratios for window count change")
 				cellRatios[cellID] = AdjustRatiosForWindowCount(existingRatios, len(windowIDs))
-				logging.Debug().
-					Str("cell", cellID).
-					Interface("newRatios", cellRatios[cellID]).
-					Msg("adjusted ratios")
 			}
 		}
 	}
@@ -167,21 +139,20 @@ func ApplyLayout(
 		opts.SettingsWindowSpacing,
 	)
 
-	// DEBUG: Log final placements
-	for _, p := range placements {
-		logging.Debug().
-			Uint32("windowID", p.WindowID).
-			Float64("x", p.Bounds.X).
-			Float64("y", p.Bounds.Y).
-			Float64("w", p.Bounds.Width).
-			Float64("h", p.Bounds.Height).
-			Msg("placement")
-	}
-
 	// 8. Apply placements via server
 	if err := ApplyPlacements(ctx, c, placements); err != nil {
 		return fmt.Errorf("failed to apply placements: %w", err)
 	}
+
+	// Log layout application event
+	cellIDs := make([]string, 0, len(layout.Cells))
+	for _, cell := range layout.Cells {
+		cellIDs = append(cellIDs, cell.ID)
+	}
+	eventlog.Log("layout.apply", map[string]any{
+		"name":  layoutID,
+		"cells": cellIDs,
+	})
 
 	// 8b. Send border config and cell assignments to server
 	if opts.SendBorders {
@@ -339,7 +310,6 @@ func sendBorderConfig(ctx context.Context, c *client.Client, cfg *config.Config)
 		return nil // Borders not configured or disabled
 	}
 
-	logging.Debug().Msg("sending border config to server")
 	return c.SendBorderConfig(ctx, cfg.Borders)
 }
 
@@ -410,22 +380,7 @@ func sendCellAssignments(ctx context.Context, c *client.Client, displayUUID stri
 			Width:  paddedRect.Width,
 			Height: paddedRect.Height,
 		}
-		// Debug: log each cellBounds being sent (with padding applied)
-		logging.Debug().
-			Str("cellID", cellID).
-			Float64("x", paddedRect.X).
-			Float64("y", paddedRect.Y).
-			Float64("w", paddedRect.Width).
-			Float64("h", paddedRect.Height).
-			Bool("hasPadding", cellPadding != nil).
-			Msg("cellBounds being sent (with padding)")
 	}
-
-	logging.Debug().
-		Int("assignmentCount", len(cellAssignments)).
-		Int("overrideCount", len(overrides)).
-		Int("cellBoundsCount", len(convertedCellBounds)).
-		Msg("sending cell assignments to server")
 
 	return c.SendCellAssignments(ctx, displayUUID, cellAssignments, overrides, convertedCellBounds)
 }
