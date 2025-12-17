@@ -28,13 +28,18 @@ class SimpleBorderManager {
     private let logger = Logger(label: "com.grid.SimpleBorderManager")
     private let connectionID: Int32
 
-    // MARK: - State from CLI (via IPC)
+    // MARK: - State from CLI (via IPC) - Per-Display Storage
 
-    /// Cell bounds received from CLI (cellID → CGRect)
-    private var cellBounds: [String: CGRect] = [:]
+    /// Cell bounds received from CLI, keyed by display UUID
+    /// displayUUID → (cellID → CGRect)
+    private var cellBoundsPerDisplay: [String: [String: CGRect]] = [:]
 
-    /// Cell assignments received from CLI (windowID → cellID)
-    private var cellAssignments: [UInt32: String] = [:]
+    /// Cell assignments received from CLI, keyed by display UUID
+    /// displayUUID → (windowID → cellID)
+    private var cellAssignmentsPerDisplay: [String: [UInt32: String]] = [:]
+
+    /// Current display UUID for focused window (used for lookups)
+    private var currentDisplayUUID: String?
 
     // MARK: - Focus State
 
@@ -74,70 +79,94 @@ class SimpleBorderManager {
 
     // MARK: - IPC Handlers (receive data from CLI)
 
-    /// Set cell bounds received from CLI
-    func setCellBounds(_ bounds: [String: CGRect]) {
+    /// Set cell bounds received from CLI for a specific display
+    func setCellBounds(_ bounds: [String: CGRect], forDisplay displayUUID: String) {
         DispatchQueue.main.async { [weak self] in
-            self?.setCellBoundsImpl(bounds)
+            self?.setCellBoundsImpl(bounds, forDisplay: displayUUID)
         }
     }
 
-    private func setCellBoundsImpl(_ bounds: [String: CGRect]) {
-        cellBounds = bounds
+    private func setCellBoundsImpl(_ bounds: [String: CGRect], forDisplay displayUUID: String) {
+        cellBoundsPerDisplay[displayUUID] = bounds
 
         logger.info("Cell bounds updated", metadata: [
+            "displayUUID": "\(displayUUID)",
             "count": "\(bounds.count)",
             "cells": "\(bounds.keys.sorted().joined(separator: ", "))"
         ])
 
-        // If we have a focused cell, update highlight position
-        if let cellID = focusedCellID, let frame = cellBounds[cellID] {
+        // If we have a focused cell on this display, update highlight position
+        if currentDisplayUUID == displayUUID,
+           let cellID = focusedCellID,
+           let frame = bounds[cellID] {
             cellHighlight.update(frame: frame)
         }
     }
 
-    /// Set cell assignments received from CLI
-    func setCellAssignments(_ assignments: [UInt32: String]) {
+    /// Set cell assignments received from CLI for a specific display
+    func setCellAssignments(_ assignments: [UInt32: String], forDisplay displayUUID: String) {
         DispatchQueue.main.async { [weak self] in
-            self?.setCellAssignmentsImpl(assignments)
+            self?.setCellAssignmentsImpl(assignments, forDisplay: displayUUID)
         }
     }
 
-    private func setCellAssignmentsImpl(_ assignments: [UInt32: String]) {
-        cellAssignments = assignments
+    private func setCellAssignmentsImpl(_ assignments: [UInt32: String], forDisplay displayUUID: String) {
+        cellAssignmentsPerDisplay[displayUUID] = assignments
 
-        logger.debug("Cell assignments updated", metadata: ["count": "\(assignments.count)"])
+        logger.debug("Cell assignments updated", metadata: [
+            "displayUUID": "\(displayUUID)",
+            "count": "\(assignments.count)"
+        ])
 
         // If we don't have a focused window yet (startup case), query the OS
         if focusedWindowID == nil {
-            if let queriedWindowID = queryCurrentFocusedWindow(),
-               cellAssignments[queriedWindowID] != nil {
-                logger.info("Initializing focus from OS query", metadata: [
-                    "windowID": "\(queriedWindowID)"
-                ])
-                focusedWindowID = queriedWindowID
-                focusedCellID = cellAssignments[queriedWindowID]
+            if let queriedWindowID = queryCurrentFocusedWindow() {
+                // Check if this window is in ANY display's assignments
+                let (foundDisplayUUID, cellID) = findAssignment(for: queriedWindowID)
+                if let cellID = cellID {
+                    logger.info("Initializing focus from OS query", metadata: [
+                        "windowID": "\(queriedWindowID)",
+                        "displayUUID": "\(foundDisplayUUID ?? "unknown")"
+                    ])
+                    focusedWindowID = queriedWindowID
+                    focusedCellID = cellID
+                    currentDisplayUUID = foundDisplayUUID
+                }
             }
         }
 
-        // Re-evaluate focus state (focused window's cell may have changed)
+        // Re-evaluate focus state if focused window is on this display
         if let focusedWindow = focusedWindowID {
-            let oldCellID = focusedCellID
-            let newCellID = cellAssignments[focusedWindow]
-            focusedCellID = newCellID
+            // Check if focused window is in this display's assignments
+            if let newCellID = assignments[focusedWindow] {
+                let oldCellID = focusedCellID
+                focusedCellID = newCellID
+                currentDisplayUUID = displayUUID
 
-            // Always update border when we have a focused window
-            // This handles the case where assignments arrive after focus change
-            updateCellHighlight()
-            updateWindowBorder()
+                // Always update border when we have a focused window
+                updateCellHighlight()
+                updateWindowBorder()
 
-            if newCellID != oldCellID {
-                logger.debug("Focused window cell changed", metadata: [
-                    "windowID": "\(focusedWindow)",
-                    "oldCell": "\(oldCellID ?? "nil")",
-                    "newCell": "\(newCellID ?? "nil")"
-                ])
+                if newCellID != oldCellID {
+                    logger.debug("Focused window cell changed", metadata: [
+                        "windowID": "\(focusedWindow)",
+                        "displayUUID": "\(displayUUID)",
+                        "oldCell": "\(oldCellID ?? "nil")",
+                        "newCell": "\(newCellID)"
+                    ])
+                }
             }
         }
+    }
+
+    /// Find which display has an assignment for a window
+    private func findAssignment(for windowID: UInt32) -> (displayUUID: String?, cellID: String?) {
+        for (displayUUID, assignments) in cellAssignmentsPerDisplay {
+            if let cellID = assignments[windowID] {
+                return (displayUUID, cellID)
+            }
+        }
+        return (nil, nil)
     }
 
     // MARK: - Focus Management
@@ -159,16 +188,33 @@ class SimpleBorderManager {
 
         let oldFocusedWindow = focusedWindowID
         let oldFocusedCell = focusedCellID
+        let oldDisplayUUID = currentDisplayUUID
+
+        // Get the window's display UUID
+        let windowDisplayUUID = SLSCopyManagedDisplayForWindow(connectionID, newFocusedWindow) as String?
 
         // Update focus state
         focusedWindowID = newFocusedWindow
-        focusedCellID = cellAssignments[newFocusedWindow]
+
+        // Look up cell assignment from the window's display cache
+        if let displayUUID = windowDisplayUUID,
+           let assignments = cellAssignmentsPerDisplay[displayUUID] {
+            focusedCellID = assignments[newFocusedWindow]
+            currentDisplayUUID = displayUUID
+        } else {
+            // Fallback: search all displays for this window's assignment
+            let (foundDisplay, cellID) = findAssignment(for: newFocusedWindow)
+            focusedCellID = cellID
+            currentDisplayUUID = foundDisplay ?? windowDisplayUUID
+        }
 
         logger.info("Focus changed", metadata: [
             "oldWindow": "\(oldFocusedWindow?.description ?? "nil")",
             "newWindow": "\(newFocusedWindow)",
             "oldCell": "\(oldFocusedCell ?? "nil")",
-            "newCell": "\(focusedCellID ?? "nil")"
+            "newCell": "\(focusedCellID ?? "nil")",
+            "displayUUID": "\(currentDisplayUUID ?? "unknown")",
+            "displayChanged": "\(oldDisplayUUID != currentDisplayUUID)"
         ])
 
         // Update both visual elements
@@ -266,13 +312,14 @@ class SimpleBorderManager {
         updateWindowBorder()
     }
 
-    /// Handle space changed (clear space-specific state and destroy overlays)
+    /// Handle space changed (reset focus state but preserve per-display caches)
     ///
-    /// Cell assignments and bounds are space-specific - they're only valid for the space
-    /// where the layout was applied. When changing to a different space:
-    /// 1. Clear all space-specific state (cellBounds, cellAssignments, focusedCellID)
-    /// 2. DESTROY overlays (not just hide) to prevent stale window artifacts
-    /// 3. Keep focusedWindowID - the OS will send focus events if needed
+    /// Per-display caches are preserved across space changes because:
+    /// - Each display's assignments are independent
+    /// - The new space may already have cached assignments from previous layout apply
+    /// - CLI will send new assignments if needed
+    ///
+    /// We just clear focus-related state and destroy overlays to prevent stale visuals.
     func handleSpaceChanged() {
         DispatchQueue.main.async { [weak self] in
             self?.handleSpaceChangedImpl()
@@ -280,24 +327,27 @@ class SimpleBorderManager {
     }
 
     private func handleSpaceChangedImpl() {
-        logger.info("Space changed - clearing space-specific border state", metadata: [
-            "previousCellBoundsCount": "\(cellBounds.count)",
-            "previousCellAssignmentsCount": "\(cellAssignments.count)",
+        let totalBounds = cellBoundsPerDisplay.values.reduce(0) { $0 + $1.count }
+        let totalAssignments = cellAssignmentsPerDisplay.values.reduce(0) { $0 + $1.count }
+
+        logger.info("Space changed - resetting focus state", metadata: [
+            "cachedDisplays": "\(cellAssignmentsPerDisplay.keys.count)",
+            "totalCellBounds": "\(totalBounds)",
+            "totalCellAssignments": "\(totalAssignments)",
             "previousFocusedCellID": "\(focusedCellID ?? "nil")",
             "focusedWindowID": "\(focusedWindowID?.description ?? "nil")"
         ])
 
-        // Clear space-specific state (assignments are only valid for one space)
-        cellBounds = [:]
-        cellAssignments = [:]
+        // Clear focus state (will be re-established by next focus event)
         focusedCellID = nil
+        // NOTE: Keep per-display caches - they remain valid for their respective displays
 
         // DESTROY both overlays (not just hide) - prevents stale window artifacts during transitions
         cellHighlight.hide()
         windowBorder?.destroy()
         windowBorder = nil
 
-        logger.debug("Space change: overlays destroyed, waiting for CLI to send new assignments")
+        logger.debug("Space change: overlays destroyed, per-display caches preserved")
     }
 
     /// Handle window destroyed (clear state if focused window destroyed)
@@ -362,13 +412,16 @@ class SimpleBorderManager {
         // Get display for diagnostic logging
         let targetDisplay = SLSCopyManagedDisplayForWindow(connectionID, windowID) as String? ?? "unknown"
 
+        let displayBounds = currentDisplayUUID.flatMap { cellBoundsPerDisplay[$0] } ?? [:]
+        let displayAssignments = currentDisplayUUID.flatMap { cellAssignmentsPerDisplay[$0] } ?? [:]
+
         logger.debug("Border positioning", metadata: [
             "windowID": "\(windowID)",
             "cellID": "\(focusedCellID ?? "nil")",
             "windowFrame": "(\(windowFrame.origin.x), \(windowFrame.origin.y), \(windowFrame.size.width), \(windowFrame.size.height))",
             "targetDisplay": "\(targetDisplay)",
-            "cellBoundsCount": "\(cellBounds.count)",
-            "cellAssignmentsCount": "\(cellAssignments.count)"
+            "cellBoundsCount": "\(displayBounds.count)",
+            "cellAssignmentsCount": "\(displayAssignments.count)"
         ])
 
         // Create or reuse window border

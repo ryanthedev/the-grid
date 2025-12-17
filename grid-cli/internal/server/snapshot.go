@@ -97,6 +97,32 @@ func (s *Snapshot) FilterTileable(exclusions config.WindowExclusion) []WindowInf
 	return result
 }
 
+// GetCurrentDisplayUUID returns the UUID of the display for the current space.
+// Returns empty string if not found.
+func (s *Snapshot) GetCurrentDisplayUUID() string {
+	// Find the display whose current space matches our SpaceID
+	for _, display := range s.AllDisplays {
+		// CurrentSpaceID can be different types - convert to string for comparison
+		spaceIDStr := ""
+		switch v := display.CurrentSpaceID.(type) {
+		case float64:
+			spaceIDStr = fmt.Sprintf("%.0f", v)
+		case int:
+			spaceIDStr = fmt.Sprintf("%d", v)
+		case string:
+			spaceIDStr = v
+		}
+		if spaceIDStr == s.SpaceID {
+			return display.UUID
+		}
+	}
+	// Fallback: return first display's UUID if only one display
+	if len(s.AllDisplays) == 1 {
+		return s.AllDisplays[0].UUID
+	}
+	return ""
+}
+
 // Fetch calls dump ONCE and parses into a Snapshot.
 func Fetch(ctx context.Context, c *client.Client) (*Snapshot, error) {
 	raw, err := c.Dump(ctx)

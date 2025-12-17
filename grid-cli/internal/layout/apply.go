@@ -190,7 +190,10 @@ func ApplyLayout(
 			logging.Warn().Err(err).Msg("failed to send border config")
 		}
 
-		if err := sendCellAssignments(ctx, c, layout, assignment.Assignments, calculatedLayout.CellBounds, opts.BaseSpacing, opts.SettingsPadding); err != nil {
+		displayUUID := snap.GetCurrentDisplayUUID()
+		if displayUUID == "" {
+			logging.Warn().Msg("could not determine display UUID for cell assignments")
+		} else if err := sendCellAssignments(ctx, c, displayUUID, layout, assignment.Assignments, calculatedLayout.CellBounds, opts.BaseSpacing, opts.SettingsPadding); err != nil {
 			// Log but don't fail - borders are optional
 			logging.Warn().Err(err).Msg("failed to send cell assignments")
 		}
@@ -342,7 +345,8 @@ func sendBorderConfig(ctx context.Context, c *client.Client, cfg *config.Config)
 
 // sendCellAssignments sends window-to-cell mappings to the server for border coloring.
 // Cell bounds are adjusted with padding to match actual window placement areas.
-func sendCellAssignments(ctx context.Context, c *client.Client, layout *types.Layout, assignments map[string][]uint32, cellBounds map[string]types.Rect, baseSpacing float64, settingsPadding *types.Padding) error {
+// displayUUID is required for per-display caching in the server.
+func sendCellAssignments(ctx context.Context, c *client.Client, displayUUID string, layout *types.Layout, assignments map[string][]uint32, cellBounds map[string]types.Rect, baseSpacing float64, settingsPadding *types.Padding) error {
 	// Build cell assignments list
 	var cellAssignments []client.CellAssignment
 	for cellID, windowIDs := range assignments {
@@ -423,5 +427,5 @@ func sendCellAssignments(ctx context.Context, c *client.Client, layout *types.La
 		Int("cellBoundsCount", len(convertedCellBounds)).
 		Msg("sending cell assignments to server")
 
-	return c.SendCellAssignments(ctx, cellAssignments, overrides, convertedCellBounds)
+	return c.SendCellAssignments(ctx, displayUUID, cellAssignments, overrides, convertedCellBounds)
 }

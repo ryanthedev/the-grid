@@ -85,7 +85,8 @@ type CellOverride struct {
 }
 
 // SendCellAssignments sends window-to-cell mappings to the server
-func (c *Client) SendCellAssignments(ctx context.Context, assignments []CellAssignment, overrides map[string]CellOverride, cellBounds map[string]CellRect) error {
+// displayUUID is required for per-display caching in the server
+func (c *Client) SendCellAssignments(ctx context.Context, displayUUID string, assignments []CellAssignment, overrides map[string]CellOverride, cellBounds map[string]CellRect) error {
 	// Build assignment map (windowID as string -> cellID)
 	assignmentMap := make(map[string]string)
 	for _, a := range assignments {
@@ -94,6 +95,7 @@ func (c *Client) SendCellAssignments(ctx context.Context, assignments []CellAssi
 
 	params := map[string]interface{}{
 		"assignments": assignmentMap,
+		"displayUUID": displayUUID,
 	}
 
 	// Add overrides if provided

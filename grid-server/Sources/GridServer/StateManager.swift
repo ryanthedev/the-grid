@@ -1399,6 +1399,9 @@ class StateManager {
                 }
             }
         }
+
+        // Notify border system
+        self.borderEvents?.handleWindowFocused(windowID)
     }
 
     func handleApplicationHidden(_ app: NSRunningApplication) {

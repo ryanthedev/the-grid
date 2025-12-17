@@ -256,13 +256,21 @@ func syncBorders(ctx context.Context, c *client.Client, snap *server.Snapshot, r
 	settingsPadding, _ := cfg.GetSettingsPadding()
 	paddedCellBounds := applyCellPadding(calculated, layoutDef, baseSpacing, settingsPadding)
 
-	// 8. Send to server
-	if err := c.SendCellAssignments(ctx, assignments, nil, paddedCellBounds); err != nil {
+	// 8. Get display UUID for per-display caching
+	displayUUID := snap.GetCurrentDisplayUUID()
+	if displayUUID == "" {
+		logging.Warn().Msg("syncBorders: could not determine display UUID, skipping")
+		return
+	}
+
+	// 9. Send to server
+	if err := c.SendCellAssignments(ctx, displayUUID, assignments, nil, paddedCellBounds); err != nil {
 		logging.Warn().Err(err).Msg("syncBorders: failed to send cell assignments")
 		return
 	}
 
 	logging.Debug().
+		Str("displayUUID", displayUUID).
 		Int("assignments", len(assignments)).
 		Int("cellBounds", len(paddedCellBounds)).
 		Msg("syncBorders: sent cell assignments to server")
@@ -341,7 +349,7 @@ func SyncBordersForDisplay(ctx context.Context, c *client.Client, displayInfo se
 	settingsPadding, _ := cfg.GetSettingsPadding()
 	paddedBounds := applyCellPadding(cellBounds, layoutDef, baseSpacing, settingsPadding)
 
-	if err := c.SendCellAssignments(ctx, assignments, nil, paddedBounds); err != nil {
+	if err := c.SendCellAssignments(ctx, displayInfo.UUID, assignments, nil, paddedBounds); err != nil {
 		logging.Warn().Err(err).Msg("SyncBordersForDisplay: failed to send cell assignments")
 		return
 	}

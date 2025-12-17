@@ -713,6 +713,12 @@ class MessageHandler {
                 return
             }
 
+            // Parse displayUUID (required for per-display caching)
+            guard let displayUUID = params["displayUUID"]?.value as? String else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Missing displayUUID")))
+                return
+            }
+
             // Convert string windowIDs to UInt32
             var cellAssignments: [UInt32: String] = [:]
             for (widStr, cellID) in assignmentsDict {
@@ -754,15 +760,18 @@ class MessageHandler {
                 self.logger.debug("No cellBounds in params or wrong type")
             }
 
-            // Update SimpleBorderManager
+            // Update SimpleBorderManager with per-display data
             if let simpleBorderManager = self.simpleBorderManager {
-                simpleBorderManager.setCellAssignments(cellAssignments)
+                simpleBorderManager.setCellAssignments(cellAssignments, forDisplay: displayUUID)
                 if !cellBounds.isEmpty {
-                    simpleBorderManager.setCellBounds(cellBounds)
+                    simpleBorderManager.setCellBounds(cellBounds, forDisplay: displayUUID)
                 }
             }
 
-            self.logger.info("Cell assignments updated", metadata: ["count": "\(cellAssignments.count)"])
+            self.logger.info("Cell assignments updated", metadata: [
+                "displayUUID": "\(displayUUID)",
+                "count": "\(cellAssignments.count)"
+            ])
             completion(Response(id: request.id, result: AnyCodable(["success": true])))
         }
 
