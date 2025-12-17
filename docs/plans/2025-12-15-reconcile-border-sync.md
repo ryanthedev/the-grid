@@ -1,5 +1,7 @@
 # Reconcile Border Sync Implementation Plan
 
+**Status**: IMPLEMENTED (2025-12-17)
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Make every CLI command that calls reconcile automatically sync cell assignments and bounds to the server, enabling the cell highlight feature.

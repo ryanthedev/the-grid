@@ -388,8 +388,20 @@ class SimpleBorderManager {
     // MARK: - Private Helpers
 
     /// Update cell highlight visibility and position
+    ///
+    /// DISABLED: Cell highlight is currently disabled. When enabled, it would:
+    /// - Display a semi-transparent background behind windows in the focused cell
+    /// - Draw a thin border around the cell's grid area
+    /// - Help visually distinguish the active cell from other cells
+    ///
+    /// This feature is deferred for future consideration because:
+    /// - The window border alone provides sufficient visual feedback for focus
+    /// - Cell highlight behind windows can be visually distracting
+    /// - Performance impact of additional overlay needs evaluation
+    ///
+    /// To enable: Remove the early return and implement cell bounds positioning logic.
     private func updateCellHighlight() {
-        // DISABLED: Only showing window border for now
+        // DISABLED: Only showing window border for now (see function docs)
         cellHighlight.hide()
         return
     }
