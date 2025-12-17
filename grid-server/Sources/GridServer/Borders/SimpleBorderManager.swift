@@ -197,16 +197,26 @@ class SimpleBorderManager {
         focusedWindowID = newFocusedWindow
 
         // Look up cell assignment from the window's display cache
+        var foundCellID: String? = nil
+        var foundDisplay: String? = windowDisplayUUID
+
         if let displayUUID = windowDisplayUUID,
            let assignments = cellAssignmentsPerDisplay[displayUUID] {
-            focusedCellID = assignments[newFocusedWindow]
-            currentDisplayUUID = displayUUID
-        } else {
-            // Fallback: search all displays for this window's assignment
-            let (foundDisplay, cellID) = findAssignment(for: newFocusedWindow)
-            focusedCellID = cellID
-            currentDisplayUUID = foundDisplay ?? windowDisplayUUID
+            foundCellID = assignments[newFocusedWindow]
+            foundDisplay = displayUUID
         }
+
+        // Fallback: search all displays if not found in primary
+        if foundCellID == nil {
+            let (fallbackDisplay, fallbackCellID) = findAssignment(for: newFocusedWindow)
+            if fallbackCellID != nil {
+                foundCellID = fallbackCellID
+                foundDisplay = fallbackDisplay
+            }
+        }
+
+        focusedCellID = foundCellID
+        currentDisplayUUID = foundDisplay
 
         logger.info("Focus changed", metadata: [
             "oldWindow": "\(oldFocusedWindow?.description ?? "nil")",
