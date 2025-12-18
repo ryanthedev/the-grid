@@ -2,9 +2,9 @@
 // SimpleBorderManager.swift
 // GridServer
 //
-// Orchestrates the simplified 2-element border system:
-// 1. Cell Highlight - white background behind windows in active cell
-// 2. Window Border - red border around focused window only
+// Orchestrates per-window borders for all windows in the active cell:
+// - Active window border (focused window)
+// - Inactive window borders (other windows in active cell)
 //
 
 import Foundation
@@ -15,12 +15,12 @@ import AppKit  // For NSWorkspace (focus query)
 @_silgen_name("_AXUIElementGetWindow")
 private func _AXUIElementGetWindow(_ element: AXUIElement, _ windowID: UnsafeMutablePointer<UInt32>) -> AXError
 
-/// Manages the simplified 2-element border system
+/// Manages per-window borders for all windows in the active cell
 ///
 /// **Visual behavior:**
-/// - Cell highlight fills the active cell's grid area (behind windows)
-/// - Window border wraps only the focused window
-/// - Non-focused windows have NO borders
+/// - Focused window gets active border style (red by default)
+/// - Other windows in active cell get inactive border style (gray by default, or hidden if disabled)
+/// - Windows in inactive cells have no borders
 ///
 /// **Thread Safety**: All methods must be called on the main queue.
 class SimpleBorderManager {
@@ -41,26 +41,27 @@ class SimpleBorderManager {
 
     // MARK: - Focus State
 
-    /// Currently focused window ID
+    /// Currently focused window ID (gets active style)
     private var focusedWindowID: UInt32?
 
-    /// Currently focused cell ID (derived from focusedWindowID + cellAssignments)
-    private var focusedCellID: String?
+    /// Currently active cell ID (cell containing focused window)
+    private var activeCellID: String?
 
-    // MARK: - Visual Elements (single instances, reused)
+    // MARK: - Border Management
 
-    /// Single cell highlight overlay (reused, repositioned on cell changes)
-    private var cellHighlight: CellHighlight
-
-    /// Single window border overlay (reused, repositioned on window focus changes)
-    private var windowBorder: BorderWindow?
+    /// Per-window border overlays (windowID → BorderWindow)
+    /// Each window in cellAssignments gets its own BorderWindow
+    private var windowBorders: [UInt32: BorderWindow] = [:]
 
     init(connectionID: Int32) {
         self.connectionID = connectionID
-        self.cellHighlight = CellHighlight(connectionID: connectionID)
 
-        // Create the cell highlight overlay (initially hidden)
-        _ = cellHighlight.create()
+        // Register for config changes to refresh border styles
+        BorderConfigManager.shared.onConfigChanged = { [weak self] in
+            DispatchQueue.main.async {
+                self?.updateAllBorders()
+            }
+        }
     }
 
     deinit {
@@ -87,12 +88,8 @@ class SimpleBorderManager {
     private func setCellBoundsImpl(_ bounds: [String: CGRect], forDisplay displayUUID: String) {
         cellBoundsPerDisplay[displayUUID] = bounds
 
-        // If we have a focused cell on this display, update highlight position
-        if currentDisplayUUID == displayUUID,
-           let cellID = focusedCellID,
-           let frame = bounds[cellID] {
-            cellHighlight.update(frame: frame)
-        }
+        // Bounds updated, but we don't use them for positioning yet
+        // (borders are sized from window frames, not cell bounds)
     }
 
     /// Set cell assignments received from CLI for a specific display
@@ -112,7 +109,7 @@ class SimpleBorderManager {
                 let (foundDisplayUUID, cellID) = findAssignment(for: queriedWindowID)
                 if let cellID = cellID {
                     focusedWindowID = queriedWindowID
-                    focusedCellID = cellID
+                    activeCellID = cellID
                     currentDisplayUUID = foundDisplayUUID
                 }
             }
@@ -122,14 +119,53 @@ class SimpleBorderManager {
         if let focusedWindow = focusedWindowID {
             // Check if focused window is in this display's assignments
             if let newCellID = assignments[focusedWindow] {
-                focusedCellID = newCellID
+                activeCellID = newCellID
                 currentDisplayUUID = displayUUID
-
-                // Always update border when we have a focused window
-                updateCellHighlight()
-                updateWindowBorder()
             }
         }
+
+        // Diff existing borders against new assignments
+        // 1. Destroy borders for windows no longer in assignments
+        let currentWindowIDs = Set(windowBorders.keys)
+        let newWindowIDs = Set(assignments.keys)
+        let removedWindowIDs = currentWindowIDs.subtracting(newWindowIDs)
+
+        for windowID in removedWindowIDs {
+            if let border = windowBorders.removeValue(forKey: windowID) {
+                border.destroy()
+                Task {
+                    await EventLog.shared.log("bdr.removed", [
+                        "wid": windowID,
+                        "reason": "no_longer_assigned"
+                    ])
+                }
+            }
+        }
+
+        // 2. Create borders for new windows
+        let addedWindowIDs = newWindowIDs.subtracting(currentWindowIDs)
+        for windowID in addedWindowIDs {
+            let border = BorderWindow(connectionID: connectionID, targetWindowID: windowID)
+            if border.create() {
+                windowBorders[windowID] = border
+                Task {
+                    await EventLog.shared.log("bdr.created", [
+                        "wid": windowID,
+                        "cell": assignments[windowID] ?? ""
+                    ])
+                }
+            } else {
+                Task {
+                    await EventLog.shared.log("bdr.fail", [
+                        "wid": windowID,
+                        "reason": "create_failed"
+                    ])
+                }
+            }
+        }
+
+        // 3. Update all border visibility and styles based on active cell
+        updateAllBorders()
     }
 
     /// Find which display has an assignment for a window
@@ -158,10 +194,6 @@ class SimpleBorderManager {
             return
         }
 
-        let oldFocusedWindow = focusedWindowID
-        let oldFocusedCell = focusedCellID
-        let oldDisplayUUID = currentDisplayUUID
-
         // Get the window's display UUID
         let windowDisplayUUID = SLSCopyManagedDisplayForWindow(connectionID, newFocusedWindow) as String?
 
@@ -187,12 +219,97 @@ class SimpleBorderManager {
             }
         }
 
-        focusedCellID = foundCellID
+        activeCellID = foundCellID
         currentDisplayUUID = foundDisplay
 
-        // Update both visual elements
-        updateCellHighlight()
-        updateWindowBorder()
+        // Update all borders based on new focus state
+        updateAllBorders()
+    }
+
+    /// Update visibility and style for all borders
+    private func updateAllBorders() {
+        guard let activeCell = activeCellID,
+              let focusedWindow = focusedWindowID else {
+            // No active cell - hide all borders
+            for (_, border) in windowBorders {
+                border.hide(reason: "no_active_cell")
+            }
+            return
+        }
+
+        // Get current display's assignments
+        guard let displayUUID = currentDisplayUUID,
+              let assignments = cellAssignmentsPerDisplay[displayUUID] else {
+            // No assignments - hide all borders
+            for (_, border) in windowBorders {
+                border.hide(reason: "no_assignments")
+            }
+            return
+        }
+
+        let config = BorderConfigManager.shared
+
+        // Update each border based on its cell and focus state
+        for (windowID, border) in windowBorders {
+            // Get window's cell assignment
+            guard let windowCellID = assignments[windowID] else {
+                // Window not in assignments - should have been cleaned up
+                border.hide(reason: "not_assigned")
+                continue
+            }
+
+            // Only show borders for windows in the active cell
+            guard windowCellID == activeCell else {
+                border.hide(reason: "cell_inactive")
+                continue
+            }
+
+            // Window is in active cell - determine style
+            let isFocused = (windowID == focusedWindow)
+            let style: BorderStyle?
+            let styleType: String
+
+            if isFocused {
+                // Focused window gets active style
+                style = config.activeStyle
+                styleType = "active"
+            } else {
+                // Other windows in cell get inactive style (or nil if disabled)
+                style = config.inactiveStyle
+                styleType = "inactive"
+            }
+
+            // Get window frame from SkyLight
+            var windowFrame = CGRect.zero
+            guard SLSGetWindowBounds(connectionID, windowID, &windowFrame) == .success else {
+                border.hide(reason: "no_bounds")
+                Task {
+                    await EventLog.shared.log("bdr.hide", [
+                        "wid": windowID,
+                        "reason": "no_bounds"
+                    ])
+                }
+                continue
+            }
+
+            // Update border position
+            border.update(targetFrame: windowFrame)
+
+            // Update border style (nil hides the border)
+            border.updateStyle(style: style, styleType: styleType)
+
+            // Log if visible
+            if style != nil {
+                Task {
+                    await EventLog.shared.log("bdr.show", [
+                        "wid": windowID,
+                        "style": styleType,
+                        "cell": windowCellID,
+                        "frame": [windowFrame.origin.x, windowFrame.origin.y, windowFrame.size.width, windowFrame.size.height]
+                    ])
+                }
+            }
+        }
     }
 
     /// Handle window moved (update window border position)
@@ -203,24 +320,24 @@ class SimpleBorderManager {
     }
 
     private func handleWindowMovedImpl(windowID: UInt32, newFrame: CGRect) {
-        guard windowID == focusedWindowID else { return }
+        // Find the border for this window
+        guard let border = windowBorders[windowID], border.isVisible else {
+            return
+        }
 
-        // Only the focused window has a border, update it
-        if let border = windowBorder {
-            let style = createWindowBorderStyle()
-            border.scheduleUpdate(frame: newFrame, style: style)
+        // Update position
+        border.update(targetFrame: newFrame)
 
-            // Log border move event
-            Task {
-                await EventLog.shared.log("bdr.move", [
-                    "wid": windowID,
-                    "frame": [newFrame.origin.x, newFrame.origin.y, newFrame.size.width, newFrame.size.height]
-                ])
-            }
+        // Log border move event
+        Task {
+            await EventLog.shared.log("bdr.move", [
+                "wid": windowID,
+                "frame": [newFrame.origin.x, newFrame.origin.y, newFrame.size.width, newFrame.size.height]
+            ])
         }
     }
 
-    /// Handle window minimized (hide overlays if focused window is minimized)
+    /// Handle window minimized (hide border if minimized)
     func handleWindowMinimized(windowID: UInt32) {
         DispatchQueue.main.async { [weak self] in
             self?.handleWindowMinimizedImpl(windowID: windowID)
@@ -228,11 +345,9 @@ class SimpleBorderManager {
     }
 
     private func handleWindowMinimizedImpl(windowID: UInt32) {
-        guard windowID == focusedWindowID else { return }
+        guard let border = windowBorders[windowID] else { return }
 
-        // Hide both overlays
-        cellHighlight.hide()
-        windowBorder?.hide()
+        border.hide(reason: "minimized")
 
         // Log border hide event
         Task {
@@ -243,7 +358,7 @@ class SimpleBorderManager {
         }
     }
 
-    /// Handle window deminimized (show overlays if it regains focus)
+    /// Handle window deminimized (show border if it should be visible)
     func handleWindowDeminimized(windowID: UInt32) {
         DispatchQueue.main.async { [weak self] in
             self?.handleWindowDeminimizedImpl(windowID: windowID)
@@ -251,10 +366,11 @@ class SimpleBorderManager {
     }
 
     private func handleWindowDeminimizedImpl(windowID: UInt32) {
-        // Focus will be updated separately via handleWindowFocused
+        // Re-evaluate borders to restore visibility if needed
+        updateAllBorders()
     }
 
-    /// Handle app hidden (hide overlays if focused window's app matches)
+    /// Handle app hidden (hide borders for windows in this app)
     func handleAppHidden(bundleID: String) {
         DispatchQueue.main.async { [weak self] in
             self?.handleAppHiddenImpl(bundleID: bundleID)
@@ -262,22 +378,22 @@ class SimpleBorderManager {
     }
 
     private func handleAppHiddenImpl(bundleID: String) {
-        guard let windowID = focusedWindowID else { return }
-
-        // Hide both overlays
-        cellHighlight.hide()
-        windowBorder?.hide()
+        // Hide all borders (we don't track bundleID per window, so hide all)
+        // Re-evaluation will happen on next focus event
+        for (_, border) in windowBorders {
+            border.hide(reason: "app_hidden")
+        }
 
         // Log border hide event
         Task {
-            await EventLog.shared.log("bdr.hide", [
-                "wid": windowID,
-                "reason": "app_hidden"
+            await EventLog.shared.log("bdr.hide_all", [
+                "reason": "app_hidden",
+                "bundleID": bundleID
             ])
         }
     }
 
-    /// Handle app unhidden (restore overlays if needed)
+    /// Handle app unhidden (restore borders if needed)
     func handleAppUnhidden(bundleID: String) {
         DispatchQueue.main.async { [weak self] in
             self?.handleAppUnhiddenImpl(bundleID: bundleID)
@@ -285,11 +401,8 @@ class SimpleBorderManager {
     }
 
     private func handleAppUnhiddenImpl(bundleID: String) {
-        guard focusedWindowID != nil else { return }
-
-        // Re-evaluate focus state to restore overlays if needed
-        updateCellHighlight()
-        updateWindowBorder()
+        // Re-evaluate focus state to restore borders if needed
+        updateAllBorders()
     }
 
     /// Handle space changed (reset focus state but preserve per-display caches)
@@ -299,7 +412,7 @@ class SimpleBorderManager {
     /// - The new space may already have cached assignments from previous layout apply
     /// - CLI will send new assignments if needed
     ///
-    /// We just clear focus-related state and destroy overlays to prevent stale visuals.
+    /// We just clear focus-related state and hide all borders to prevent stale visuals.
     func handleSpaceChanged() {
         DispatchQueue.main.async { [weak self] in
             self?.handleSpaceChangedImpl()
@@ -308,16 +421,16 @@ class SimpleBorderManager {
 
     private func handleSpaceChangedImpl() {
         // Clear focus state (will be re-established by next focus event)
-        focusedCellID = nil
+        activeCellID = nil
         // NOTE: Keep per-display caches - they remain valid for their respective displays
 
-        // DESTROY both overlays (not just hide) - prevents stale window artifacts during transitions
-        cellHighlight.hide()
-        windowBorder?.destroy()
-        windowBorder = nil
+        // Hide all borders (don't destroy - assignments are still valid)
+        for (_, border) in windowBorders {
+            border.hide(reason: "space_changed")
+        }
     }
 
-    /// Handle window destroyed (clear state if focused window destroyed)
+    /// Handle window destroyed (remove border for destroyed window)
     func handleWindowDestroyed(windowID: UInt32) {
         DispatchQueue.main.async { [weak self] in
             self?.handleWindowDestroyedImpl(windowID: windowID)
@@ -325,159 +438,37 @@ class SimpleBorderManager {
     }
 
     private func handleWindowDestroyedImpl(windowID: UInt32) {
-        guard windowID == focusedWindowID else { return }
-
-        // Clear focus state
-        focusedWindowID = nil
-        focusedCellID = nil
-
-        // Hide both overlays
-        cellHighlight.hide()
-        windowBorder?.hide()
-
-        // Log border hide event
-        Task {
-            await EventLog.shared.log("bdr.hide", [
-                "wid": windowID,
-                "reason": "destroyed"
-            ])
-        }
-
-        // Destroy window border since target is gone
-        windowBorder?.destroy()
-        windowBorder = nil
-    }
-
-    // MARK: - Private Helpers
-
-    /// Update cell highlight visibility and position
-    ///
-    /// DISABLED: Cell highlight is currently disabled. When enabled, it would:
-    /// - Display a semi-transparent background behind windows in the focused cell
-    /// - Draw a thin border around the cell's grid area
-    /// - Help visually distinguish the active cell from other cells
-    ///
-    /// This feature is deferred for future consideration because:
-    /// - The window border alone provides sufficient visual feedback for focus
-    /// - Cell highlight behind windows can be visually distracting
-    /// - Performance impact of additional overlay needs evaluation
-    ///
-    /// To enable: Remove the early return and implement cell bounds positioning logic.
-    private func updateCellHighlight() {
-        // DISABLED: Only showing window border for now (see function docs)
-        cellHighlight.hide()
-        return
-    }
-
-    /// Update window border visibility and position
-    private func updateWindowBorder() {
-        // Only show border if:
-        // 1. There IS a focused window
-        // 2. That window is in a managed cell (has cell assignment)
-        // 3. That window is NOT one of our overlay windows
-        guard let windowID = focusedWindowID,
-              focusedCellID != nil,
-              !isOurOverlayWindow(windowID) else {
-            windowBorder?.hide()
-
-            // Log border hide event if there was a focused window
-            if let wid = focusedWindowID {
-                Task {
-                    await EventLog.shared.log("bdr.hide", [
-                        "wid": wid,
-                        "reason": "no_cell"
-                    ])
-                }
-            }
-            return
-        }
-
-        // Get window frame from SkyLight
-        var windowFrame = CGRect.zero
-        guard SLSGetWindowBounds(connectionID, windowID, &windowFrame) == .success else {
-            windowBorder?.hide()
+        // Remove and destroy border for this window
+        if let border = windowBorders.removeValue(forKey: windowID) {
+            border.destroy()
 
             // Log border hide event
             Task {
                 await EventLog.shared.log("bdr.hide", [
                     "wid": windowID,
-                    "reason": "no_bounds"
+                    "reason": "destroyed"
                 ])
             }
-            return
         }
 
-        // Create or reuse window border
-        if let existingBorder = windowBorder {
-            // Reuse existing border - just retarget if needed
-            if existingBorder.targetWindowID != windowID {
-                existingBorder.retarget(to: windowID)
-            }
-        } else {
-            // No border exists - create new one
-            let border = BorderWindow(connectionID: connectionID, targetWindowID: windowID)
-            guard border.create() else {
-                Task { await EventLog.shared.log("bdr.fail", ["wid": windowID, "reason": "create_failed"]) }
-                return
-            }
-            windowBorder = border
-        }
-
-        // Update position and show
-        let style = createWindowBorderStyle()
-        windowBorder?.update(targetFrame: windowFrame, style: style)
-        windowBorder?.show()
-
-        // Log border show event
-        Task {
-            await EventLog.shared.log("bdr.show", [
-                "wid": windowID,
-                "cell": focusedCellID ?? "",
-                "frame": [windowFrame.origin.x, windowFrame.origin.y, windowFrame.size.width, windowFrame.size.height]
-            ])
+        // If this was the focused window, clear focus state
+        if windowID == focusedWindowID {
+            focusedWindowID = nil
+            activeCellID = nil
         }
     }
+
+    // MARK: - Private Helpers
 
     /// Check if a window ID belongs to one of our overlay windows
     private func isOurOverlayWindow(_ windowID: UInt32) -> Bool {
-        // Check cell highlight
-        if cellHighlight.windowID == windowID {
-            return true
-        }
-        // Check window border
-        if let border = windowBorder, border.windowID == windowID {
-            return true
+        // Check all borders in windowBorders
+        for (_, border) in windowBorders {
+            if border.windowID == windowID {
+                return true
+            }
         }
         return false
-    }
-
-    /// Create BorderStyle for the focused window border
-    private func createWindowBorderStyle() -> BorderStyle {
-        let config = BorderConfigManager.shared
-
-        // Get dynamic corner radius - prefer target window's radius, fall back to config
-        var cornerRadius = config.cornerRadius
-        if let border = windowBorder {
-            cornerRadius = border.getTargetCornerRadius(fallback: config.cornerRadius)
-        }
-
-        // Map style string to BorderStyleType
-        let styleType: BorderStyleType
-        switch config.style.lowercased() {
-        case "square":
-            styleType = .square
-        case "uniform":
-            styleType = .uniform
-        default:
-            styleType = .round
-        }
-
-        return BorderStyle(
-            color: SimpleBorderConfig.windowBorderColor,
-            width: SimpleBorderConfig.windowBorderWidth,
-            cornerRadius: cornerRadius,
-            styleType: styleType
-        )
     }
 
     // MARK: - Cleanup
@@ -490,9 +481,11 @@ class SimpleBorderManager {
     }
 
     private func cleanupImpl() {
-        cellHighlight.destroy()
-        windowBorder?.destroy()
-        windowBorder = nil
+        // Destroy all borders
+        for (_, border) in windowBorders {
+            border.destroy()
+        }
+        windowBorders.removeAll()
     }
 
     // MARK: - Focus Query

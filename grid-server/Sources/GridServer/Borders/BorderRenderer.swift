@@ -20,6 +20,7 @@ struct BorderStyle {
     var color: CGColor
     var width: CGFloat
     var cornerRadius: CGFloat
+    var opacity: CGFloat
     var styleType: BorderStyleType
 }
 
@@ -60,6 +61,7 @@ enum BorderRenderer {
 
         // Set stroke properties
         context.setStrokeColor(style.color)
+        context.setAlpha(style.opacity)  // Apply opacity to rendering
         context.setLineWidth(style.width)
         context.setLineCap(.round)
         context.setLineJoin(.round)

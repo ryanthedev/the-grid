@@ -15,8 +15,8 @@ class BorderWindow {
     /// Our overlay window ID
     private(set) var windowID: UInt32 = 0
 
-    /// Target window we're drawing around
-    private(set) var targetWindowID: UInt32
+    /// Target window we're drawing around (set once at init, never changes)
+    let targetWindowID: UInt32
 
     /// Drawing context
     private var context: CGContext?
@@ -36,11 +36,6 @@ class BorderWindow {
         BorderConfigManager.shared.padding
     }
 
-    // MARK: - Event Coalescing (20ms debounce for smooth window drags)
-    private var updateTimer: DispatchSourceTimer?
-    private let coalesceDelay: TimeInterval = 0.02 // 20ms like JankyBorders
-    private var pendingFrame: CGRect?
-    private var pendingStyle: BorderStyle?
 
     init(connectionID: Int32, targetWindowID: UInt32) {
         self.connectionID = connectionID
@@ -49,6 +44,7 @@ class BorderWindow {
 
     deinit {
         destroy()
+        Task { await EventLog.shared.log("bdr.destroy", ["wid": windowID, "targetID": targetWindowID]) }
     }
 
     // MARK: - Lifecycle
@@ -123,10 +119,6 @@ class BorderWindow {
     func destroy() {
         guard windowID != 0 else { return }
 
-        // Cancel any pending updates
-        updateTimer?.cancel()
-        updateTimer = nil
-
         // CRITICAL: Hide window before releasing (removes from screen)
         hide()
 
@@ -152,35 +144,54 @@ class BorderWindow {
             moveToTargetSpace()
         }
 
-        _ = SLSSetWindowAlpha(connectionID, windowID, 1.0)
-        _ = SLSOrderWindow(connectionID, windowID, -1, targetWindowID)  // Below target
+        let alphaResult = SLSSetWindowAlpha(connectionID, windowID, 1.0)
+        let orderResult = SLSOrderWindow(connectionID, windowID, -1, targetWindowID)  // Below target
 
         isVisible = true
+
+        Task {
+            await EventLog.shared.log("dbg.bdr.show", [
+                "wid": windowID,
+                "targetID": targetWindowID,
+                "borderSpace": borderSpace,
+                "targetSpace": targetSpace,
+                "alphaResult": alphaResult.rawValue,
+                "orderResult": orderResult.rawValue
+            ])
+        }
     }
 
     /// Hide the border
-    func hide() {
+    /// - Parameter reason: Optional reason for hiding (for logging)
+    func hide(reason: String = "unspecified") {
         guard windowID != 0 else { return }
+        guard isVisible else { return }
 
         _ = SLSSetWindowAlpha(connectionID, windowID, 0.0)
         _ = SLSOrderWindow(connectionID, windowID, 0, 0)  // Remove from ordering
 
         isVisible = false
+
+        Task { await EventLog.shared.log("bdr.hide", ["wid": windowID, "targetID": targetWindowID, "reason": reason]) }
     }
 
     // MARK: - Update
 
     /// Update border position and size to match target window
-    func updatePosition(targetFrame: CGRect, borderWidth: CGFloat) {
+    func update(targetFrame: CGRect) {
         guard windowID != 0 else { return }
 
         // Calculate border bounds (larger than target by width + padding on each side)
+        // Use current style's width if available, otherwise use active style's width as default
+        let borderWidth = currentStyle?.width ?? BorderConfigManager.shared.activeStyle.width
         let expansion = borderWidth + padding
         let borderBounds = targetFrame.insetBy(dx: -expansion, dy: -expansion)
 
         // Move the window
         var origin = borderBounds.origin
         _ = SLSMoveWindow(connectionID, windowID, &origin)
+
+        Task { await EventLog.shared.log("bdr.move", ["wid": windowID, "targetID": targetWindowID, "frame": [borderBounds.origin.x, borderBounds.origin.y, borderBounds.size.width, borderBounds.size.height]]) }
 
         // Update shape if size changed
         if borderBounds.size != currentBounds.size {
@@ -220,18 +231,28 @@ class BorderWindow {
         }
     }
 
-    /// Redraw the border with the given style
-    func redraw(style: BorderStyle) {
-        guard windowID != 0 else {
-            Task { await EventLog.shared.log("warn.bdr.no_wid", [:]) }
+    /// Update the border's style and visibility
+    /// - Parameters:
+    ///   - style: The new style (nil to hide the border)
+    ///   - styleType: "active" or "inactive" for logging purposes
+    func updateStyle(style: BorderStyle?, styleType: String = "unknown") {
+        guard windowID != 0 else { return }
+
+        // Style is being removed - hide the border
+        guard let newStyle = style else {
+            hide(reason: "style_removed")
+            currentStyle = nil
             return
         }
+
+        // Style changed - redraw and show
         guard currentBounds.size.width > 0 && currentBounds.size.height > 0 else {
             Task { await EventLog.shared.log("warn.bdr.bad_bounds", ["bounds": [currentBounds.origin.x, currentBounds.origin.y, currentBounds.size.width, currentBounds.size.height]]) }
             return
         }
 
         // Create context if needed (after shape change)
+        let contextWasNil = (context == nil)
         if context == nil {
             _ = SLSFlushWindowContentRegion(connectionID, windowID, nil)
             context = SLWindowContextCreate(connectionID, windowID, nil)
@@ -247,40 +268,29 @@ class BorderWindow {
         // Draw using currentBounds (not context dimensions)
         let drawBounds = CGRect(origin: .zero, size: currentBounds.size)
 
-        BorderRenderer.draw(in: drawContext, bounds: drawBounds, style: style)
+        BorderRenderer.draw(in: drawContext, bounds: drawBounds, style: newStyle)
 
         // Flush to screen
-        _ = SLSFlushWindowContentRegion(connectionID, windowID, nil)
+        let flushResult = SLSFlushWindowContentRegion(connectionID, windowID, nil)
 
-        currentStyle = style
-    }
+        currentStyle = newStyle
 
-    /// Update position and redraw in one call
-    func update(targetFrame: CGRect, style: BorderStyle) {
-        updatePosition(targetFrame: targetFrame, borderWidth: style.width)
-        redraw(style: style)
-    }
-
-    // MARK: - Coalesced Updates
-
-    /// Schedule an update with debouncing (use this during window drags)
-    func scheduleUpdate(frame: CGRect, style: BorderStyle) {
-        pendingFrame = frame
-        pendingStyle = style
-
-        updateTimer?.cancel()
-        updateTimer = DispatchSource.makeTimerSource(queue: .main)
-        updateTimer?.schedule(deadline: .now() + coalesceDelay)
-        updateTimer?.setEventHandler { [weak self] in
-            guard let self = self,
-                  let frame = self.pendingFrame,
-                  let style = self.pendingStyle else { return }
-            self.update(targetFrame: frame, style: style)
-            self.pendingFrame = nil
-            self.pendingStyle = nil
+        Task {
+            await EventLog.shared.log("dbg.bdr.draw", [
+                "wid": windowID,
+                "targetID": targetWindowID,
+                "styleType": styleType,
+                "bounds": [currentBounds.origin.x, currentBounds.origin.y, currentBounds.size.width, currentBounds.size.height],
+                "contextCreated": contextWasNil,
+                "flushResult": flushResult.rawValue
+            ])
         }
-        updateTimer?.resume()
+
+        // Always ensure border is shown after drawing
+        // (alpha may have been set to 0 during size change in update())
+        show()
     }
+
 
     /// Get dynamic corner radius from target window
     func getTargetCornerRadius(fallback: CGFloat) -> CGFloat {
@@ -291,28 +301,9 @@ class BorderWindow {
         return fallback
     }
 
-    // MARK: - Retargeting
-
-    /// Retarget this border window to a different target window
-    /// This allows reusing the same border overlay instead of destroying/recreating
-    func retarget(to newTargetID: UInt32) {
-        let oldTargetID = targetWindowID
-        targetWindowID = newTargetID
-
-        // Force context recreation for new target
-        context = nil
-
-        // Move border to new target's space (may be different from old target)
-        moveToTargetSpace()
-
-        Task { await EventLog.shared.log("bdr.retarget", ["wid": windowID, "oldTarget": oldTargetID, "newTarget": newTargetID]) }
-    }
-
     /// Move the border window to the same space as the target window
     private func moveToTargetSpace() {
         guard windowID != 0 else { return }
-
-        let targetDisplay = SLSCopyManagedDisplayForWindow(connectionID, targetWindowID) as String? ?? "unknown"
 
         // Always query API directly - avoids deadlock when called from StateManager's queue
         // (StateManager.getState() uses queue.sync which deadlocks if we're already on that queue)

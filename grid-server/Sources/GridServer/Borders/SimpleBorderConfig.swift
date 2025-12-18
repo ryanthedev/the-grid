@@ -2,9 +2,9 @@
 // SimpleBorderConfig.swift
 // GridServer
 //
-// Simple configuration for the 2-element border system:
-// - Cell highlight (white background with blue border)
-// - Active window border (red border)
+// Configuration for window borders in active cell:
+// - Active window border (focused window)
+// - Inactive window borders (other windows in active cell)
 //
 
 import Foundation
@@ -17,31 +17,80 @@ class BorderConfigManager {
     // MARK: - Configurable Properties
 
     var enabled: Bool = true
-    var borderWidth: CGFloat = 3.0
-    var cornerRadius: CGFloat = 8.0
-    var padding: CGFloat = 2.0
-    var style: String = "round"
-    var hidpi: Bool = true
 
-    // Colors (stored as CGColor for direct use)
-    var activeWindowColor: CGColor = CGColor(red: 1.0, green: 0.0, blue: 0.0, alpha: 1.0)  // red
-    var activeCellColor: CGColor = CGColor(red: 1.0, green: 1.0, blue: 1.0, alpha: 0.6)    // white 60%
-    var inactiveColor: CGColor = CGColor(red: 0.5, green: 0.5, blue: 0.5, alpha: 1.0)      // gray
+    // Active border configuration
+    private var activeColor: CGColor = CGColor(red: 1.0, green: 0.0, blue: 0.0, alpha: 1.0)  // red
+    private var activeWidth: CGFloat = 3.0
+    private var activeCornerRadius: CGFloat = 8.0
+    private var activeOpacity: CGFloat = 1.0
+
+    // Inactive border configuration
+    private var inactiveEnabled: Bool = true
+    private var inactiveColor: CGColor = CGColor(red: 0.4, green: 0.4, blue: 0.4, alpha: 1.0)  // #666666
+    private var inactiveWidth: CGFloat = 3.0
+    private var inactiveCornerRadius: CGFloat = 8.0
+    private var inactiveOpacity: CGFloat = 1.0
+
+    // Legacy properties (for backwards compatibility)
+    var padding: CGFloat = 2.0  // Public for BorderWindow access
+    private var styleString: String = "round"
+    private var hidpi: Bool = true
+
+    /// Callback invoked when config changes (for border refresh)
+    var onConfigChanged: (() -> Void)?
 
     private init() {}
 
+    // MARK: - Computed Properties
+
+    /// Active window border style
+    var activeStyle: BorderStyle {
+        BorderStyle(
+            color: activeColor,
+            width: activeWidth,
+            cornerRadius: activeCornerRadius,
+            opacity: activeOpacity,
+            styleType: parseStyleType(styleString)
+        )
+    }
+
+    /// Inactive window border style (nil if disabled)
+    var inactiveStyle: BorderStyle? {
+        guard inactiveEnabled else { return nil }
+        return BorderStyle(
+            color: inactiveColor,
+            width: inactiveWidth,
+            cornerRadius: inactiveCornerRadius,
+            opacity: inactiveOpacity,
+            styleType: parseStyleType(styleString)
+        )
+    }
+
+    // MARK: - Configuration Update
+
     /// Update configuration from RPC params
+    /// Supports both new nested schema and legacy flat schema
     func update(from config: [String: Any]) {
         if let enabled = config["enabled"] as? Bool {
             self.enabled = enabled
         }
 
+        // New nested schema
+        if let activeConfig = config["active"] as? [String: Any] {
+            updateActiveStyle(from: activeConfig)
+        }
+
+        if let inactiveConfig = config["inactive"] as? [String: Any] {
+            updateInactiveStyle(from: inactiveConfig)
+        }
+
+        // Legacy flat schema (backwards compatibility)
         if let width = (config["width"] as? NSNumber)?.doubleValue {
-            self.borderWidth = CGFloat(width)
+            self.activeWidth = clamp(CGFloat(width), min: 1, max: 20)
         }
 
         if let cornerRadius = (config["corner_radius"] as? NSNumber)?.doubleValue {
-            self.cornerRadius = CGFloat(cornerRadius)
+            self.activeCornerRadius = clamp(CGFloat(cornerRadius), min: 0, max: 50)
         }
 
         if let padding = (config["padding"] as? NSNumber)?.doubleValue {
@@ -49,23 +98,17 @@ class BorderConfigManager {
         }
 
         if let style = config["style"] as? String {
-            self.style = style
+            self.styleString = style
         }
 
         if let hidpi = config["hidpi"] as? Bool {
             self.hidpi = hidpi
         }
 
-        // Parse colors (expect hex strings like "#FF0000" or "0xFF0000")
+        // Legacy color parsing
         if let colorStr = config["active_window_color"] as? String {
             if let color = parseHexColor(colorStr) {
-                self.activeWindowColor = color
-            }
-        }
-
-        if let colorStr = config["active_cell_color"] as? String {
-            if let color = parseHexColor(colorStr) {
-                self.activeCellColor = color
+                self.activeColor = color
             }
         }
 
@@ -73,6 +116,68 @@ class BorderConfigManager {
             if let color = parseHexColor(colorStr) {
                 self.inactiveColor = color
             }
+        }
+
+        // Notify listeners of config change
+        onConfigChanged?()
+    }
+
+    // MARK: - Private Helpers
+
+    /// Update active border style from config dictionary
+    private func updateActiveStyle(from config: [String: Any]) {
+        if let colorStr = config["color"] as? String, let color = parseHexColor(colorStr) {
+            self.activeColor = color
+        }
+
+        if let width = (config["width"] as? NSNumber)?.doubleValue {
+            self.activeWidth = clamp(CGFloat(width), min: 1, max: 20)
+        }
+
+        if let cornerRadius = (config["cornerRadius"] as? NSNumber)?.doubleValue {
+            self.activeCornerRadius = clamp(CGFloat(cornerRadius), min: 0, max: 50)
+        }
+
+        if let opacity = (config["opacity"] as? NSNumber)?.doubleValue {
+            self.activeOpacity = clamp(CGFloat(opacity), min: 0, max: 1)
+        }
+    }
+
+    /// Update inactive border style from config dictionary
+    private func updateInactiveStyle(from config: [String: Any]) {
+        if let enabled = config["enabled"] as? Bool {
+            self.inactiveEnabled = enabled
+        }
+
+        if let colorStr = config["color"] as? String, let color = parseHexColor(colorStr) {
+            self.inactiveColor = color
+        }
+
+        if let width = (config["width"] as? NSNumber)?.doubleValue {
+            self.inactiveWidth = clamp(CGFloat(width), min: 1, max: 20)
+        }
+
+        if let cornerRadius = (config["cornerRadius"] as? NSNumber)?.doubleValue {
+            self.inactiveCornerRadius = clamp(CGFloat(cornerRadius), min: 0, max: 50)
+        }
+
+        if let opacity = (config["opacity"] as? NSNumber)?.doubleValue {
+            self.inactiveOpacity = clamp(CGFloat(opacity), min: 0, max: 1)
+        }
+    }
+
+    /// Clamp value to specified range
+    private func clamp<T: Comparable>(_ value: T, min minValue: T, max maxValue: T) -> T {
+        return Swift.min(Swift.max(value, minValue), maxValue)
+    }
+
+    /// Parse style type string
+    private func parseStyleType(_ style: String) -> BorderStyleType {
+        switch style.lowercased() {
+        case "round": return .round
+        case "square": return .square
+        case "uniform": return .uniform
+        default: return .round
         }
     }
 
@@ -121,35 +226,18 @@ class BorderConfigManager {
     }
 }
 
-/// Simple border configuration with static defaults (backwards compatible)
+/// Legacy border configuration helpers (deprecated)
+@available(*, deprecated, message: "Use BorderConfigManager.shared.activeStyle instead")
 struct SimpleBorderConfig {
-    // MARK: - Cell Highlight (background overlay behind windows)
-
-    /// Solid white background for cell highlight
-    static var highlightFillColor: CGColor {
-        BorderConfigManager.shared.activeCellColor
-    }
-
-    /// Blue stroke for cell highlight border
-    static let highlightStrokeColor: CGColor = CGColor(
-        red: 0.0,
-        green: 0x88 / 255.0,  // 0x0088ff
-        blue: 1.0,
-        alpha: 1.0
-    )
-
-    /// Stroke width for cell highlight
-    static let highlightStrokeWidth: CGFloat = 2.0
-
-    // MARK: - Active Window Border
+    // MARK: - Active Window Border (legacy)
 
     /// Red border for focused window
     static var windowBorderColor: CGColor {
-        BorderConfigManager.shared.activeWindowColor
+        BorderConfigManager.shared.activeStyle.color
     }
 
     /// Border width for focused window
     static var windowBorderWidth: CGFloat {
-        BorderConfigManager.shared.borderWidth
+        BorderConfigManager.shared.activeStyle.width
     }
 }

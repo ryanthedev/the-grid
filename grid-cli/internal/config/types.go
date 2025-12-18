@@ -92,9 +92,31 @@ type AppRule struct {
 	PreferredStackMode types.StackMode `yaml:"preferredStackMode,omitempty" json:"preferredStackMode,omitempty"`
 }
 
+// BorderStyle defines the visual appearance of a border
+type BorderStyle struct {
+	Color        string  `yaml:"color" json:"color"`
+	Width        float64 `yaml:"width" json:"width"`
+	CornerRadius float64 `yaml:"cornerRadius" json:"cornerRadius"`
+	Opacity      float64 `yaml:"opacity" json:"opacity"`
+}
+
+// InactiveBorderStyle defines the inactive border style with an enabled flag
+type InactiveBorderStyle struct {
+	Enabled      bool    `yaml:"enabled" json:"enabled"`
+	Color        string  `yaml:"color" json:"color"`
+	Width        float64 `yaml:"width" json:"width"`
+	CornerRadius float64 `yaml:"cornerRadius" json:"cornerRadius"`
+	Opacity      float64 `yaml:"opacity" json:"opacity"`
+}
+
 // BorderConfig defines window border appearance
 type BorderConfig struct {
-	Enabled           *bool    `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	// New nested structure
+	Enabled  *bool                `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	Active   *BorderStyle         `yaml:"active,omitempty" json:"active,omitempty"`
+	Inactive *InactiveBorderStyle `yaml:"inactive,omitempty" json:"inactive,omitempty"`
+
+	// Deprecated: Old fields kept for backwards compatibility
 	Width             *float64 `yaml:"width,omitempty" json:"width,omitempty"`
 	Style             *string  `yaml:"style,omitempty" json:"style,omitempty"`                         // round, square, uniform
 	CornerRadius      *float64 `yaml:"corner_radius,omitempty" json:"corner_radius,omitempty"`
@@ -154,4 +176,90 @@ func (b *BorderConfig) GetHiDPI() bool {
 		return true
 	}
 	return *b.HiDPI
+}
+
+// GetActiveStyle returns the active border style with backwards compatibility
+// If Active is nil but old fields exist, constructs from legacy fields
+func (b *BorderConfig) GetActiveStyle() BorderStyle {
+	if b == nil {
+		return BorderStyle{
+			Color:        "#FF0000",
+			Width:        3.0,
+			CornerRadius: 8.0,
+			Opacity:      1.0,
+		}
+	}
+
+	// Use new Active field if present
+	if b.Active != nil {
+		return *b.Active
+	}
+
+	// Backwards compatibility: construct from old fields
+	color := "#FF0000"
+	if b.ActiveWindowColor != nil {
+		color = *b.ActiveWindowColor
+	} else if b.ActiveCellColor != nil {
+		color = *b.ActiveCellColor
+	}
+
+	width := 3.0
+	if b.Width != nil {
+		width = *b.Width
+	}
+
+	cornerRadius := 8.0
+	if b.CornerRadius != nil {
+		cornerRadius = *b.CornerRadius
+	}
+
+	return BorderStyle{
+		Color:        color,
+		Width:        width,
+		CornerRadius: cornerRadius,
+		Opacity:      1.0,
+	}
+}
+
+// GetInactiveStyle returns the inactive border style with backwards compatibility
+// Returns nil if inactive borders are disabled
+func (b *BorderConfig) GetInactiveStyle() *InactiveBorderStyle {
+	if b == nil {
+		return &InactiveBorderStyle{
+			Enabled:      true,
+			Color:        "#666666",
+			Width:        3.0,
+			CornerRadius: 8.0,
+			Opacity:      1.0,
+		}
+	}
+
+	// Use new Inactive field if present
+	if b.Inactive != nil {
+		return b.Inactive
+	}
+
+	// Backwards compatibility: construct from old fields
+	color := "#666666"
+	if b.InactiveColor != nil {
+		color = *b.InactiveColor
+	}
+
+	width := 3.0
+	if b.Width != nil {
+		width = *b.Width
+	}
+
+	cornerRadius := 8.0
+	if b.CornerRadius != nil {
+		cornerRadius = *b.CornerRadius
+	}
+
+	return &InactiveBorderStyle{
+		Enabled:      true,
+		Color:        color,
+		Width:        width,
+		CornerRadius: cornerRadius,
+		Opacity:      1.0,
+	}
 }

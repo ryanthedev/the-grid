@@ -14,36 +14,61 @@ func (c *Client) SendBorderConfig(ctx context.Context, cfg *config.BorderConfig)
 	}
 
 	configParams := map[string]interface{}{
-		"enabled":       cfg.GetEnabled(),
-		"width":         cfg.GetWidth(),
-		"style":         cfg.GetStyle(),
-		"corner_radius": cfg.GetCornerRadius(),
-		"padding":       cfg.GetPadding(),
-		"hidpi":         cfg.GetHiDPI(),
+		"enabled": cfg.GetEnabled(),
 	}
 
-	// Add optional color fields if set
-	if cfg.ActiveWindowColor != nil {
-		configParams["active_window_color"] = *cfg.ActiveWindowColor
-	}
-	if cfg.ActiveCellColor != nil {
-		configParams["active_cell_color"] = *cfg.ActiveCellColor
-	}
-	if cfg.InactiveColor != nil {
-		configParams["inactive_color"] = *cfg.InactiveColor
-	}
+	// Check for new nested structure (Active/Inactive fields)
+	if cfg.Active != nil || cfg.Inactive != nil {
+		// Use new nested structure
+		if cfg.Active != nil {
+			configParams["active"] = map[string]interface{}{
+				"color":        cfg.Active.Color,
+				"width":        cfg.Active.Width,
+				"cornerRadius": cfg.Active.CornerRadius,
+				"opacity":      cfg.Active.Opacity,
+			}
+		}
 
-	// Add palette if set
-	if len(cfg.Palette) > 0 {
-		configParams["palette"] = cfg.Palette
-	}
+		if cfg.Inactive != nil {
+			configParams["inactive"] = map[string]interface{}{
+				"enabled":      cfg.Inactive.Enabled,
+				"color":        cfg.Inactive.Color,
+				"width":        cfg.Inactive.Width,
+				"cornerRadius": cfg.Inactive.CornerRadius,
+				"opacity":      cfg.Inactive.Opacity,
+			}
+		}
+	} else {
+		// Fall back to old flat structure for backwards compatibility
+		configParams["width"] = cfg.GetWidth()
+		configParams["style"] = cfg.GetStyle()
+		configParams["corner_radius"] = cfg.GetCornerRadius()
+		configParams["padding"] = cfg.GetPadding()
+		configParams["hidpi"] = cfg.GetHiDPI()
 
-	// Add blacklist/whitelist if set
-	if len(cfg.Blacklist) > 0 {
-		configParams["blacklist"] = cfg.Blacklist
-	}
-	if len(cfg.Whitelist) > 0 {
-		configParams["whitelist"] = cfg.Whitelist
+		// Add optional color fields if set
+		if cfg.ActiveWindowColor != nil {
+			configParams["active_window_color"] = *cfg.ActiveWindowColor
+		}
+		if cfg.ActiveCellColor != nil {
+			configParams["active_cell_color"] = *cfg.ActiveCellColor
+		}
+		if cfg.InactiveColor != nil {
+			configParams["inactive_color"] = *cfg.InactiveColor
+		}
+
+		// Add palette if set
+		if len(cfg.Palette) > 0 {
+			configParams["palette"] = cfg.Palette
+		}
+
+		// Add blacklist/whitelist if set
+		if len(cfg.Blacklist) > 0 {
+			configParams["blacklist"] = cfg.Blacklist
+		}
+		if len(cfg.Whitelist) > 0 {
+			configParams["whitelist"] = cfg.Whitelist
+		}
 	}
 
 	// Wrap config in params["config"] as expected by server

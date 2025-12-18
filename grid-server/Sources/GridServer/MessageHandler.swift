@@ -748,8 +748,8 @@ class MessageHandler {
             Task {
                 await EventLog.shared.log("dbg.border_config", [
                     "enabled": BorderConfigManager.shared.enabled,
-                    "width": BorderConfigManager.shared.borderWidth,
-                    "style": BorderConfigManager.shared.style
+                    "activeWidth": BorderConfigManager.shared.activeStyle.width,
+                    "padding": BorderConfigManager.shared.padding
                 ])
             }
 
