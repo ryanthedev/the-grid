@@ -21,22 +21,44 @@ func (c *Client) SendBorderConfig(ctx context.Context, cfg *config.BorderConfig)
 	if cfg.Active != nil || cfg.Inactive != nil {
 		// Use new nested structure
 		if cfg.Active != nil {
-			configParams["active"] = map[string]interface{}{
+			activeConfig := map[string]interface{}{
 				"color":        cfg.Active.Color,
 				"width":        cfg.Active.Width,
 				"cornerRadius": cfg.Active.CornerRadius,
 				"opacity":      cfg.Active.Opacity,
 			}
+			// Add glow fields if present
+			if cfg.Active.GlowRadius != nil {
+				activeConfig["glowRadius"] = *cfg.Active.GlowRadius
+			}
+			if cfg.Active.GlowColor != nil {
+				activeConfig["glowColor"] = *cfg.Active.GlowColor
+			}
+			if cfg.Active.GlowOpacity != nil {
+				activeConfig["glowOpacity"] = *cfg.Active.GlowOpacity
+			}
+			configParams["active"] = activeConfig
 		}
 
 		if cfg.Inactive != nil {
-			configParams["inactive"] = map[string]interface{}{
+			inactiveConfig := map[string]interface{}{
 				"enabled":      cfg.Inactive.Enabled,
 				"color":        cfg.Inactive.Color,
 				"width":        cfg.Inactive.Width,
 				"cornerRadius": cfg.Inactive.CornerRadius,
 				"opacity":      cfg.Inactive.Opacity,
 			}
+			// Add glow fields if present
+			if cfg.Inactive.GlowRadius != nil {
+				inactiveConfig["glowRadius"] = *cfg.Inactive.GlowRadius
+			}
+			if cfg.Inactive.GlowColor != nil {
+				inactiveConfig["glowColor"] = *cfg.Inactive.GlowColor
+			}
+			if cfg.Inactive.GlowOpacity != nil {
+				inactiveConfig["glowOpacity"] = *cfg.Inactive.GlowOpacity
+			}
+			configParams["inactive"] = inactiveConfig
 		}
 	} else {
 		// Fall back to old flat structure for backwards compatibility

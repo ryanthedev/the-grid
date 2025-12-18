@@ -94,19 +94,25 @@ type AppRule struct {
 
 // BorderStyle defines the visual appearance of a border
 type BorderStyle struct {
-	Color        string  `yaml:"color" json:"color"`
-	Width        float64 `yaml:"width" json:"width"`
-	CornerRadius float64 `yaml:"cornerRadius" json:"cornerRadius"`
-	Opacity      float64 `yaml:"opacity" json:"opacity"`
+	Color        string   `yaml:"color" json:"color"`
+	Width        float64  `yaml:"width" json:"width"`
+	CornerRadius float64  `yaml:"cornerRadius" json:"cornerRadius"`
+	Opacity      float64  `yaml:"opacity" json:"opacity"`
+	GlowRadius   *float64 `yaml:"glowRadius,omitempty" json:"glowRadius,omitempty"`
+	GlowColor    *string  `yaml:"glowColor,omitempty" json:"glowColor,omitempty"`
+	GlowOpacity  *float64 `yaml:"glowOpacity,omitempty" json:"glowOpacity,omitempty"`
 }
 
 // InactiveBorderStyle defines the inactive border style with an enabled flag
 type InactiveBorderStyle struct {
-	Enabled      bool    `yaml:"enabled" json:"enabled"`
-	Color        string  `yaml:"color" json:"color"`
-	Width        float64 `yaml:"width" json:"width"`
-	CornerRadius float64 `yaml:"cornerRadius" json:"cornerRadius"`
-	Opacity      float64 `yaml:"opacity" json:"opacity"`
+	Enabled      bool     `yaml:"enabled" json:"enabled"`
+	Color        string   `yaml:"color" json:"color"`
+	Width        float64  `yaml:"width" json:"width"`
+	CornerRadius float64  `yaml:"cornerRadius" json:"cornerRadius"`
+	Opacity      float64  `yaml:"opacity" json:"opacity"`
+	GlowRadius   *float64 `yaml:"glowRadius,omitempty" json:"glowRadius,omitempty"`
+	GlowColor    *string  `yaml:"glowColor,omitempty" json:"glowColor,omitempty"`
+	GlowOpacity  *float64 `yaml:"glowOpacity,omitempty" json:"glowOpacity,omitempty"`
 }
 
 // BorderConfig defines window border appearance

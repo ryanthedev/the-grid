@@ -575,7 +575,10 @@ class MessageHandler {
             let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
 
             if manipulator.focusWindow(pid: windowState.pid, windowID: wid) {
-                // Immediately update focus state (don't wait for AX notification)
+                // Update border focus state (processed asynchronously on main queue)
+                self.simpleBorderManager?.updateFocus(newFocusedWindow: wid)
+
+                // Also update StateManager (async via its internal queue)
                 StateManager.shared.handleWindowFocused(wid)
                 completion(Response(id: request.id, result: AnyCodable(["success": true, "windowId": wid])))
             } else {
@@ -815,6 +818,47 @@ class MessageHandler {
                 ])
             }
             completion(Response(id: request.id, result: AnyCodable(["success": true])))
+        }
+
+        // Query border info for a window
+        register(method: "borders.query") { [weak self] request, completion in
+            guard let self = self else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32603, message: "Internal error")))
+                return
+            }
+            guard let params = request.params else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
+                return
+            }
+
+            // Accept windowId as either string or int
+            var windowID: UInt32?
+            if let windowIdInt = params["windowId"]?.value as? Int {
+                windowID = UInt32(windowIdInt)
+            } else if let windowIdStr = params["windowId"]?.value as? String,
+                      let parsed = UInt32(windowIdStr) {
+                windowID = parsed
+            }
+
+            guard let wid = windowID else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Missing or invalid windowId")))
+                return
+            }
+
+            guard let borderManager = self.simpleBorderManager else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32603, message: "Border manager not available")))
+                return
+            }
+
+            if let info = borderManager.queryBorderInfo(forWindowID: wid) {
+                completion(Response(id: request.id, result: AnyCodable(info)))
+            } else {
+                completion(Response(id: request.id, result: AnyCodable([
+                    "windowId": wid,
+                    "hasBorder": false,
+                    "message": "No border found for this window"
+                ])))
+            }
         }
 
     }

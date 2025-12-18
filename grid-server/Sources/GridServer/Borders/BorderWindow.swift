@@ -30,6 +30,13 @@ class BorderWindow {
     /// Whether the border is currently visible
     private(set) var isVisible: Bool = false
 
+    /// Get current style info for debugging/querying
+    var styleInfo: (color: [CGFloat], width: CGFloat, isVisible: Bool)? {
+        guard let style = currentStyle else { return nil }
+        let components = style.color.components ?? []
+        return (color: components, width: style.width, isVisible: isVisible)
+    }
+
     /// Border padding (space between window edge and border)
     /// Uses dynamic value from config
     var padding: CGFloat {
@@ -316,7 +323,6 @@ class BorderWindow {
         // (alpha may have been set to 0 during size change in update())
         show()
     }
-
 
     /// Get dynamic corner radius from target window
     func getTargetCornerRadius(fallback: CGFloat) -> CGFloat {

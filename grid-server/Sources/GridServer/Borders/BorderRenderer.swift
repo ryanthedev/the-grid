@@ -22,6 +22,9 @@ struct BorderStyle {
     var cornerRadius: CGFloat
     var opacity: CGFloat
     var styleType: BorderStyleType
+    var glowRadius: CGFloat?      // nil = no glow
+    var glowColor: CGColor?       // defaults to border color if nil
+    var glowOpacity: CGFloat?     // defaults to 0.5 if nil
 }
 
 /// Stateless border renderer using Core Graphics
@@ -59,14 +62,32 @@ enum BorderRenderer {
             )
         }
 
-        // Set stroke properties
+        // Draw glow layers (if enabled)
+        if let glowRadius = style.glowRadius, glowRadius > 0 {
+            let glowColor = style.glowColor ?? style.color
+            let glowOpacity = style.glowOpacity ?? 0.5
+            let layers = Int(glowRadius / 2)
+
+            for i in (1...layers).reversed() {
+                let layerWidth = style.width + CGFloat(i) * 2
+                let layerOpacity = glowOpacity * (1.0 - CGFloat(i) / CGFloat(layers + 1))
+
+                context.setStrokeColor(glowColor)
+                context.setAlpha(layerOpacity)
+                context.setLineWidth(layerWidth)
+                context.addPath(path)
+                context.strokePath()
+            }
+        }
+
+        // Set stroke properties for main border
         context.setStrokeColor(style.color)
         context.setAlpha(style.opacity)  // Apply opacity to rendering
         context.setLineWidth(style.width)
         context.setLineCap(.round)
         context.setLineJoin(.round)
 
-        // Draw the border
+        // Draw the main border
         context.addPath(path)
         context.strokePath()
     }

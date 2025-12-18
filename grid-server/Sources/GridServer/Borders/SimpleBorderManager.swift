@@ -53,8 +53,9 @@ class SimpleBorderManager {
     /// Each window in cellAssignments gets its own BorderWindow
     private var windowBorders: [UInt32: BorderWindow] = [:]
 
-    /// Pending focus update work item (for debouncing rapid changes)
-    private var pendingFocusUpdate: DispatchWorkItem?
+    /// Track current style type per window to detect changes (windowID → "active"/"inactive")
+    /// Used to trigger border recreation when style changes
+    private var windowStyleTypes: [UInt32: String] = [:]
 
     init(connectionID: Int32) {
         self.connectionID = connectionID
@@ -144,6 +145,7 @@ class SimpleBorderManager {
         for windowID in removedWindowIDs {
             if let border = windowBorders.removeValue(forKey: windowID) {
                 border.destroy()
+                windowStyleTypes.removeValue(forKey: windowID)
                 Task {
                     await EventLog.shared.log("bdr.removed", [
                         "wid": windowID,
@@ -183,8 +185,9 @@ class SimpleBorderManager {
             }
         }
 
-        // 3. Update all border visibility and styles based on active cell
-        updateAllBorders()
+        // 3. DON'T call updateAllBorders() here - let focus events drive border updates
+        // This avoids race conditions when CLI sends setCellAssignments before window.focus
+        // The focus event will trigger updateAllBorders() with correct state
     }
 
     /// Find which display has an assignment for a window
@@ -213,23 +216,11 @@ class SimpleBorderManager {
             return
         }
 
-        // Cancel any pending focus update
-        pendingFocusUpdate?.cancel()
-
-        // Coalesce rapid focus changes with 1-frame delay (~16ms)
-        let workItem = DispatchWorkItem { [weak self] in
-            self?.performFocusUpdate(newFocusedWindow: newFocusedWindow)
-        }
-        pendingFocusUpdate = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.016, execute: workItem)
-    }
-
-    private func performFocusUpdate(newFocusedWindow: UInt32) {
-        // Get the window's display UUID
-        let windowDisplayUUID = SLSCopyManagedDisplayForWindow(connectionID, newFocusedWindow) as String?
-
         // Update focus state
         focusedWindowID = newFocusedWindow
+
+        // Get the window's display UUID
+        let windowDisplayUUID = SLSCopyManagedDisplayForWindow(connectionID, newFocusedWindow) as String?
 
         // Look up cell assignment from the window's display cache
         var foundCellID: String? = nil
@@ -247,24 +238,14 @@ class SimpleBorderManager {
             if fallbackCellID != nil {
                 foundCellID = fallbackCellID
                 foundDisplay = fallbackDisplay
-
-                // Log display mismatch for debugging
-                if windowDisplayUUID != nil && windowDisplayUUID != fallbackDisplay {
-                    Task {
-                        await EventLog.shared.log("dbg.display_mismatch", [
-                            "wid": newFocusedWindow,
-                            "reported": windowDisplayUUID ?? "nil",
-                            "found": fallbackDisplay ?? "nil"
-                        ])
-                    }
-                }
             }
         }
 
         activeCellID = foundCellID
         currentDisplayUUID = foundDisplay
 
-        // Update all borders based on new focus state
+        // Update borders immediately - no debounce needed
+        // The pending state mechanism handles rapid focus changes
         updateAllBorders()
     }
 
@@ -327,10 +308,58 @@ class SimpleBorderManager {
                 styleType = "inactive"
             }
 
+            // Check if style type changed - if so, recreate the border window
+            // SkyLight windows cache their content, so we must destroy and recreate
+            let previousStyleType = windowStyleTypes[windowID]
+            var currentBorder = border
+
+            if let prev = previousStyleType, prev != styleType {
+                // Style changed - destroy old border and create new one
+                currentBorder.destroy()
+                windowBorders.removeValue(forKey: windowID)
+
+                let newBorder = BorderWindow(connectionID: connectionID, targetWindowID: windowID)
+                if newBorder.create() {
+                    // Verify target window still exists (could have been destroyed during create)
+                    var bounds = CGRect.zero
+                    guard SLSGetWindowBounds(connectionID, windowID, &bounds) == .success else {
+                        newBorder.destroy()
+                        windowStyleTypes.removeValue(forKey: windowID)
+                        Task {
+                            await EventLog.shared.log("err.bdr.recreate", ["wid": windowID, "reason": "target_gone"])
+                        }
+                        continue
+                    }
+
+                    windowBorders[windowID] = newBorder
+                    currentBorder = newBorder
+                    Task {
+                        await EventLog.shared.log("bdr.recreate", [
+                            "wid": windowID,
+                            "from": prev,
+                            "to": styleType
+                        ])
+                    }
+                } else {
+                    // Recreation failed - clean up state so we can try again on next focus change
+                    windowStyleTypes.removeValue(forKey: windowID)
+                    Task {
+                        await EventLog.shared.log("err.bdr.recreate", [
+                            "wid": windowID,
+                            "warning": "window_has_no_border"
+                        ])
+                    }
+                    continue
+                }
+            }
+
+            // Update tracked style type
+            windowStyleTypes[windowID] = styleType
+
             // Get window frame from SkyLight
             var windowFrame = CGRect.zero
             guard SLSGetWindowBounds(connectionID, windowID, &windowFrame) == .success else {
-                border.hide(reason: "no_bounds")
+                currentBorder.hide(reason: "no_bounds")
                 Task {
                     await EventLog.shared.log("bdr.hide", [
                         "wid": windowID,
@@ -341,10 +370,10 @@ class SimpleBorderManager {
             }
 
             // Update border position
-            border.update(targetFrame: windowFrame)
+            currentBorder.update(targetFrame: windowFrame)
 
             // Update border style (nil hides the border)
-            border.updateStyle(style: style, styleType: styleType)
+            currentBorder.updateStyle(style: style, styleType: styleType)
 
             // Log if visible
             if style != nil {
@@ -468,10 +497,6 @@ class SimpleBorderManager {
     }
 
     private func handleSpaceChangedImpl() {
-        // Cancel pending focus updates - space context changed
-        pendingFocusUpdate?.cancel()
-        pendingFocusUpdate = nil
-
         // Clear ALL focus state - space context is completely different
         activeCellID = nil
         focusedWindowID = nil
@@ -495,6 +520,7 @@ class SimpleBorderManager {
         // Remove and destroy border for this window
         if let border = windowBorders.removeValue(forKey: windowID) {
             border.destroy()
+            windowStyleTypes.removeValue(forKey: windowID)
 
             Task {
                 await EventLog.shared.log("bdr.removed", [
@@ -529,6 +555,7 @@ class SimpleBorderManager {
             for windowID in assignments.keys {
                 if let border = windowBorders.removeValue(forKey: windowID) {
                     border.destroy()
+                    windowStyleTypes.removeValue(forKey: windowID)
                 }
 
                 // Clear focus if this was the focused window
@@ -565,6 +592,51 @@ class SimpleBorderManager {
         return false
     }
 
+    // MARK: - Query Methods
+
+    /// Query border info for a specific window
+    /// Returns: (borderWindowID, targetWindowID, rgba, width, isVisible, isFocused) or nil if no border exists
+    func queryBorderInfo(forWindowID windowID: UInt32) -> [String: Any]? {
+        // Must be called on main queue for thread safety
+        var result: [String: Any]?
+
+        if Thread.isMainThread {
+            result = queryBorderInfoImpl(forWindowID: windowID)
+        } else {
+            DispatchQueue.main.sync {
+                result = self.queryBorderInfoImpl(forWindowID: windowID)
+            }
+        }
+
+        return result
+    }
+
+    private func queryBorderInfoImpl(forWindowID windowID: UInt32) -> [String: Any]? {
+        guard let border = windowBorders[windowID] else {
+            return nil
+        }
+
+        guard let styleInfo = border.styleInfo else {
+            return [
+                "borderWindowID": border.windowID,
+                "targetWindowID": border.targetWindowID,
+                "hasStyle": false,
+                "isVisible": border.isVisible,
+                "isFocused": windowID == focusedWindowID
+            ]
+        }
+
+        return [
+            "borderWindowID": border.windowID,
+            "targetWindowID": border.targetWindowID,
+            "hasStyle": true,
+            "rgba": styleInfo.color,
+            "width": styleInfo.width,
+            "isVisible": styleInfo.isVisible,
+            "isFocused": windowID == focusedWindowID
+        ]
+    }
+
     // MARK: - Cleanup
 
     /// Clean up all resources
@@ -575,10 +647,6 @@ class SimpleBorderManager {
     }
 
     private func cleanupImpl() {
-        // Cancel pending focus updates
-        pendingFocusUpdate?.cancel()
-        pendingFocusUpdate = nil
-
         // Clear config callback to prevent retain issues
         BorderConfigManager.shared.onConfigChanged = nil
 
