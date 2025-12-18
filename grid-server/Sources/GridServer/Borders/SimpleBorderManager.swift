@@ -53,6 +53,9 @@ class SimpleBorderManager {
     /// Each window in cellAssignments gets its own BorderWindow
     private var windowBorders: [UInt32: BorderWindow] = [:]
 
+    /// Pending focus update work item (for debouncing rapid changes)
+    private var pendingFocusUpdate: DispatchWorkItem?
+
     init(connectionID: Int32) {
         self.connectionID = connectionID
 
@@ -65,13 +68,18 @@ class SimpleBorderManager {
     }
 
     deinit {
-        // Call implementation directly - deinit already has exclusive access
-        // Must be synchronous to ensure cleanup before deallocation
+        // Clear callback immediately (safe from any thread)
+        BorderConfigManager.shared.onConfigChanged = nil
+
         if Thread.isMainThread {
             cleanupImpl()
         } else {
-            DispatchQueue.main.sync {
-                self.cleanupImpl()
+            // Capture borders before async dispatch - don't block with sync
+            let bordersToDestroy = Array(windowBorders.values)
+            DispatchQueue.main.async {
+                for border in bordersToDestroy {
+                    border.destroy()
+                }
             }
         }
     }
@@ -100,6 +108,8 @@ class SimpleBorderManager {
     }
 
     private func setCellAssignmentsImpl(_ assignments: [UInt32: String], forDisplay displayUUID: String) {
+        // Get previous assignments for THIS display before updating
+        let previousAssignments = cellAssignmentsPerDisplay[displayUUID] ?? [:]
         cellAssignmentsPerDisplay[displayUUID] = assignments
 
         // If we don't have a focused window yet (startup case), query the OS
@@ -124,11 +134,12 @@ class SimpleBorderManager {
             }
         }
 
-        // Diff existing borders against new assignments
-        // 1. Destroy borders for windows no longer in assignments
-        let currentWindowIDs = Set(windowBorders.keys)
+        // Diff against PREVIOUS assignments for THIS display only
+        // (not all borders globally - that would destroy other displays' borders)
+        // 1. Destroy borders for windows no longer in THIS display's assignments
+        let previousWindowIDs = Set(previousAssignments.keys)
         let newWindowIDs = Set(assignments.keys)
-        let removedWindowIDs = currentWindowIDs.subtracting(newWindowIDs)
+        let removedWindowIDs = previousWindowIDs.subtracting(newWindowIDs)
 
         for windowID in removedWindowIDs {
             if let border = windowBorders.removeValue(forKey: windowID) {
@@ -142,11 +153,19 @@ class SimpleBorderManager {
             }
         }
 
-        // 2. Create borders for new windows
-        let addedWindowIDs = newWindowIDs.subtracting(currentWindowIDs)
+        // 2. Create borders for new windows (in THIS display's assignments but not before)
+        let addedWindowIDs = newWindowIDs.subtracting(previousWindowIDs)
         for windowID in addedWindowIDs {
             let border = BorderWindow(connectionID: connectionID, targetWindowID: windowID)
             if border.create() {
+                // Verify window still exists before storing (could have been destroyed during create)
+                var bounds = CGRect.zero
+                guard SLSGetWindowBounds(connectionID, windowID, &bounds) == .success else {
+                    border.destroy()
+                    Task { await EventLog.shared.log("bdr.fail", ["wid": windowID, "reason": "window_gone_after_create"]) }
+                    continue
+                }
+
                 windowBorders[windowID] = border
                 Task {
                     await EventLog.shared.log("bdr.created", [
@@ -194,6 +213,18 @@ class SimpleBorderManager {
             return
         }
 
+        // Cancel any pending focus update
+        pendingFocusUpdate?.cancel()
+
+        // Coalesce rapid focus changes with 1-frame delay (~16ms)
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.performFocusUpdate(newFocusedWindow: newFocusedWindow)
+        }
+        pendingFocusUpdate = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.016, execute: workItem)
+    }
+
+    private func performFocusUpdate(newFocusedWindow: UInt32) {
         // Get the window's display UUID
         let windowDisplayUUID = SLSCopyManagedDisplayForWindow(connectionID, newFocusedWindow) as String?
 
@@ -216,6 +247,17 @@ class SimpleBorderManager {
             if fallbackCellID != nil {
                 foundCellID = fallbackCellID
                 foundDisplay = fallbackDisplay
+
+                // Log display mismatch for debugging
+                if windowDisplayUUID != nil && windowDisplayUUID != fallbackDisplay {
+                    Task {
+                        await EventLog.shared.log("dbg.display_mismatch", [
+                            "wid": newFocusedWindow,
+                            "reported": windowDisplayUUID ?? "nil",
+                            "found": fallbackDisplay ?? "nil"
+                        ])
+                    }
+                }
             }
         }
 
@@ -231,7 +273,9 @@ class SimpleBorderManager {
         guard let activeCell = activeCellID,
               let focusedWindow = focusedWindowID else {
             // No active cell - hide all borders
-            for (_, border) in windowBorders {
+            // Copy before iterating to prevent mutation during iteration
+            let borders = Array(windowBorders.values)
+            for border in borders {
                 border.hide(reason: "no_active_cell")
             }
             return
@@ -241,7 +285,8 @@ class SimpleBorderManager {
         guard let displayUUID = currentDisplayUUID,
               let assignments = cellAssignmentsPerDisplay[displayUUID] else {
             // No assignments - hide all borders
-            for (_, border) in windowBorders {
+            let borders = Array(windowBorders.values)
+            for border in borders {
                 border.hide(reason: "no_assignments")
             }
             return
@@ -249,8 +294,11 @@ class SimpleBorderManager {
 
         let config = BorderConfigManager.shared
 
+        // Snapshot dictionary to prevent mutation during iteration
+        let bordersCopy = windowBorders
+
         // Update each border based on its cell and focus state
-        for (windowID, border) in windowBorders {
+        for (windowID, border) in bordersCopy {
             // Get window's cell assignment
             guard let windowCellID = assignments[windowID] else {
                 // Window not in assignments - should have been cleaned up
@@ -420,8 +468,14 @@ class SimpleBorderManager {
     }
 
     private func handleSpaceChangedImpl() {
-        // Clear focus state (will be re-established by next focus event)
+        // Cancel pending focus updates - space context changed
+        pendingFocusUpdate?.cancel()
+        pendingFocusUpdate = nil
+
+        // Clear ALL focus state - space context is completely different
         activeCellID = nil
+        focusedWindowID = nil
+        currentDisplayUUID = nil
         // NOTE: Keep per-display caches - they remain valid for their respective displays
 
         // Hide all borders (don't destroy - assignments are still valid)
@@ -442,18 +496,58 @@ class SimpleBorderManager {
         if let border = windowBorders.removeValue(forKey: windowID) {
             border.destroy()
 
-            // Log border hide event
             Task {
-                await EventLog.shared.log("bdr.hide", [
+                await EventLog.shared.log("bdr.removed", [
                     "wid": windowID,
                     "reason": "destroyed"
                 ])
             }
         }
 
+        // Clean up from all display caches to prevent unbounded growth
+        for displayUUID in cellAssignmentsPerDisplay.keys {
+            cellAssignmentsPerDisplay[displayUUID]?.removeValue(forKey: windowID)
+        }
+
         // If this was the focused window, clear focus state
         if windowID == focusedWindowID {
             focusedWindowID = nil
+            activeCellID = nil
+        }
+    }
+
+    /// Handle display disconnected (clean up display-specific state)
+    func handleDisplayDisconnected(displayUUID: String) {
+        DispatchQueue.main.async { [weak self] in
+            self?.handleDisplayDisconnectedImpl(displayUUID: displayUUID)
+        }
+    }
+
+    private func handleDisplayDisconnectedImpl(displayUUID: String) {
+        // Remove all borders for windows that were on this display
+        if let assignments = cellAssignmentsPerDisplay.removeValue(forKey: displayUUID) {
+            for windowID in assignments.keys {
+                if let border = windowBorders.removeValue(forKey: windowID) {
+                    border.destroy()
+                }
+
+                // Clear focus if this was the focused window
+                if windowID == focusedWindowID {
+                    focusedWindowID = nil
+                }
+            }
+            Task {
+                await EventLog.shared.log("bdr.display_disconnect", [
+                    "uuid": displayUUID,
+                    "windows_cleaned": assignments.count
+                ])
+            }
+        }
+        cellBoundsPerDisplay.removeValue(forKey: displayUUID)
+
+        // Clear current display if it was the disconnected one
+        if currentDisplayUUID == displayUUID {
+            currentDisplayUUID = nil
             activeCellID = nil
         }
     }
@@ -481,6 +575,13 @@ class SimpleBorderManager {
     }
 
     private func cleanupImpl() {
+        // Cancel pending focus updates
+        pendingFocusUpdate?.cancel()
+        pendingFocusUpdate = nil
+
+        // Clear config callback to prevent retain issues
+        BorderConfigManager.shared.onConfigChanged = nil
+
         // Destroy all borders
         for (_, border) in windowBorders {
             border.destroy()
@@ -508,12 +609,16 @@ class SimpleBorderManager {
             &focusedWindowRef
         )
 
-        guard result == .success else {
+        guard result == .success, let ref = focusedWindowRef else {
             return nil
         }
 
+        // SAFETY: AXUIElementCopyAttributeValue returns AXUIElement for kAXFocusedWindowAttribute
+        // Force cast is safe after success check; AXUIElement is a CF type so as? always succeeds
+        let axElement = ref as! AXUIElement
+
         var windowID: UInt32 = 0
-        let axResult = _AXUIElementGetWindow(focusedWindowRef as! AXUIElement, &windowID)
+        let axResult = _AXUIElementGetWindow(axElement, &windowID)
 
         guard axResult == .success, windowID != 0 else {
             return nil

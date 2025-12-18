@@ -43,8 +43,12 @@ class BorderWindow {
     }
 
     deinit {
+        // Capture values BEFORE any operations to avoid capturing self during deallocation
+        let wid = windowID
+        let targetID = targetWindowID
         destroy()
-        Task { await EventLog.shared.log("bdr.destroy", ["wid": windowID, "targetID": targetWindowID]) }
+        // Use captured values (not self.properties) to avoid Swift runtime abort
+        Task { await EventLog.shared.log("bdr.destroy", ["wid": wid, "targetID": targetID]) }
     }
 
     // MARK: - Lifecycle
@@ -92,20 +96,38 @@ class BorderWindow {
 
         // Set window tags: floating, no shadow
         var tags: UInt64 = WindowTags.floating | WindowTags.noShadow
-        _ = SLSSetWindowTags(connectionID, windowID, &tags, 64)
+        let tagsResult = SLSSetWindowTags(connectionID, windowID, &tags, 64)
 
         // Make window transparent
-        _ = SLSSetWindowOpacity(connectionID, windowID, false)
-        _ = SLSSetWindowAlpha(connectionID, windowID, 0.0)
+        let opacityResult = SLSSetWindowOpacity(connectionID, windowID, false)
+        let alphaResult = SLSSetWindowAlpha(connectionID, windowID, 0.0)
 
         // Set window level below normal windows
-        _ = SLSSetWindowLevel(connectionID, windowID, -1)
+        let levelResult = SLSSetWindowLevel(connectionID, windowID, -1)
+
+        // Log if any setup step failed
+        if tagsResult != .success || opacityResult != .success ||
+           alphaResult != .success || levelResult != .success {
+            Task {
+                await EventLog.shared.log("warn.bdr.setup", [
+                    "wid": windowID,
+                    "tags": tagsResult.rawValue,
+                    "opacity": opacityResult.rawValue,
+                    "alpha": alphaResult.rawValue,
+                    "level": levelResult.rawValue
+                ])
+            }
+        }
 
         // Create drawing context
         context = SLWindowContextCreate(connectionID, windowID, nil)
 
         if context == nil {
-            Task { await EventLog.shared.log("warn.bdr.no_ctx", ["wid": windowID]) }
+            Task { await EventLog.shared.log("bdr.fail", ["wid": windowID, "reason": "no_context"]) }
+            // Clean up the window we just created
+            _ = SLSReleaseWindow(connectionID, windowID)
+            self.windowID = 0
+            return false
         }
 
         // Move border to same space as target window
@@ -208,6 +230,10 @@ class BorderWindow {
             var bounds = CGRect(origin: .zero, size: borderBounds.size)
             var region: CFTypeRef?
             guard CGSNewRegionWithRect(&bounds, &region) == .success, let shapeRegion = region else {
+                // Restore visibility if we were visible before hiding for resize
+                if isVisible {
+                    _ = SLSSetWindowAlpha(connectionID, windowID, 1.0)
+                }
                 Task { await EventLog.shared.log("bdr.fail", ["wid": windowID, "reason": "resize_region_failed", "bounds": [borderBounds.origin.x, borderBounds.origin.y, borderBounds.size.width, borderBounds.size.height]]) }
                 return
             }

@@ -69,14 +69,7 @@ class BorderEvents {
         simpleBorderManager?.handleSpaceChanged()
     }
 
-    // MARK: - State Queries
-
-    private func getBundleIDForWindow(_ windowID: UInt32) -> String? {
-        guard let state = stateManager?.getState() else { return nil }
-        guard let window = state.windows[String(windowID)] else { return nil }
-
-        // Get application for this window's PID
-        let pidKey = String(window.pid)
-        return state.applications[pidKey]?.bundleIdentifier
+    func handleDisplayDisconnected(displayUUID: String) {
+        simpleBorderManager?.handleDisplayDisconnected(displayUUID: displayUUID)
     }
 }

@@ -13,31 +13,46 @@ import CoreGraphics
 /// Shared runtime border configuration (mutable at runtime via RPC)
 class BorderConfigManager {
     static let shared = BorderConfigManager()
+    private let lock = NSLock()
 
     // MARK: - Configurable Properties
 
-    var enabled: Bool = true
+    private var _enabled: Bool = true
+    var enabled: Bool {
+        get { lock.withLock { _enabled } }
+        set { lock.withLock { _enabled = newValue } }
+    }
 
-    // Active border configuration
-    private var activeColor: CGColor = CGColor(red: 1.0, green: 0.0, blue: 0.0, alpha: 1.0)  // red
-    private var activeWidth: CGFloat = 3.0
-    private var activeCornerRadius: CGFloat = 8.0
-    private var activeOpacity: CGFloat = 1.0
+    // Active border configuration (backing storage)
+    private var _activeColor: CGColor = CGColor(red: 1.0, green: 0.0, blue: 0.0, alpha: 1.0)  // red
+    private var _activeWidth: CGFloat = 3.0
+    private var _activeCornerRadius: CGFloat = 8.0
+    private var _activeOpacity: CGFloat = 1.0
 
-    // Inactive border configuration
-    private var inactiveEnabled: Bool = true
-    private var inactiveColor: CGColor = CGColor(red: 0.4, green: 0.4, blue: 0.4, alpha: 1.0)  // #666666
-    private var inactiveWidth: CGFloat = 3.0
-    private var inactiveCornerRadius: CGFloat = 8.0
-    private var inactiveOpacity: CGFloat = 1.0
+    // Inactive border configuration (backing storage)
+    private var _inactiveEnabled: Bool = true
+    private var _inactiveColor: CGColor = CGColor(red: 0.4, green: 0.4, blue: 0.4, alpha: 1.0)  // #666666
+    private var _inactiveWidth: CGFloat = 3.0
+    private var _inactiveCornerRadius: CGFloat = 8.0
+    private var _inactiveOpacity: CGFloat = 1.0
 
-    // Legacy properties (for backwards compatibility)
-    var padding: CGFloat = 2.0  // Public for BorderWindow access
-    private var styleString: String = "round"
-    private var hidpi: Bool = true
+    // Legacy properties (backing storage)
+    private var _padding: CGFloat = 2.0
+    private var _styleString: String = "round"
+    private var _hidpi: Bool = true
 
     /// Callback invoked when config changes (for border refresh)
-    var onConfigChanged: (() -> Void)?
+    private var _onConfigChanged: (() -> Void)?
+    var onConfigChanged: (() -> Void)? {
+        get { lock.withLock { _onConfigChanged } }
+        set { lock.withLock { _onConfigChanged = newValue } }
+    }
+
+    /// Public padding accessor for BorderWindow access
+    var padding: CGFloat {
+        get { lock.withLock { _padding } }
+        set { lock.withLock { _padding = newValue } }
+    }
 
     private init() {}
 
@@ -45,25 +60,29 @@ class BorderConfigManager {
 
     /// Active window border style
     var activeStyle: BorderStyle {
-        BorderStyle(
-            color: activeColor,
-            width: activeWidth,
-            cornerRadius: activeCornerRadius,
-            opacity: activeOpacity,
-            styleType: parseStyleType(styleString)
-        )
+        lock.withLock {
+            BorderStyle(
+                color: _activeColor,
+                width: _activeWidth,
+                cornerRadius: _activeCornerRadius,
+                opacity: _activeOpacity,
+                styleType: parseStyleType(_styleString)
+            )
+        }
     }
 
     /// Inactive window border style (nil if disabled)
     var inactiveStyle: BorderStyle? {
-        guard inactiveEnabled else { return nil }
-        return BorderStyle(
-            color: inactiveColor,
-            width: inactiveWidth,
-            cornerRadius: inactiveCornerRadius,
-            opacity: inactiveOpacity,
-            styleType: parseStyleType(styleString)
-        )
+        lock.withLock {
+            guard _inactiveEnabled else { return nil }
+            return BorderStyle(
+                color: _inactiveColor,
+                width: _inactiveWidth,
+                cornerRadius: _inactiveCornerRadius,
+                opacity: _inactiveOpacity,
+                styleType: parseStyleType(_styleString)
+            )
+        }
     }
 
     // MARK: - Configuration Update
@@ -71,98 +90,102 @@ class BorderConfigManager {
     /// Update configuration from RPC params
     /// Supports both new nested schema and legacy flat schema
     func update(from config: [String: Any]) {
-        if let enabled = config["enabled"] as? Bool {
-            self.enabled = enabled
-        }
-
-        // New nested schema
-        if let activeConfig = config["active"] as? [String: Any] {
-            updateActiveStyle(from: activeConfig)
-        }
-
-        if let inactiveConfig = config["inactive"] as? [String: Any] {
-            updateInactiveStyle(from: inactiveConfig)
-        }
-
-        // Legacy flat schema (backwards compatibility)
-        if let width = (config["width"] as? NSNumber)?.doubleValue {
-            self.activeWidth = clamp(CGFloat(width), min: 1, max: 20)
-        }
-
-        if let cornerRadius = (config["corner_radius"] as? NSNumber)?.doubleValue {
-            self.activeCornerRadius = clamp(CGFloat(cornerRadius), min: 0, max: 50)
-        }
-
-        if let padding = (config["padding"] as? NSNumber)?.doubleValue {
-            self.padding = CGFloat(padding)
-        }
-
-        if let style = config["style"] as? String {
-            self.styleString = style
-        }
-
-        if let hidpi = config["hidpi"] as? Bool {
-            self.hidpi = hidpi
-        }
-
-        // Legacy color parsing
-        if let colorStr = config["active_window_color"] as? String {
-            if let color = parseHexColor(colorStr) {
-                self.activeColor = color
+        let callback: (() -> Void)? = lock.withLock {
+            if let enabled = config["enabled"] as? Bool {
+                self._enabled = enabled
             }
-        }
 
-        if let colorStr = config["inactive_color"] as? String {
-            if let color = parseHexColor(colorStr) {
-                self.inactiveColor = color
+            // New nested schema
+            if let activeConfig = config["active"] as? [String: Any] {
+                updateActiveStyleLocked(from: activeConfig)
             }
+
+            if let inactiveConfig = config["inactive"] as? [String: Any] {
+                updateInactiveStyleLocked(from: inactiveConfig)
+            }
+
+            // Legacy flat schema (backwards compatibility)
+            if let width = (config["width"] as? NSNumber)?.doubleValue {
+                self._activeWidth = clamp(CGFloat(width), min: 1, max: 20)
+            }
+
+            if let cornerRadius = (config["corner_radius"] as? NSNumber)?.doubleValue {
+                self._activeCornerRadius = clamp(CGFloat(cornerRadius), min: 0, max: 50)
+            }
+
+            if let padding = (config["padding"] as? NSNumber)?.doubleValue {
+                self._padding = CGFloat(padding)
+            }
+
+            if let style = config["style"] as? String {
+                self._styleString = style
+            }
+
+            if let hidpi = config["hidpi"] as? Bool {
+                self._hidpi = hidpi
+            }
+
+            // Legacy color parsing
+            if let colorStr = config["active_window_color"] as? String {
+                if let color = parseHexColor(colorStr) {
+                    self._activeColor = color
+                }
+            }
+
+            if let colorStr = config["inactive_color"] as? String {
+                if let color = parseHexColor(colorStr) {
+                    self._inactiveColor = color
+                }
+            }
+
+            return self._onConfigChanged
         }
 
-        // Notify listeners of config change
-        onConfigChanged?()
+        // Notify listeners of config change (outside lock to prevent deadlock)
+        callback?()
     }
 
     // MARK: - Private Helpers
 
-    /// Update active border style from config dictionary
-    private func updateActiveStyle(from config: [String: Any]) {
+    /// Update active border style from config dictionary (must be called with lock held)
+    private func updateActiveStyleLocked(from config: [String: Any]) {
         if let colorStr = config["color"] as? String, let color = parseHexColor(colorStr) {
-            self.activeColor = color
+            self._activeColor = color
         }
 
         if let width = (config["width"] as? NSNumber)?.doubleValue {
-            self.activeWidth = clamp(CGFloat(width), min: 1, max: 20)
+            self._activeWidth = clamp(CGFloat(width), min: 1, max: 20)
         }
 
         if let cornerRadius = (config["cornerRadius"] as? NSNumber)?.doubleValue {
-            self.activeCornerRadius = clamp(CGFloat(cornerRadius), min: 0, max: 50)
+            self._activeCornerRadius = clamp(CGFloat(cornerRadius), min: 0, max: 50)
         }
 
         if let opacity = (config["opacity"] as? NSNumber)?.doubleValue {
-            self.activeOpacity = clamp(CGFloat(opacity), min: 0, max: 1)
+            self._activeOpacity = clamp(CGFloat(opacity), min: 0, max: 1)
         }
     }
 
-    /// Update inactive border style from config dictionary
-    private func updateInactiveStyle(from config: [String: Any]) {
+    /// Update inactive border style from config dictionary (must be called with lock held)
+    private func updateInactiveStyleLocked(from config: [String: Any]) {
         if let enabled = config["enabled"] as? Bool {
-            self.inactiveEnabled = enabled
+            self._inactiveEnabled = enabled
         }
 
         if let colorStr = config["color"] as? String, let color = parseHexColor(colorStr) {
-            self.inactiveColor = color
+            self._inactiveColor = color
         }
 
         if let width = (config["width"] as? NSNumber)?.doubleValue {
-            self.inactiveWidth = clamp(CGFloat(width), min: 1, max: 20)
+            self._inactiveWidth = clamp(CGFloat(width), min: 1, max: 20)
         }
 
         if let cornerRadius = (config["cornerRadius"] as? NSNumber)?.doubleValue {
-            self.inactiveCornerRadius = clamp(CGFloat(cornerRadius), min: 0, max: 50)
+            self._inactiveCornerRadius = clamp(CGFloat(cornerRadius), min: 0, max: 50)
         }
 
         if let opacity = (config["opacity"] as? NSNumber)?.doubleValue {
-            self.inactiveOpacity = clamp(CGFloat(opacity), min: 0, max: 1)
+            self._inactiveOpacity = clamp(CGFloat(opacity), min: 0, max: 1)
         }
     }
 

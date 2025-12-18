@@ -1187,12 +1187,29 @@ class StateManager {
 
     func handleDisplayConfigurationChanged() {
         queue.async {
-            Task {
-                await EventLog.shared.log("dsp.config", [:])
-            }
+            // Capture old display UUIDs before refresh
+            let oldDisplayUUIDs = Set(self.state.displays.map { $0.uuid })
+
             self.refreshDisplays()
             self.refreshSpaces()
+
+            // Detect disconnected displays
+            let newDisplayUUIDs = Set(self.state.displays.map { $0.uuid })
+            let disconnectedDisplays = oldDisplayUUIDs.subtracting(newDisplayUUIDs)
+
+            // Notify border system of disconnects
+            for displayUUID in disconnectedDisplays {
+                self.borderEvents?.handleDisplayDisconnected(displayUUID: displayUUID)
+            }
+
             self.state.metadata.update()
+
+            Task {
+                await EventLog.shared.log("dsp.config", [
+                    "removed": disconnectedDisplays.count,
+                    "total": newDisplayUUIDs.count
+                ])
+            }
         }
     }
 
