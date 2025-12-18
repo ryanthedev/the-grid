@@ -38,6 +38,9 @@ class BorderConfigManager {
     private var _inactiveWidth: CGFloat = 3.0
     private var _inactiveCornerRadius: CGFloat = 8.0
     private var _inactiveOpacity: CGFloat = 1.0
+    private var _inactiveGlowRadius: CGFloat? = nil
+    private var _inactiveGlowColor: CGColor? = nil
+    private var _inactiveGlowOpacity: CGFloat? = nil
 
     // Legacy properties (backing storage)
     private var _padding: CGFloat = 2.0
@@ -86,7 +89,10 @@ class BorderConfigManager {
                 width: _inactiveWidth,
                 cornerRadius: _inactiveCornerRadius,
                 opacity: _inactiveOpacity,
-                styleType: parseStyleType(_styleString)
+                styleType: parseStyleType(_styleString),
+                glowRadius: _inactiveGlowRadius,
+                glowColor: _inactiveGlowColor,
+                glowOpacity: _inactiveGlowOpacity
             )
         }
     }
@@ -204,6 +210,18 @@ class BorderConfigManager {
 
         if let opacity = (config["opacity"] as? NSNumber)?.doubleValue {
             self._inactiveOpacity = clamp(CGFloat(opacity), min: 0, max: 1)
+        }
+
+        if let glowRadius = (config["glowRadius"] as? NSNumber)?.doubleValue {
+            self._inactiveGlowRadius = CGFloat(glowRadius)
+        }
+
+        if let glowColorStr = config["glowColor"] as? String, let color = parseHexColor(glowColorStr) {
+            self._inactiveGlowColor = color
+        }
+
+        if let glowOpacity = (config["glowOpacity"] as? NSNumber)?.doubleValue {
+            self._inactiveGlowOpacity = clamp(CGFloat(glowOpacity), min: 0, max: 1)
         }
     }
 

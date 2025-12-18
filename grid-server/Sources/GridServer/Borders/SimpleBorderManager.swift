@@ -282,14 +282,16 @@ class SimpleBorderManager {
         for (windowID, border) in bordersCopy {
             // Get window's cell assignment
             guard let windowCellID = assignments[windowID] else {
-                // Window not in assignments - should have been cleaned up
-                border.hide(reason: "not_assigned")
+                // Window not in assignments - use updateStyle(nil) to properly hide
+                // (ensures compositor alpha workaround is resolved, not just isVisible flag)
+                border.updateStyle(style: nil, styleType: "not_assigned")
                 continue
             }
 
             // Only show borders for windows in the active cell
             guard windowCellID == activeCell else {
-                border.hide(reason: "cell_inactive")
+                // Use updateStyle(nil) instead of hide() to properly handle alpha state
+                border.updateStyle(style: nil, styleType: "cell_inactive")
                 continue
             }
 
@@ -306,6 +308,23 @@ class SimpleBorderManager {
                 // Other windows in cell get inactive style (or nil if disabled)
                 style = config.inactiveStyle
                 styleType = "inactive"
+            }
+
+            // Capture before Task to avoid data race (windowStyleTypes accessed on background thread)
+            let prevStyleType = windowStyleTypes[windowID] ?? "none"
+            let hasActiveStyle = config.activeStyle != nil
+            let hasInactiveStyle = config.inactiveStyle != nil
+
+            // ULTRADEBUG: Log style determination
+            Task {
+                await EventLog.shared.log("dbg.style", [
+                    "wid": windowID,
+                    "isFocused": isFocused,
+                    "styleType": styleType,
+                    "prevStyleType": prevStyleType,
+                    "hasActiveStyle": hasActiveStyle,
+                    "hasInactiveStyle": hasInactiveStyle
+                ])
             }
 
             // Check if style type changed - if so, recreate the border window
@@ -375,6 +394,18 @@ class SimpleBorderManager {
             // Update border style (nil hides the border)
             currentBorder.updateStyle(style: style, styleType: styleType)
 
+            // ULTRADEBUG: Log actual style values being applied
+            Task {
+                await EventLog.shared.log("dbg.updateStyle", [
+                    "wid": windowID,
+                    "styleType": styleType,
+                    "styleNil": style == nil,
+                    "opacity": style?.opacity ?? -1,
+                    "cornerRadius": style?.cornerRadius ?? -1,
+                    "width": style?.width ?? -1
+                ])
+            }
+
             // Log if visible
             if style != nil {
                 Task {
@@ -398,11 +429,12 @@ class SimpleBorderManager {
 
     private func handleWindowMovedImpl(windowID: UInt32, newFrame: CGRect) {
         // Find the border for this window
-        guard let border = windowBorders[windowID], border.isVisible else {
+        // Note: Update position even if hidden - allows recovery when visibility is restored
+        guard let border = windowBorders[windowID] else {
             return
         }
 
-        // Update position
+        // Update position (works for both visible and hidden borders)
         border.update(targetFrame: newFrame)
 
         // Log border move event

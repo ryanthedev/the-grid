@@ -223,13 +223,14 @@ class BorderWindow {
         Task { await EventLog.shared.log("bdr.move", ["wid": windowID, "targetID": targetWindowID, "frame": [borderBounds.origin.x, borderBounds.origin.y, borderBounds.size.width, borderBounds.size.height]]) }
 
         // Update shape if size changed
-        if borderBounds.size != currentBounds.size {
+        let needsResize = borderBounds.size != currentBounds.size
+        let wasVisible = isVisible
+
+        if needsResize {
             // CRITICAL: Hide window before shape change to prevent compositor race condition.
             // Without this, the Window Server may composite the resized window (with empty
             // backing store) before we can redraw, causing a "white box" flash.
-            // NOTE: We don't update isVisible here - caller's show() restores both alpha
-            // and state consistency. This is a temporary compositor workaround.
-            if isVisible {
+            if wasVisible {
                 _ = SLSSetWindowAlpha(connectionID, windowID, 0.0)
             }
 
@@ -238,7 +239,7 @@ class BorderWindow {
             var region: CFTypeRef?
             guard CGSNewRegionWithRect(&bounds, &region) == .success, let shapeRegion = region else {
                 // Restore visibility if we were visible before hiding for resize
-                if isVisible {
+                if wasVisible {
                     _ = SLSSetWindowAlpha(connectionID, windowID, 1.0)
                 }
                 Task { await EventLog.shared.log("bdr.fail", ["wid": windowID, "reason": "resize_region_failed", "bounds": [borderBounds.origin.x, borderBounds.origin.y, borderBounds.size.width, borderBounds.size.height]]) }
@@ -254,9 +255,39 @@ class BorderWindow {
 
             // Mark context as needing recreation after shape change
             context = nil
-        }
 
-        currentBounds = borderBounds
+            // Update bounds before redraw so we use the new size
+            currentBounds = borderBounds
+
+            // If we were visible and have a style, redraw immediately to restore visibility.
+            // This handles the case where update() is called without a subsequent updateStyle().
+            if wasVisible, let style = currentStyle,
+               currentBounds.size.width > 0 && currentBounds.size.height > 0 {
+                // Recreate context after shape change
+                _ = SLSFlushWindowContentRegion(connectionID, windowID, nil)
+                context = SLWindowContextCreate(connectionID, windowID, nil)
+
+                if let drawContext = context {
+                    let drawBounds = CGRect(origin: .zero, size: currentBounds.size)
+                    BorderRenderer.draw(in: drawContext, bounds: drawBounds, style: style)
+                    _ = SLSFlushWindowContentRegion(connectionID, windowID, nil)
+
+                    // Restore visibility
+                    show()
+
+                    Task {
+                        await EventLog.shared.log("bdr.resize_redraw", [
+                            "wid": windowID,
+                            "targetID": targetWindowID,
+                            "bounds": [currentBounds.origin.x, currentBounds.origin.y, currentBounds.size.width, currentBounds.size.height]
+                        ])
+                    }
+                }
+            }
+        } else {
+            // No resize - just update bounds for position change
+            currentBounds = borderBounds
+        }
 
         // Re-order to stay below target
         if isVisible {

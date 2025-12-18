@@ -66,7 +66,7 @@ enum BorderRenderer {
         if let glowRadius = style.glowRadius, glowRadius > 0 {
             let glowColor = style.glowColor ?? style.color
             let glowOpacity = style.glowOpacity ?? 0.5
-            let layers = Int(glowRadius / 2)
+            let layers = max(1, Int(glowRadius / 2))  // Ensure at least 1 layer
 
             for i in (1...layers).reversed() {
                 let layerWidth = style.width + CGFloat(i) * 2
