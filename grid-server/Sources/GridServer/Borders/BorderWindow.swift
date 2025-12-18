@@ -8,6 +8,89 @@
 import Foundation
 import CoreGraphics
 
+/// Animation type for border effects
+enum AnimationType: String {
+    case none
+    case pulse      // Sharp pulse effect
+    case breathe    // Smooth breathing effect
+    case fade       // Linear fade in/out
+}
+
+/// Handles animated border effects (pulse, breathe, fade)
+class BorderAnimator {
+    private var timer: DispatchSourceTimer?
+    private var phase: CGFloat = 0
+    private let duration: CGFloat
+    private let intensity: CGFloat
+    private let type: AnimationType
+
+    init(type: AnimationType, duration: CGFloat = 2.0, intensity: CGFloat = 0.3) {
+        self.type = type
+        self.duration = max(0.1, duration)  // Prevent division by zero
+        self.intensity = min(1.0, max(0.0, intensity))
+    }
+
+    func start(onUpdate: @escaping (CGFloat) -> Void) {
+        stop()  // Cancel any existing timer
+
+        guard type != .none else { return }
+
+        let queue = DispatchQueue(label: "com.thegrid.border.animator")
+        timer = DispatchSource.makeTimerSource(queue: queue)
+
+        // 30 FPS update rate (good balance between smoothness and performance)
+        let frameRate: Double = 30.0
+        timer?.schedule(deadline: .now(), repeating: 1.0 / frameRate)
+
+        timer?.setEventHandler { [weak self] in
+            guard let self = self else { return }
+
+            self.phase += CGFloat(1.0 / frameRate) / self.duration
+            if self.phase >= 1.0 {
+                self.phase = 0
+            }
+
+            let value = self.calculateAnimationValue()
+            DispatchQueue.main.async {
+                onUpdate(value)
+            }
+        }
+
+        timer?.resume()
+    }
+
+    private func calculateAnimationValue() -> CGFloat {
+        let normalized = phase * 2.0 * .pi
+
+        switch type {
+        case .none:
+            return 1.0
+        case .pulse:
+            // Sharp pulse effect
+            let pulseValue = abs(sin(normalized))
+            return 1.0 - (pulseValue * intensity)
+        case .breathe:
+            // Smooth breathing effect (slower at peaks)
+            let breatheValue = (sin(normalized - .pi / 2) + 1.0) / 2.0
+            return 1.0 - (breatheValue * intensity)
+        case .fade:
+            // Linear fade in/out
+            let fadeValue = phase < 0.5 ? phase * 2.0 : (1.0 - phase) * 2.0
+            return 1.0 - (fadeValue * intensity)
+        }
+    }
+
+    func stop() {
+        timer?.cancel()
+        timer = nil
+        phase = 0
+    }
+
+    deinit {
+        stop()
+    }
+}
+
 /// A single border overlay window that tracks a target window
 class BorderWindow {
     private let connectionID: Int32
@@ -30,6 +113,9 @@ class BorderWindow {
     /// Whether the border is currently visible
     private(set) var isVisible: Bool = false
 
+    /// Animation controller for effects
+    private var animator: BorderAnimator?
+
     /// Get current style info for debugging/querying
     var styleInfo: (color: [CGFloat], width: CGFloat, isVisible: Bool)? {
         guard let style = currentStyle else { return nil }
@@ -50,6 +136,10 @@ class BorderWindow {
     }
 
     deinit {
+        // Stop animation before cleanup
+        animator?.stop()
+        animator = nil
+
         // Capture values BEFORE any operations to avoid capturing self during deallocation
         let wid = windowID
         let targetID = targetWindowID
@@ -147,6 +237,10 @@ class BorderWindow {
     /// Destroy the overlay window
     func destroy() {
         guard windowID != 0 else { return }
+
+        // Stop any animation
+        animator?.stop()
+        animator = nil
 
         // CRITICAL: Hide window before releasing (removes from screen)
         hide()
@@ -362,6 +456,56 @@ class BorderWindow {
             return radii[0]  // Top-left corner radius
         }
         return fallback
+    }
+
+    /// Configure animation for the border
+    /// - Parameters:
+    ///   - type: Animation type (none, pulse, breathe, fade)
+    ///   - duration: Full animation cycle duration in seconds
+    ///   - intensity: Animation intensity (0.0-1.0)
+    func configureAnimation(type: String?, duration: CGFloat?, intensity: CGFloat?) {
+        // Stop existing animation
+        animator?.stop()
+        animator = nil
+
+        guard let typeStr = type,
+              let animType = AnimationType(rawValue: typeStr),
+              animType != .none else {
+            // Reset alpha to full if no animation
+            if windowID != 0 {
+                _ = SLSSetWindowAlpha(connectionID, windowID, 1.0)
+            }
+            return
+        }
+
+        let animDuration = duration ?? 2.0
+        let animIntensity = intensity ?? 0.3
+
+        animator = BorderAnimator(type: animType, duration: animDuration, intensity: animIntensity)
+
+        animator?.start { [weak self] value in
+            guard let self = self, self.windowID != 0, self.isVisible else { return }
+            _ = SLSSetWindowAlpha(self.connectionID, self.windowID, Float(value))
+        }
+
+        Task {
+            await EventLog.shared.log("bdr.anim", [
+                "wid": windowID,
+                "type": typeStr,
+                "duration": animDuration,
+                "intensity": animIntensity
+            ])
+        }
+    }
+
+    /// Stop any running animation
+    func stopAnimation() {
+        animator?.stop()
+        animator = nil
+        // Reset alpha to full
+        if windowID != 0 {
+            _ = SLSSetWindowAlpha(connectionID, windowID, isVisible ? 1.0 : 0.0)
+        }
     }
 
     /// Move the border window to the same space as the target window

@@ -92,27 +92,46 @@ type AppRule struct {
 	PreferredStackMode types.StackMode `yaml:"preferredStackMode,omitempty" json:"preferredStackMode,omitempty"`
 }
 
+// AnimationConfig defines animation settings for borders
+type AnimationConfig struct {
+	Type      string   `yaml:"type,omitempty" json:"type,omitempty"`           // none, pulse, breathe, fade
+	Duration  *float64 `yaml:"duration,omitempty" json:"duration,omitempty"`   // seconds
+	Intensity *float64 `yaml:"intensity,omitempty" json:"intensity,omitempty"` // 0.0-1.0
+}
+
 // BorderStyle defines the visual appearance of a border
 type BorderStyle struct {
-	Color        string   `yaml:"color" json:"color"`
-	Width        float64  `yaml:"width" json:"width"`
-	CornerRadius float64  `yaml:"cornerRadius" json:"cornerRadius"`
-	Opacity      float64  `yaml:"opacity" json:"opacity"`
-	GlowRadius   *float64 `yaml:"glowRadius,omitempty" json:"glowRadius,omitempty"`
-	GlowColor    *string  `yaml:"glowColor,omitempty" json:"glowColor,omitempty"`
-	GlowOpacity  *float64 `yaml:"glowOpacity,omitempty" json:"glowOpacity,omitempty"`
+	Color         string           `yaml:"color" json:"color"`
+	Width         float64          `yaml:"width" json:"width"`
+	CornerRadius  float64          `yaml:"cornerRadius" json:"cornerRadius"`
+	Opacity       float64          `yaml:"opacity" json:"opacity"`
+	GlowRadius    *float64         `yaml:"glowRadius,omitempty" json:"glowRadius,omitempty"`
+	GlowColor     *string          `yaml:"glowColor,omitempty" json:"glowColor,omitempty"`
+	GlowOpacity   *float64         `yaml:"glowOpacity,omitempty" json:"glowOpacity,omitempty"`
+	GlowSpread    *float64         `yaml:"glowSpread,omitempty" json:"glowSpread,omitempty"`
+	ShadowRadius  *float64         `yaml:"shadowRadius,omitempty" json:"shadowRadius,omitempty"`
+	ShadowOffset  *[]float64       `yaml:"shadowOffset,omitempty" json:"shadowOffset,omitempty"`
+	ShadowColor   *string          `yaml:"shadowColor,omitempty" json:"shadowColor,omitempty"`
+	ShadowOpacity *float64         `yaml:"shadowOpacity,omitempty" json:"shadowOpacity,omitempty"`
+	Animation     *AnimationConfig `yaml:"animation,omitempty" json:"animation,omitempty"`
 }
 
 // InactiveBorderStyle defines the inactive border style with an enabled flag
 type InactiveBorderStyle struct {
-	Enabled      bool     `yaml:"enabled" json:"enabled"`
-	Color        string   `yaml:"color" json:"color"`
-	Width        float64  `yaml:"width" json:"width"`
-	CornerRadius float64  `yaml:"cornerRadius" json:"cornerRadius"`
-	Opacity      float64  `yaml:"opacity" json:"opacity"`
-	GlowRadius   *float64 `yaml:"glowRadius,omitempty" json:"glowRadius,omitempty"`
-	GlowColor    *string  `yaml:"glowColor,omitempty" json:"glowColor,omitempty"`
-	GlowOpacity  *float64 `yaml:"glowOpacity,omitempty" json:"glowOpacity,omitempty"`
+	Enabled       bool             `yaml:"enabled" json:"enabled"`
+	Color         string           `yaml:"color" json:"color"`
+	Width         float64          `yaml:"width" json:"width"`
+	CornerRadius  float64          `yaml:"cornerRadius" json:"cornerRadius"`
+	Opacity       float64          `yaml:"opacity" json:"opacity"`
+	GlowRadius    *float64         `yaml:"glowRadius,omitempty" json:"glowRadius,omitempty"`
+	GlowColor     *string          `yaml:"glowColor,omitempty" json:"glowColor,omitempty"`
+	GlowOpacity   *float64         `yaml:"glowOpacity,omitempty" json:"glowOpacity,omitempty"`
+	GlowSpread    *float64         `yaml:"glowSpread,omitempty" json:"glowSpread,omitempty"`
+	ShadowRadius  *float64         `yaml:"shadowRadius,omitempty" json:"shadowRadius,omitempty"`
+	ShadowOffset  *[]float64       `yaml:"shadowOffset,omitempty" json:"shadowOffset,omitempty"`
+	ShadowColor   *string          `yaml:"shadowColor,omitempty" json:"shadowColor,omitempty"`
+	ShadowOpacity *float64         `yaml:"shadowOpacity,omitempty" json:"shadowOpacity,omitempty"`
+	Animation     *AnimationConfig `yaml:"animation,omitempty" json:"animation,omitempty"`
 }
 
 // BorderConfig defines window border appearance

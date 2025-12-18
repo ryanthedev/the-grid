@@ -31,6 +31,14 @@ class BorderConfigManager {
     private var _activeGlowRadius: CGFloat? = nil
     private var _activeGlowColor: CGColor? = nil
     private var _activeGlowOpacity: CGFloat? = nil
+    private var _activeGlowSpread: CGFloat? = nil
+    private var _activeShadowRadius: CGFloat? = nil
+    private var _activeShadowOffset: CGSize? = nil
+    private var _activeShadowColor: CGColor? = nil
+    private var _activeShadowOpacity: CGFloat? = nil
+    private var _activeAnimationType: String? = nil
+    private var _activeAnimationDuration: CGFloat? = nil
+    private var _activeAnimationIntensity: CGFloat? = nil
 
     // Inactive border configuration (backing storage)
     private var _inactiveEnabled: Bool = true
@@ -41,6 +49,14 @@ class BorderConfigManager {
     private var _inactiveGlowRadius: CGFloat? = nil
     private var _inactiveGlowColor: CGColor? = nil
     private var _inactiveGlowOpacity: CGFloat? = nil
+    private var _inactiveGlowSpread: CGFloat? = nil
+    private var _inactiveShadowRadius: CGFloat? = nil
+    private var _inactiveShadowOffset: CGSize? = nil
+    private var _inactiveShadowColor: CGColor? = nil
+    private var _inactiveShadowOpacity: CGFloat? = nil
+    private var _inactiveAnimationType: String? = nil
+    private var _inactiveAnimationDuration: CGFloat? = nil
+    private var _inactiveAnimationIntensity: CGFloat? = nil
 
     // Legacy properties (backing storage)
     private var _padding: CGFloat = 2.0
@@ -60,6 +76,20 @@ class BorderConfigManager {
         set { lock.withLock { _padding = newValue } }
     }
 
+    /// Active animation configuration
+    var activeAnimation: (type: String?, duration: CGFloat?, intensity: CGFloat?) {
+        lock.withLock {
+            (_activeAnimationType, _activeAnimationDuration, _activeAnimationIntensity)
+        }
+    }
+
+    /// Inactive animation configuration
+    var inactiveAnimation: (type: String?, duration: CGFloat?, intensity: CGFloat?) {
+        lock.withLock {
+            (_inactiveAnimationType, _inactiveAnimationDuration, _inactiveAnimationIntensity)
+        }
+    }
+
     private init() {}
 
     // MARK: - Computed Properties
@@ -75,7 +105,12 @@ class BorderConfigManager {
                 styleType: parseStyleType(_styleString),
                 glowRadius: _activeGlowRadius,
                 glowColor: _activeGlowColor,
-                glowOpacity: _activeGlowOpacity
+                glowOpacity: _activeGlowOpacity,
+                glowSpread: _activeGlowSpread,
+                shadowRadius: _activeShadowRadius,
+                shadowOffset: _activeShadowOffset,
+                shadowColor: _activeShadowColor,
+                shadowOpacity: _activeShadowOpacity
             )
         }
     }
@@ -92,7 +127,12 @@ class BorderConfigManager {
                 styleType: parseStyleType(_styleString),
                 glowRadius: _inactiveGlowRadius,
                 glowColor: _inactiveGlowColor,
-                glowOpacity: _inactiveGlowOpacity
+                glowOpacity: _inactiveGlowOpacity,
+                glowSpread: _inactiveGlowSpread,
+                shadowRadius: _inactiveShadowRadius,
+                shadowOffset: _inactiveShadowOffset,
+                shadowColor: _inactiveShadowColor,
+                shadowOpacity: _inactiveShadowOpacity
             )
         }
     }
@@ -178,7 +218,7 @@ class BorderConfigManager {
         }
 
         if let glowRadius = (config["glowRadius"] as? NSNumber)?.doubleValue {
-            self._activeGlowRadius = CGFloat(glowRadius)
+            self._activeGlowRadius = clamp(CGFloat(glowRadius), min: 0, max: 50)
         }
 
         if let glowColorStr = config["glowColor"] as? String, let color = parseHexColor(glowColorStr) {
@@ -187,6 +227,39 @@ class BorderConfigManager {
 
         if let glowOpacity = (config["glowOpacity"] as? NSNumber)?.doubleValue {
             self._activeGlowOpacity = clamp(CGFloat(glowOpacity), min: 0, max: 1)
+        }
+
+        if let glowSpread = (config["glowSpread"] as? NSNumber)?.doubleValue {
+            self._activeGlowSpread = max(0.1, CGFloat(glowSpread))  // Prevent zero/negative
+        }
+
+        if let shadowRadius = (config["shadowRadius"] as? NSNumber)?.doubleValue {
+            self._activeShadowRadius = clamp(CGFloat(shadowRadius), min: 0, max: 100)
+        }
+
+        if let shadowOffset = config["shadowOffset"] as? [NSNumber], shadowOffset.count >= 2 {
+            let x = clamp(CGFloat(shadowOffset[0].doubleValue), min: -100, max: 100)
+            let y = clamp(CGFloat(shadowOffset[1].doubleValue), min: -100, max: 100)
+            self._activeShadowOffset = CGSize(width: x, height: y)
+        }
+
+        if let shadowColorStr = config["shadowColor"] as? String, let color = parseHexColor(shadowColorStr) {
+            self._activeShadowColor = color
+        }
+
+        if let shadowOpacity = (config["shadowOpacity"] as? NSNumber)?.doubleValue {
+            self._activeShadowOpacity = clamp(CGFloat(shadowOpacity), min: 0, max: 1)
+        }
+
+        // Animation config (nested or flat)
+        if let animation = config["animation"] as? [String: Any] {
+            self._activeAnimationType = animation["type"] as? String
+            if let duration = (animation["duration"] as? NSNumber)?.doubleValue {
+                self._activeAnimationDuration = CGFloat(duration)
+            }
+            if let intensity = (animation["intensity"] as? NSNumber)?.doubleValue {
+                self._activeAnimationIntensity = clamp(CGFloat(intensity), min: 0, max: 1)
+            }
         }
     }
 
@@ -213,7 +286,7 @@ class BorderConfigManager {
         }
 
         if let glowRadius = (config["glowRadius"] as? NSNumber)?.doubleValue {
-            self._inactiveGlowRadius = CGFloat(glowRadius)
+            self._inactiveGlowRadius = clamp(CGFloat(glowRadius), min: 0, max: 50)
         }
 
         if let glowColorStr = config["glowColor"] as? String, let color = parseHexColor(glowColorStr) {
@@ -222,6 +295,39 @@ class BorderConfigManager {
 
         if let glowOpacity = (config["glowOpacity"] as? NSNumber)?.doubleValue {
             self._inactiveGlowOpacity = clamp(CGFloat(glowOpacity), min: 0, max: 1)
+        }
+
+        if let glowSpread = (config["glowSpread"] as? NSNumber)?.doubleValue {
+            self._inactiveGlowSpread = max(0.1, CGFloat(glowSpread))  // Prevent zero/negative
+        }
+
+        if let shadowRadius = (config["shadowRadius"] as? NSNumber)?.doubleValue {
+            self._inactiveShadowRadius = clamp(CGFloat(shadowRadius), min: 0, max: 100)
+        }
+
+        if let shadowOffset = config["shadowOffset"] as? [NSNumber], shadowOffset.count >= 2 {
+            let x = clamp(CGFloat(shadowOffset[0].doubleValue), min: -100, max: 100)
+            let y = clamp(CGFloat(shadowOffset[1].doubleValue), min: -100, max: 100)
+            self._inactiveShadowOffset = CGSize(width: x, height: y)
+        }
+
+        if let shadowColorStr = config["shadowColor"] as? String, let color = parseHexColor(shadowColorStr) {
+            self._inactiveShadowColor = color
+        }
+
+        if let shadowOpacity = (config["shadowOpacity"] as? NSNumber)?.doubleValue {
+            self._inactiveShadowOpacity = clamp(CGFloat(shadowOpacity), min: 0, max: 1)
+        }
+
+        // Animation config (nested or flat)
+        if let animation = config["animation"] as? [String: Any] {
+            self._inactiveAnimationType = animation["type"] as? String
+            if let duration = (animation["duration"] as? NSNumber)?.doubleValue {
+                self._inactiveAnimationDuration = CGFloat(duration)
+            }
+            if let intensity = (animation["intensity"] as? NSNumber)?.doubleValue {
+                self._inactiveAnimationIntensity = clamp(CGFloat(intensity), min: 0, max: 1)
+            }
         }
     }
 
