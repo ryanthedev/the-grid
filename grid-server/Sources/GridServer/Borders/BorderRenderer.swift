@@ -67,40 +67,63 @@ enum BorderRenderer {
             )
         }
 
-        // Draw shadow (if enabled) - must be drawn first
+        // Draw shadow manually - draw outermost (most blurred) layers first,
+        // then progressively sharper layers on top, all offset from main stroke
         if let shadowRadius = style.shadowRadius, shadowRadius > 0 {
-            context.saveGState()
             let offset = style.shadowOffset ?? CGSize(width: 2, height: 4)
-            let shadowColor = (style.shadowColor ?? CGColor(gray: 0, alpha: 1))
-                .copy(alpha: style.shadowOpacity ?? 0.5)
-            context.setShadow(offset: offset, blur: shadowRadius, color: shadowColor)
-            // Draw nearly-invisible stroke to cast shadow
-            context.setStrokeColor(CGColor(gray: 0, alpha: 0.01))
-            context.setLineWidth(style.width)
-            context.addPath(path)
-            context.strokePath()
+            let shadowOpacity = style.shadowOpacity ?? 0.5
+            let baseShadowColor = style.shadowColor ?? CGColor(gray: 0, alpha: 1)
+
+            context.saveGState()
+
+            // Draw from outermost (blurriest) to innermost (sharpest)
+            // More layers = softer appearance
+            let layers = max(Int(shadowRadius / 5), 5)
+            let baseAlpha = shadowOpacity / CGFloat(layers) * 2.0  // Distribute opacity
+
+            for i in stride(from: layers, through: 1, by: -1) {
+                let progress = CGFloat(i) / CGFloat(layers)  // 1.0 -> 0.0
+
+                // Outer layers: more spread, more transparent
+                // Inner layers: tighter, slightly more opaque
+                let spreadFactor = progress
+                let layerWidth = style.width + (shadowRadius * spreadFactor * 0.5)
+                let layerAlpha = baseAlpha * (1.0 - spreadFactor * 0.3)
+
+                // All shadow layers drawn at the same offset
+                var transform = CGAffineTransform(translationX: offset.width, y: offset.height)
+                if let offsetPath = path.copy(using: &transform) {
+                    context.setStrokeColor(baseShadowColor.copy(alpha: layerAlpha) ?? baseShadowColor)
+                    context.setLineWidth(layerWidth)
+                    context.addPath(offsetPath)
+                    context.strokePath()
+                }
+            }
+
             context.restoreGState()
         }
 
-        // Draw glow layers (if enabled)
+        // Draw glow (if enabled) - uses CGContext shadow with zero offset to create
+        // uniform glow around the stroke rather than filling the interior
         if let glowRadius = style.glowRadius, glowRadius > 0 {
             let glowColor = style.glowColor ?? style.color
             let glowOpacity = style.glowOpacity ?? 0.5
-            let glowSpread = style.glowSpread ?? 1.0
-            let layers = max(3, min(20, Int(glowRadius)))  // 3-20 layers for visibility vs performance
+            let spread = style.glowSpread ?? 1.0
 
-            for i in (1...layers).reversed() {
-                let layerOffset = CGFloat(i) * 2 * glowSpread
-                let layerWidth = style.width + layerOffset
-                // Softer opacity falloff using power function
-                let layerOpacity = glowOpacity * CGFloat(pow(1.0 - Double(i)/Double(layers+1), 0.5))
+            context.saveGState()
 
-                context.setStrokeColor(glowColor)
-                context.setAlpha(layerOpacity)
-                context.setLineWidth(layerWidth)
-                context.addPath(path)
-                context.strokePath()
-            }
+            // Shadow with zero offset creates glow effect around stroke
+            let glowCGColor = glowColor.copy(alpha: glowOpacity)
+            context.setShadow(offset: .zero, blur: glowRadius * spread, color: glowCGColor)
+
+            // Draw stroke to cast the glow shadow (stroke color doesn't matter much,
+            // but using glow color with low alpha keeps it subtle)
+            context.setStrokeColor(glowColor.copy(alpha: 0.1) ?? glowColor)
+            context.setLineWidth(style.width)
+            context.addPath(path)
+            context.strokePath()
+
+            context.restoreGState()
         }
 
         // Set stroke properties for main border

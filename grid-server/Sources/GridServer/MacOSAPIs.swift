@@ -71,6 +71,8 @@ typealias SLSClearWindowTags_t = @convention(c) (Int32, UInt32, UnsafeMutablePoi
 typealias SLSSetWindowShape_t = @convention(c) (Int32, UInt32, CGFloat, CGFloat, CFTypeRef) -> CGError
 typealias SLSSetWindowOpacity_t = @convention(c) (Int32, UInt32, Bool) -> CGError
 typealias SLSSetWindowAlpha_t = @convention(c) (Int32, UInt32, Float) -> CGError
+// Shadow parameters: std (blur), density (opacity), x_offset, y_offset
+typealias SLSSetWindowShadowParameters_t = @convention(c) (Int32, UInt32, Float, Float, Int32, Int32) -> CGError
 typealias SLSOrderWindow_t = @convention(c) (Int32, UInt32, Int32, UInt32) -> CGError
 typealias SLSSetWindowLevel_t = @convention(c) (Int32, UInt32, Int32) -> CGError
 typealias SLSMoveWindow_t = @convention(c) (Int32, UInt32, UnsafePointer<CGPoint>) -> CGError
@@ -139,6 +141,7 @@ private let _SLSClearWindowTags: SLSClearWindowTags_t? = loadSymbol("SLSClearWin
 private let _SLSSetWindowShape: SLSSetWindowShape_t? = loadSymbol("SLSSetWindowShape")
 private let _SLSSetWindowOpacity: SLSSetWindowOpacity_t? = loadSymbol("SLSSetWindowOpacity")
 private let _SLSSetWindowAlpha: SLSSetWindowAlpha_t? = loadSymbol("SLSSetWindowAlpha")
+private let _SLSSetWindowShadowParameters: SLSSetWindowShadowParameters_t? = loadSymbol("SLSSetWindowShadowParameters")
 private let _SLSOrderWindow: SLSOrderWindow_t? = loadSymbol("SLSOrderWindow")
 private let _SLSSetWindowLevel: SLSSetWindowLevel_t? = loadSymbol("SLSSetWindowLevel")
 private let _SLSMoveWindow: SLSMoveWindow_t? = loadSymbol("SLSMoveWindow")
@@ -325,6 +328,12 @@ func SLSSetWindowOpacity(_ cid: Int32, _ wid: UInt32, _ opaque: Bool) -> CGError
 
 func SLSSetWindowAlpha(_ cid: Int32, _ wid: UInt32, _ alpha: Float) -> CGError {
     return _SLSSetWindowAlpha?(cid, wid, alpha) ?? .failure
+}
+
+// Set window shadow parameters
+// std: blur radius, density: shadow opacity (0-1), x/y: offset
+func SLSSetWindowShadowParameters(_ cid: Int32, _ wid: UInt32, _ std: Float, _ density: Float, _ xOffset: Int32, _ yOffset: Int32) -> CGError {
+    return _SLSSetWindowShadowParameters?(cid, wid, std, density, xOffset, yOffset) ?? .failure
 }
 
 func SLSOrderWindow(_ cid: Int32, _ wid: UInt32, _ order: Int32, _ relativeWid: UInt32) -> CGError {

@@ -37,6 +37,26 @@ func (c *Client) SendBorderConfig(ctx context.Context, cfg *config.BorderConfig)
 			if cfg.Active.GlowOpacity != nil {
 				activeConfig["glowOpacity"] = *cfg.Active.GlowOpacity
 			}
+			if cfg.Active.GlowSpread != nil {
+				activeConfig["glowSpread"] = *cfg.Active.GlowSpread
+			}
+			// Add shadow fields if present
+			if cfg.Active.ShadowRadius != nil {
+				activeConfig["shadowRadius"] = *cfg.Active.ShadowRadius
+			}
+			if cfg.Active.ShadowOffset != nil {
+				activeConfig["shadowOffset"] = *cfg.Active.ShadowOffset
+			}
+			if cfg.Active.ShadowColor != nil {
+				activeConfig["shadowColor"] = *cfg.Active.ShadowColor
+			}
+			if cfg.Active.ShadowOpacity != nil {
+				activeConfig["shadowOpacity"] = *cfg.Active.ShadowOpacity
+			}
+			// Add animation if present
+			if cfg.Active.Animation != nil {
+				activeConfig["animation"] = cfg.Active.Animation
+			}
 			configParams["active"] = activeConfig
 		}
 
@@ -57,6 +77,22 @@ func (c *Client) SendBorderConfig(ctx context.Context, cfg *config.BorderConfig)
 			}
 			if cfg.Inactive.GlowOpacity != nil {
 				inactiveConfig["glowOpacity"] = *cfg.Inactive.GlowOpacity
+			}
+			if cfg.Inactive.GlowSpread != nil {
+				inactiveConfig["glowSpread"] = *cfg.Inactive.GlowSpread
+			}
+			// Add shadow fields if present
+			if cfg.Inactive.ShadowRadius != nil {
+				inactiveConfig["shadowRadius"] = *cfg.Inactive.ShadowRadius
+			}
+			if cfg.Inactive.ShadowOffset != nil {
+				inactiveConfig["shadowOffset"] = *cfg.Inactive.ShadowOffset
+			}
+			if cfg.Inactive.ShadowColor != nil {
+				inactiveConfig["shadowColor"] = *cfg.Inactive.ShadowColor
+			}
+			if cfg.Inactive.ShadowOpacity != nil {
+				inactiveConfig["shadowOpacity"] = *cfg.Inactive.ShadowOpacity
 			}
 			configParams["inactive"] = inactiveConfig
 		}

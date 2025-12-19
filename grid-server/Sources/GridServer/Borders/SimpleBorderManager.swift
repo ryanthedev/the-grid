@@ -402,7 +402,9 @@ class SimpleBorderManager {
                     "styleNil": style == nil,
                     "opacity": style?.opacity ?? -1,
                     "cornerRadius": style?.cornerRadius ?? -1,
-                    "width": style?.width ?? -1
+                    "width": style?.width ?? -1,
+                    "shadowRadius": style?.shadowRadius ?? -1,
+                    "shadowOpacity": style?.shadowOpacity ?? -1
                 ])
             }
 

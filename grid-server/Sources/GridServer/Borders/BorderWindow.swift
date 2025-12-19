@@ -304,10 +304,30 @@ class BorderWindow {
     func update(targetFrame: CGRect) {
         guard windowID != 0 else { return }
 
-        // Calculate border bounds (larger than target by width + padding on each side)
-        // Use current style's width if available, otherwise use active style's width as default
-        let borderWidth = currentStyle?.width ?? BorderConfigManager.shared.activeStyle.width
-        let expansion = borderWidth + padding
+        // Calculate border bounds (larger than target by width + padding + effects on each side)
+        // Use current style if available, otherwise use active style as default
+        let style = currentStyle ?? BorderConfigManager.shared.activeStyle
+        let borderWidth = style.width
+
+        // Calculate glow expansion: blur radius determines how far glow extends from stroke edge
+        var glowExpansion: CGFloat = 0
+        if let glowRadius = style.glowRadius, glowRadius > 0 {
+            let spread = style.glowSpread ?? 1.0
+            glowExpansion = glowRadius * spread
+        }
+
+        // Calculate shadow expansion: radius + offset
+        var shadowExpansion: CGFloat = 0
+        if let shadowRadius = style.shadowRadius, shadowRadius > 0 {
+            let offset = style.shadowOffset ?? CGSize(width: 2, height: 4)
+            shadowExpansion = shadowRadius + max(abs(offset.width), abs(offset.height))
+        }
+
+        // Border stroke is centered on its path, so we only need half the width for expansion
+        // This makes the border hug the window edge (half inside, half outside)
+        // Additional expansion only for effects (glow/shadow)
+        let effectsExpansion = max(glowExpansion, shadowExpansion)
+        let expansion = (borderWidth / 2) + effectsExpansion
         let borderBounds = targetFrame.insetBy(dx: -expansion, dy: -expansion)
 
         // Move the window
@@ -447,6 +467,9 @@ class BorderWindow {
         // Always ensure border is shown after drawing
         // (alpha may have been set to 0 during size change in update())
         show()
+
+        // Note: Native window shadows (SLSSetWindowShadowParameters) don't work well
+        // for overlay windows - shadows are now drawn manually in BorderRenderer
     }
 
     /// Get dynamic corner radius from target window
