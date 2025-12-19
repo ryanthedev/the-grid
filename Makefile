@@ -107,12 +107,30 @@ cli-universal:
 	@echo "Created universal binary: grid-cli/bin/thegrid"
 	@file grid-cli/bin/thegrid
 
+# Create GridServer.app bundle
+app-bundle: server-universal
+	@echo "Creating GridServer.app bundle..."
+	@rm -rf dist/GridServer.app
+	@mkdir -p dist/GridServer.app/Contents/MacOS
+	@mkdir -p dist/GridServer.app/Contents/Resources
+	@cp grid-server/.build/apple/Products/Release/grid-server dist/GridServer.app/Contents/MacOS/
+	@cp grid-server/Info.plist dist/GridServer.app/Contents/
+	@sed -i '' "s/VERSION_PLACEHOLDER/$(VERSION)/g" dist/GridServer.app/Contents/Info.plist
+	@grep -q "$(VERSION)" dist/GridServer.app/Contents/Info.plist || (echo "ERROR: Version substitution failed" && exit 1)
+	@echo "Signing app bundle (inside-out)..."
+	@codesign -fs - dist/GridServer.app/Contents/MacOS/grid-server
+	@codesign -fs - dist/GridServer.app
+	@echo "Verifying app bundle..."
+	@codesign --verify --verbose dist/GridServer.app
+	@codesign -dv dist/GridServer.app 2>&1 | head -5
+	@echo "✓ GridServer.app created"
+
 # Distribution tarball with universal binaries (for Homebrew)
-dist-universal: server-universal cli-universal
+dist-universal: app-bundle cli-universal
 	@echo "Creating universal distribution tarball v$(VERSION)..."
-	@rm -rf dist
+	@rm -rf dist/thegrid-$(VERSION)
 	@mkdir -p dist/thegrid-$(VERSION)/bin
-	@cp grid-server/.build/apple/Products/Release/grid-server dist/thegrid-$(VERSION)/bin/
+	@cp -R dist/GridServer.app dist/thegrid-$(VERSION)/
 	@cp grid-cli/bin/thegrid dist/thegrid-$(VERSION)/bin/
 	@cp VERSION dist/thegrid-$(VERSION)/
 	@cp LICENSE dist/thegrid-$(VERSION)/ 2>/dev/null || echo "No LICENSE file"
@@ -125,8 +143,8 @@ dist-universal: server-universal cli-universal
 	@echo "SHA256:"
 	@shasum -a 256 dist/thegrid-$(VERSION)-darwin-universal.tar.gz
 	@echo ""
-	@echo "Verify universal binaries:"
-	@file dist/thegrid-$(VERSION)/bin/grid-server
+	@echo "Verify contents:"
+	@file dist/thegrid-$(VERSION)/GridServer.app/Contents/MacOS/grid-server
 	@file dist/thegrid-$(VERSION)/bin/thegrid
 
 # Show help
