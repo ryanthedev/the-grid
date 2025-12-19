@@ -45,3 +45,30 @@
 - Keep explanations concise
 - Code first, explanation after
 - No apologetic language or over-explaining
+- Comments always on their own line above the code, never inline to the right
+
+## Verifying Builds & Server State
+
+### Check if server is running with current build
+```bash
+# Server process start time (confirms restart)
+ps -o lstart= -p $(pgrep -f "grid-server" | head -1) 2>/dev/null
+
+# Server binary modification time (confirms rebuild)
+stat -f "%Sm" grid-server/.build/debug/grid-server
+
+# Quick ping to verify server is responding
+./grid-cli/bin/thegrid ping
+```
+
+### Check recent server events
+```bash
+# Last 5 server startup events
+grep -E "mss\.init|state\.init" ~/.local/state/thegrid/events.jsonl | tail -5
+```
+
+### Full rebuild and restart
+```bash
+make build && pkill -f grid-server && sleep 1 && \
+  nohup ./grid-server/.build/debug/grid-server --debug > /dev/null 2>&1 &
+```
