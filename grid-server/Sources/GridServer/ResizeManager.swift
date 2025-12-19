@@ -7,7 +7,6 @@
 //
 
 import Foundation
-import Logging
 
 /// Manages resize mode and coordinates resize operations
 class ResizeManager {
@@ -18,7 +17,6 @@ class ResizeManager {
     // MARK: - Properties
 
     private let mouseHandler: MouseHandler
-    private let logger: Logger
     private let queue = DispatchQueue(label: "com.grid.ResizeManager", qos: .userInitiated)
 
     /// Visual overlay for resize mode
@@ -40,12 +38,11 @@ class ResizeManager {
     // MARK: - Initialization
 
     private init() {
-        self.logger = Logger(label: "com.grid.ResizeManager")
-        self.mouseHandler = MouseHandler(logger: Logger(label: "com.grid.MouseHandler"))
-        self.overlay = ResizeOverlay(logger: Logger(label: "com.grid.ResizeOverlay"))
+        self.mouseHandler = MouseHandler()
+        self.overlay = ResizeOverlay()
 
         setupCallbacks()
-        logger.info("ResizeManager initialized")
+        Task { await EventLog.shared.log("resize.init", [:]) }
     }
 
     // MARK: - Setup
@@ -68,13 +65,13 @@ class ResizeManager {
 
     /// Start resize mode
     func start() -> Bool {
-        logger.info("Starting resize mode")
+        Task { await EventLog.shared.log("resize.start", [:]) }
         return mouseHandler.start()
     }
 
     /// Stop resize mode
     func stop() {
-        logger.info("Stopping resize mode")
+        Task { await EventLog.shared.log("resize.stop", [:]) }
         mouseHandler.stop()
     }
 
@@ -110,11 +107,11 @@ class ResizeManager {
     // MARK: - Event Handlers
 
     private func handleDragStart(resizeType: ResizeType, targetID: String, edge: ResizeEdge) {
-        logger.info("Drag started", metadata: [
-            "type": "\(resizeType)",
-            "target": "\(targetID)",
-            "edge": "\(edge)"
-        ])
+        Task { await EventLog.shared.log("resize.drag.start", [
+            "type": resizeType.rawValue,
+            "target": targetID,
+            "edge": edge.rawValue
+        ]) }
 
         // Reset accumulators
         accumulatedDeltaX = 0
@@ -162,7 +159,7 @@ class ResizeManager {
     }
 
     private func handleDragEnd() {
-        logger.info("Drag ended")
+        Task { await EventLog.shared.log("resize.drag.end", [:]) }
 
         // Reset accumulators
         accumulatedDeltaX = 0
@@ -189,11 +186,11 @@ class ResizeManager {
 
         let absDelta = abs(delta)
 
-        logger.debug("Executing resize", metadata: [
-            "type": "\(resizeType)",
-            "direction": "\(direction)",
-            "delta": "\(absDelta)"
-        ])
+        Task { await EventLog.shared.log("resize.exec", [
+            "type": resizeType.rawValue,
+            "direction": direction,
+            "delta": absDelta
+        ]) }
 
         // Execute the grid CLI command
         queue.async { [weak self] in
@@ -231,7 +228,7 @@ class ResizeManager {
         }
 
         guard let path = gridPath else {
-            logger.warning("Grid CLI not found in expected locations")
+            Task { await EventLog.shared.log("warn.resize.cli_not_found", [:]) }
             return
         }
 
@@ -249,14 +246,14 @@ class ResizeManager {
 
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
             if let output = String(data: data, encoding: .utf8), !output.isEmpty {
-                logger.debug("Grid resize output: \(output)")
+                Task { await EventLog.shared.log("dbg.resize.output", ["output": output]) }
             }
 
             if process.terminationStatus != 0 {
-                logger.warning("Grid resize failed with status \(process.terminationStatus)")
+                Task { await EventLog.shared.log("warn.resize.exec_failed", ["status": process.terminationStatus]) }
             }
         } catch {
-            logger.error("Failed to run grid resize: \(error)")
+            Task { await EventLog.shared.log("err.resize.exec", ["error": error.localizedDescription]) }
         }
     }
 }

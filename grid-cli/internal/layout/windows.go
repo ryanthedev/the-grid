@@ -179,7 +179,7 @@ func CalculateAllWindowPlacements(
 		}
 
 		// Apply cell padding inset (cell -> layout -> settings hierarchy)
-		cellPadding := getEffectivePadding(layout, cellID, settingsPadding)
+		cellPadding := GetEffectivePadding(layout, cellID, settingsPadding)
 		if cellPadding != nil {
 			resolved := cellPadding.Resolve(baseSpacing)
 			cellBounds = applyPaddingInset(cellBounds, resolved)
@@ -225,9 +225,10 @@ func CalculateAllWindowPlacements(
 	return placements
 }
 
-// getEffectivePadding returns the effective padding for a cell.
+// GetEffectivePadding returns the effective padding for a cell.
 // Priority: cell override > layout default > settings default
-func getEffectivePadding(layout *types.Layout, cellID string, settingsPadding *types.Padding) *types.Padding {
+// Exported for use by reconcile package.
+func GetEffectivePadding(layout *types.Layout, cellID string, settingsPadding *types.Padding) *types.Padding {
 	if layout != nil {
 		// Check cell-level override first
 		for _, cell := range layout.Cells {

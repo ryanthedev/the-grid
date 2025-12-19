@@ -8,22 +8,27 @@ class MessageHandler {
     typealias RequestHandler = (Request, @escaping (Response) -> Void) -> Void
 
     private var handlers: [String: RequestHandler] = [:]
-    private let logger: Logger
 
-    init(logger: Logger) {
-        self.logger = logger
+    /// Simple border manager for handling simplified border system
+    weak var simpleBorderManager: SimpleBorderManager?
+
+    init(logger: Logger? = nil) {
         registerBuiltInHandlers()
     }
 
     /// Register a handler for a specific method
     func register(method: String, handler: @escaping RequestHandler) {
         handlers[method] = handler
-        logger.debug("Registered handler", metadata: ["method": "\(method)"])
+        Task {
+            await EventLog.shared.log("msg.register", ["method": method])
+        }
     }
 
     /// Handle a request and call completion with the response
     func handle(request: Request, completion: @escaping (Response) -> Void) {
-        logger.info("Handling request", metadata: ["id": "\(request.id)", "method": "\(request.method)"])
+        Task {
+            await EventLog.shared.log("msg.handle", ["id": request.id, "method": request.method])
+        }
 
         guard let handler = handlers[request.method] else {
             let response = Response(
@@ -33,6 +38,16 @@ class MessageHandler {
                     message: "Method not found: \(request.method)"
                 )
             )
+
+            // Log error event
+            Task {
+                await EventLog.shared.log("msg.err", [
+                    "op": "method_not_found",
+                    "method": request.method,
+                    "id": request.id
+                ])
+            }
+
             completion(response)
             return
         }
@@ -86,8 +101,6 @@ class MessageHandler {
 
         // Dump - returns complete window manager state
         register(method: "dump") { [weak self] request, completion in
-            self?.logger.info("dump called - returning complete state")
-
             do {
                 // Get state from StateManager (Codable type preserves all type information)
                 let state = try StateManager.shared.getStateDictionary()
@@ -98,7 +111,9 @@ class MessageHandler {
                 )
                 completion(response)
             } catch {
-                self?.logger.error("Failed to get state: \(error)")
+                Task {
+                    await EventLog.shared.log("err.state", ["op": "dump", "error": "\(error)"])
+                }
                 let response = Response(
                     id: request.id,
                     error: ErrorInfo(
@@ -116,8 +131,6 @@ class MessageHandler {
                 completion(Response(id: request.id, error: ErrorInfo(code: -32603, message: "Handler not available")))
                 return
             }
-
-            self.logger.info("updateWindow called", metadata: ["params": "\(request.params ?? [:])"])
 
             // Extract parameters
             guard let params = request.params,
@@ -148,14 +161,24 @@ class MessageHandler {
                     id: request.id,
                     error: ErrorInfo(code: -32001, message: "Window not found: \(windowID)")
                 )
+
+                // Log error event
+                Task {
+                    await EventLog.shared.log("err.window", [
+                        "op": "updateWindow",
+                        "msg": "not_found",
+                        "wid": windowID,
+                        "id": request.id
+                    ])
+                }
+
                 completion(response)
                 return
             }
 
             // Create WindowManipulator
             let manipulator = WindowManipulator(
-                connectionID: state.metadata.connectionID,
-                logger: self.logger
+                connectionID: state.metadata.connectionID
             )
 
             var updatesApplied: [String] = []
@@ -237,6 +260,17 @@ class MessageHandler {
                         message: "Window update partially failed: \(errors.joined(separator: ", "))"
                     )
                 )
+
+                // Log error event
+                Task {
+                    await EventLog.shared.log("err.window", [
+                        "op": "updateWindow",
+                        "msg": errors.joined(separator: ", "),
+                        "wid": windowID,
+                        "id": request.id
+                    ])
+                }
+
                 completion(response)
             }
         }
@@ -259,7 +293,7 @@ class MessageHandler {
             }
 
             let state = StateManager.shared.getState()
-            let manipulator = WindowManipulator(connectionID: state.metadata.connectionID, logger: self.logger)
+            let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
 
             if manipulator.mssClient.setWindowOpacity(windowID: windowID, opacity: opacity) {
                 completion(Response(id: request.id, result: AnyCodable(["success": true, "windowId": windowId, "opacity": opacity])))
@@ -285,7 +319,7 @@ class MessageHandler {
             }
 
             let state = StateManager.shared.getState()
-            let manipulator = WindowManipulator(connectionID: state.metadata.connectionID, logger: self.logger)
+            let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
 
             if manipulator.mssClient.fadeWindowOpacity(windowID: windowID, opacity: opacity, duration: duration) {
                 completion(Response(id: request.id, result: AnyCodable(["success": true, "windowId": windowId, "opacity": opacity, "duration": duration])))
@@ -309,7 +343,7 @@ class MessageHandler {
             }
 
             let state = StateManager.shared.getState()
-            let manipulator = WindowManipulator(connectionID: state.metadata.connectionID, logger: self.logger)
+            let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
 
             if let opacity = manipulator.mssClient.getWindowOpacity(windowID) {
                 completion(Response(id: request.id, result: AnyCodable(["windowId": windowId, "opacity": opacity])))
@@ -341,7 +375,7 @@ class MessageHandler {
             }
 
             let state = StateManager.shared.getState()
-            let manipulator = WindowManipulator(connectionID: state.metadata.connectionID, logger: self.logger)
+            let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
 
             if manipulator.mssClient.setWindowLayer(windowID: windowID, layer: layer) {
                 completion(Response(id: request.id, result: AnyCodable(["success": true, "windowId": windowId, "layer": layer.description])))
@@ -365,7 +399,7 @@ class MessageHandler {
             }
 
             let state = StateManager.shared.getState()
-            let manipulator = WindowManipulator(connectionID: state.metadata.connectionID, logger: self.logger)
+            let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
 
             if let layer = manipulator.mssClient.getWindowLayer(windowID) {
                 let layerStr = layer.description
@@ -393,7 +427,7 @@ class MessageHandler {
             }
 
             let state = StateManager.shared.getState()
-            let manipulator = WindowManipulator(connectionID: state.metadata.connectionID, logger: self.logger)
+            let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
 
             if manipulator.mssClient.setWindowSticky(windowID: windowID, sticky: sticky) {
                 completion(Response(id: request.id, result: AnyCodable(["success": true, "windowId": windowId, "sticky": sticky])))
@@ -417,7 +451,7 @@ class MessageHandler {
             }
 
             let state = StateManager.shared.getState()
-            let manipulator = WindowManipulator(connectionID: state.metadata.connectionID, logger: self.logger)
+            let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
 
             if let sticky = manipulator.mssClient.isWindowSticky(windowID) {
                 completion(Response(id: request.id, result: AnyCodable(["windowId": windowId, "sticky": sticky])))
@@ -441,7 +475,7 @@ class MessageHandler {
             }
 
             let state = StateManager.shared.getState()
-            let manipulator = WindowManipulator(connectionID: state.metadata.connectionID, logger: self.logger)
+            let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
 
             if manipulator.mssClient.minimizeWindow(windowID) {
                 completion(Response(id: request.id, result: AnyCodable(["success": true, "windowId": windowId])))
@@ -465,7 +499,7 @@ class MessageHandler {
             }
 
             let state = StateManager.shared.getState()
-            let manipulator = WindowManipulator(connectionID: state.metadata.connectionID, logger: self.logger)
+            let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
 
             if manipulator.mssClient.unminimizeWindow(windowID) {
                 completion(Response(id: request.id, result: AnyCodable(["success": true, "windowId": windowId])))
@@ -489,7 +523,7 @@ class MessageHandler {
             }
 
             let state = StateManager.shared.getState()
-            let manipulator = WindowManipulator(connectionID: state.metadata.connectionID, logger: self.logger)
+            let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
 
             if let minimized = manipulator.mssClient.isWindowMinimized(windowID) {
                 completion(Response(id: request.id, result: AnyCodable(["windowId": windowId, "minimized": minimized])))
@@ -525,17 +559,38 @@ class MessageHandler {
             // Get window state to find PID
             let state = StateManager.shared.getState()
             guard let windowState = state.windows[String(wid)] else {
+                // Log error event
+                Task {
+                    await EventLog.shared.log("err.window", [
+                        "op": "window.focus",
+                        "msg": "not_found",
+                        "wid": wid,
+                        "id": request.id
+                    ])
+                }
                 completion(Response(id: request.id, error: ErrorInfo(code: -32001, message: "Window not found: \(wid)")))
                 return
             }
 
-            let manipulator = WindowManipulator(connectionID: state.metadata.connectionID, logger: self.logger)
+            let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
 
             if manipulator.focusWindow(pid: windowState.pid, windowID: wid) {
-                // Immediately update focus state (don't wait for AX notification)
+                // Update border focus state (processed asynchronously on main queue)
+                self.simpleBorderManager?.updateFocus(newFocusedWindow: wid)
+
+                // Also update StateManager (async via its internal queue)
                 StateManager.shared.handleWindowFocused(wid)
                 completion(Response(id: request.id, result: AnyCodable(["success": true, "windowId": wid])))
             } else {
+                // Log error event
+                Task {
+                    await EventLog.shared.log("err.window", [
+                        "op": "window.focus",
+                        "msg": "failed",
+                        "wid": wid,
+                        "id": request.id
+                    ])
+                }
                 completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to focus window")))
             }
         }
@@ -557,7 +612,7 @@ class MessageHandler {
             }
 
             let state = StateManager.shared.getState()
-            let manipulator = WindowManipulator(connectionID: state.metadata.connectionID, logger: self.logger)
+            let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
 
             if manipulator.mssClient.createSpace(on: displaySpaceID) {
                 completion(Response(id: request.id, result: AnyCodable(["success": true, "displaySpaceId": spaceIdStr])))
@@ -581,7 +636,7 @@ class MessageHandler {
             }
 
             let state = StateManager.shared.getState()
-            let manipulator = WindowManipulator(connectionID: state.metadata.connectionID, logger: self.logger)
+            let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
 
             if manipulator.mssClient.destroySpace(spaceID) {
                 completion(Response(id: request.id, result: AnyCodable(["success": true, "spaceId": spaceIdStr])))
@@ -605,7 +660,7 @@ class MessageHandler {
             }
 
             let state = StateManager.shared.getState()
-            let manipulator = WindowManipulator(connectionID: state.metadata.connectionID, logger: self.logger)
+            let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
 
             if manipulator.mssClient.focusSpace(spaceID) {
                 completion(Response(id: request.id, result: AnyCodable(["success": true, "spaceId": spaceIdStr])))
@@ -652,18 +707,157 @@ class MessageHandler {
             // Warp the mouse cursor to the center
             let result = CGWarpMouseCursorPosition(center)
             if result == .success {
-                self.logger.info("Mouse warped to window center", metadata: [
-                    "windowId": "\(wid)",
-                    "center": "(\(center.x), \(center.y))"
-                ])
+                Task {
+                    await EventLog.shared.log("dbg.mouse_warp", [
+                        "wid": wid,
+                        "x": center.x,
+                        "y": center.y
+                    ])
+                }
                 completion(Response(id: request.id, result: AnyCodable([
                     "success": true,
                     "windowId": wid,
                     "position": ["x": center.x, "y": center.y]
                 ])))
             } else {
-                self.logger.error("Failed to warp mouse", metadata: ["error": "\(result.rawValue)"])
+                Task {
+                    await EventLog.shared.log("err.mouse", ["op": "warp", "result": result.rawValue])
+                }
                 completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to warp mouse cursor")))
+            }
+        }
+
+        // MARK: - Border Configuration Methods
+
+        // Configure border settings (from CLI config)
+        register(method: "borders.configure") { [weak self] request, completion in
+            guard let self = self else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32603, message: "Internal error")))
+                return
+            }
+            guard let params = request.params else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
+                return
+            }
+
+            guard let configDict = params["config"]?.value as? [String: Any] else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Missing config")))
+                return
+            }
+
+            // Update the shared border configuration
+            BorderConfigManager.shared.update(from: configDict)
+
+            Task {
+                await EventLog.shared.log("dbg.border_config", [
+                    "enabled": BorderConfigManager.shared.enabled,
+                    "activeWidth": BorderConfigManager.shared.activeStyle.width,
+                    "padding": BorderConfigManager.shared.padding
+                ])
+            }
+
+            completion(Response(id: request.id, result: AnyCodable(["success": true])))
+        }
+
+        // Set cell assignments
+        register(method: "borders.setCellAssignments") { [weak self] request, completion in
+            guard let self = self else { return }
+            guard let params = request.params else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
+                return
+            }
+
+            guard let assignmentsDict = params["assignments"]?.value as? [String: String] else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Missing assignments")))
+                return
+            }
+
+            // Parse displayUUID (required for per-display caching)
+            guard let displayUUID = params["displayUUID"]?.value as? String else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Missing displayUUID")))
+                return
+            }
+
+            // Convert string windowIDs to UInt32
+            var cellAssignments: [UInt32: String] = [:]
+            for (widStr, cellID) in assignmentsDict {
+                if let wid = UInt32(widStr) {
+                    cellAssignments[wid] = cellID
+                }
+            }
+
+            // Parse cellBounds if provided (new field for simplified border system)
+            var cellBounds: [String: CGRect] = [:]
+            if let cellBoundsDict = params["cellBounds"]?.value as? [String: [String: Any]] {
+                for (cellID, boundsDict) in cellBoundsDict {
+                    if let x = (boundsDict["x"] as? NSNumber)?.doubleValue,
+                       let y = (boundsDict["y"] as? NSNumber)?.doubleValue,
+                       let width = (boundsDict["width"] as? NSNumber)?.doubleValue,
+                       let height = (boundsDict["height"] as? NSNumber)?.doubleValue {
+                        cellBounds[cellID] = CGRect(x: x, y: y, width: width, height: height)
+                    } else {
+                        Task {
+                            await EventLog.shared.log("warn.cell_bounds", ["op": "parse", "cell": cellID])
+                        }
+                    }
+                }
+            }
+
+            // Update SimpleBorderManager with per-display data
+            if let simpleBorderManager = self.simpleBorderManager {
+                simpleBorderManager.setCellAssignments(cellAssignments, forDisplay: displayUUID)
+                if !cellBounds.isEmpty {
+                    simpleBorderManager.setCellBounds(cellBounds, forDisplay: displayUUID)
+                }
+            }
+
+            Task {
+                await EventLog.shared.log("dbg.cell_assign", [
+                    "display": displayUUID,
+                    "count": cellAssignments.count
+                ])
+            }
+            completion(Response(id: request.id, result: AnyCodable(["success": true])))
+        }
+
+        // Query border info for a window
+        register(method: "borders.query") { [weak self] request, completion in
+            guard let self = self else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32603, message: "Internal error")))
+                return
+            }
+            guard let params = request.params else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
+                return
+            }
+
+            // Accept windowId as either string or int
+            var windowID: UInt32?
+            if let windowIdInt = params["windowId"]?.value as? Int {
+                windowID = UInt32(windowIdInt)
+            } else if let windowIdStr = params["windowId"]?.value as? String,
+                      let parsed = UInt32(windowIdStr) {
+                windowID = parsed
+            }
+
+            guard let wid = windowID else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Missing or invalid windowId")))
+                return
+            }
+
+            guard let borderManager = self.simpleBorderManager else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32603, message: "Border manager not available")))
+                return
+            }
+
+            if let info = borderManager.queryBorderInfo(forWindowID: wid) {
+                completion(Response(id: request.id, result: AnyCodable(info)))
+            } else {
+                completion(Response(id: request.id, result: AnyCodable([
+                    "windowId": wid,
+                    "hasBorder": false,
+                    "message": "No border found for this window"
+                ])))
             }
         }
 

@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -15,6 +17,7 @@ import (
 	"github.com/yourusername/grid-cli/internal/client"
 	gridCell "github.com/yourusername/grid-cli/internal/cell"
 	gridConfig "github.com/yourusername/grid-cli/internal/config"
+	"github.com/yourusername/grid-cli/internal/eventlog"
 	gridFocus "github.com/yourusername/grid-cli/internal/focus"
 	gridLayout "github.com/yourusername/grid-cli/internal/layout"
 	"github.com/yourusername/grid-cli/internal/logging"
@@ -40,7 +43,18 @@ var (
 	errorColor   = color.New(color.FgRed, color.Bold)
 	infoColor    = color.New(color.FgCyan)
 	keyColor     = color.New(color.FgYellow)
+
+	// Request tracking for eventlog correlation
+	currentRequestID string
+	commandError     error
 )
+
+// generateRequestID creates a short 8-character request ID for event correlation
+func generateRequestID() string {
+	b := make([]byte, 4)
+	rand.Read(b)
+	return hex.EncodeToString(b)
+}
 
 // rootCmd is the base command
 var rootCmd = &cobra.Command{
@@ -51,6 +65,25 @@ var rootCmd = &cobra.Command{
 It allows you to query window state, manipulate window positions and sizes,
 and move windows between spaces and displays.`,
 	Version: "0.1.0",
+	PersistentPreRun: func(cmd *cobra.Command, args []string) {
+		// Generate request ID and log command start
+		currentRequestID = generateRequestID()
+		commandError = nil
+
+		// Build args map with relevant command arguments
+		argsMap := make(map[string]any)
+		for _, arg := range args {
+			if len(argsMap) < 5 { // Keep it minimal
+				argsMap[fmt.Sprintf("arg%d", len(argsMap))] = arg
+			}
+		}
+
+		eventlog.Log("cmd.start", map[string]any{
+			"cmd":  cmd.CommandPath(),
+			"args": argsMap,
+			"rid":  currentRequestID,
+		})
+	},
 }
 
 // pingCmd tests server connectivity
@@ -1127,8 +1160,8 @@ var layoutApplyCmd = &cobra.Command{
 			return fmt.Errorf("failed to fetch server state: %w", err)
 		}
 
-		// 2. Reconcile local state with server
-		if err := gridReconcile.Sync(snap, runtimeState); err != nil {
+		// 2. Reconcile local state with server (includes border sync)
+		if err := gridReconcile.Sync(ctx, c, snap, runtimeState, cfg); err != nil {
 			return fmt.Errorf("failed to reconcile state: %w", err)
 		}
 
@@ -1177,8 +1210,8 @@ var layoutCycleCmd = &cobra.Command{
 			return fmt.Errorf("failed to fetch server state: %w", err)
 		}
 
-		// 2. Reconcile local state with server
-		if err := gridReconcile.Sync(snap, runtimeState); err != nil {
+		// 2. Reconcile local state with server (includes border sync)
+		if err := gridReconcile.Sync(ctx, c, snap, runtimeState, cfg); err != nil {
 			return fmt.Errorf("failed to reconcile state: %w", err)
 		}
 
@@ -1269,8 +1302,8 @@ var layoutReapplyCmd = &cobra.Command{
 			return fmt.Errorf("failed to fetch server state: %w", err)
 		}
 
-		// 2. Reconcile local state with server
-		if err := gridReconcile.Sync(snap, runtimeState); err != nil {
+		// 2. Reconcile local state with server (includes border sync)
+		if err := gridReconcile.Sync(ctx, c, snap, runtimeState, cfg); err != nil {
 			return fmt.Errorf("failed to reconcile state: %w", err)
 		}
 
@@ -1521,8 +1554,8 @@ func focusDirectionHelper(direction gridTypes.Direction, wrapAround bool, extend
 		return fmt.Errorf("failed to fetch server state: %w", err)
 	}
 
-	// 2. Reconcile local state with server
-	if err := gridReconcile.Sync(snap, runtimeState); err != nil {
+	// 2. Reconcile local state with server (includes border sync)
+	if err := gridReconcile.Sync(ctx, c, snap, runtimeState, cfg); err != nil {
 		return fmt.Errorf("failed to reconcile state: %w", err)
 	}
 
@@ -1636,8 +1669,8 @@ func moveWindowDirectionHelper(direction gridTypes.Direction, wrapAround bool, e
 		return fmt.Errorf("failed to fetch server state: %w", err)
 	}
 
-	// 2. Reconcile local state with server
-	if err := gridReconcile.Sync(snap, runtimeState); err != nil {
+	// 2. Reconcile local state with server (includes border sync)
+	if err := gridReconcile.Sync(ctx, c, snap, runtimeState, cfg); err != nil {
 		return fmt.Errorf("failed to reconcile state: %w", err)
 	}
 
@@ -1693,8 +1726,8 @@ func swapWindowDirectionHelper(direction gridTypes.Direction, mouse bool) error 
 		return fmt.Errorf("failed to fetch server state: %w", err)
 	}
 
-	// 2. Reconcile local state with server
-	if err := gridReconcile.Sync(snap, runtimeState); err != nil {
+	// 2. Reconcile local state with server (includes border sync)
+	if err := gridReconcile.Sync(ctx, c, snap, runtimeState, cfg); err != nil {
 		return fmt.Errorf("failed to reconcile state: %w", err)
 	}
 
@@ -1873,13 +1906,16 @@ var focusNextCmd = &cobra.Command{
 			return fmt.Errorf("failed to fetch server state: %w", err)
 		}
 
-		// 2. Reconcile local state with server
-		if err := gridReconcile.Sync(snap, runtimeState); err != nil {
+		// 2. Load config for border sync
+		cfg, _ := gridConfig.LoadConfig("")
+
+		// 3. Reconcile local state with server (includes border sync)
+		if err := gridReconcile.Sync(ctx, c, snap, runtimeState, cfg); err != nil {
 			logging.Error().Str("cmd", "focus-next").Err(err).Msg("failed to reconcile")
 			return fmt.Errorf("failed to reconcile state: %w", err)
 		}
 
-		// 3. Cycle focus using local state
+		// 4. Cycle focus using local state
 		windowID, err := gridFocus.CycleFocus(ctx, c, runtimeState, snap.SpaceID, true)
 		if err != nil {
 			logging.Error().Str("cmd", "focus-next").Err(err).Msg("failed to cycle")
@@ -1931,13 +1967,16 @@ var focusPrevCmd = &cobra.Command{
 			return fmt.Errorf("failed to fetch server state: %w", err)
 		}
 
-		// 2. Reconcile local state with server
-		if err := gridReconcile.Sync(snap, runtimeState); err != nil {
+		// 2. Load config for border sync
+		cfg, _ := gridConfig.LoadConfig("")
+
+		// 3. Reconcile local state with server (includes border sync)
+		if err := gridReconcile.Sync(ctx, c, snap, runtimeState, cfg); err != nil {
 			logging.Error().Str("cmd", "focus-prev").Err(err).Msg("failed to reconcile")
 			return fmt.Errorf("failed to reconcile state: %w", err)
 		}
 
-		// 3. Cycle focus using local state
+		// 4. Cycle focus using local state
 		windowID, err := gridFocus.CycleFocus(ctx, c, runtimeState, snap.SpaceID, false)
 		if err != nil {
 			logging.Error().Str("cmd", "focus-prev").Err(err).Msg("failed to cycle")
@@ -1987,12 +2026,15 @@ var focusCellCmd = &cobra.Command{
 			return fmt.Errorf("failed to fetch server state: %w", err)
 		}
 
-		// 2. Reconcile local state with server
-		if err := gridReconcile.Sync(snap, runtimeState); err != nil {
+		// 2. Load config for border sync
+		cfg, _ := gridConfig.LoadConfig("")
+
+		// 3. Reconcile local state with server (includes border sync)
+		if err := gridReconcile.Sync(ctx, c, snap, runtimeState, cfg); err != nil {
 			return fmt.Errorf("failed to reconcile state: %w", err)
 		}
 
-		// 3. Focus the cell
+		// 4. Focus the cell
 		windowID, err := gridFocus.FocusCell(ctx, c, runtimeState, snap.SpaceID, cellID)
 		if err != nil {
 			return fmt.Errorf("failed to focus cell: %w", err)
@@ -2128,8 +2170,8 @@ var resizeAdjustCmd = &cobra.Command{
 			return fmt.Errorf("failed to fetch server state: %w", err)
 		}
 
-		// 2. Reconcile local state with server
-		if err := gridReconcile.Sync(snap, runtimeState); err != nil {
+		// 2. Reconcile local state with server (includes border sync)
+		if err := gridReconcile.Sync(ctx, c, snap, runtimeState, cfg); err != nil {
 			return fmt.Errorf("failed to reconcile state: %w", err)
 		}
 
@@ -2169,8 +2211,8 @@ var resizeResetCmd = &cobra.Command{
 			return fmt.Errorf("failed to fetch server state: %w", err)
 		}
 
-		// 2. Reconcile local state with server
-		if err := gridReconcile.Sync(snap, runtimeState); err != nil {
+		// 2. Reconcile local state with server (includes border sync)
+		if err := gridReconcile.Sync(ctx, c, snap, runtimeState, cfg); err != nil {
 			return fmt.Errorf("failed to reconcile state: %w", err)
 		}
 
@@ -2251,8 +2293,8 @@ Examples:
 			return fmt.Errorf("failed to fetch server state: %w", err)
 		}
 
-		// 2. Reconcile local state with server
-		if err := gridReconcile.Sync(snap, runtimeState); err != nil {
+		// 2. Reconcile local state with server (includes border sync)
+		if err := gridReconcile.Sync(ctx, c, snap, runtimeState, cfg); err != nil {
 			return fmt.Errorf("failed to reconcile state: %w", err)
 		}
 
@@ -2308,8 +2350,8 @@ var cellSendCmd = &cobra.Command{
 			return fmt.Errorf("failed to fetch server state: %w", err)
 		}
 
-		// 2. Reconcile local state with server
-		if err := gridReconcile.Sync(snap, runtimeState); err != nil {
+		// 2. Reconcile local state with server (includes border sync)
+		if err := gridReconcile.Sync(ctx, c, snap, runtimeState, cfg); err != nil {
 			return fmt.Errorf("failed to reconcile state: %w", err)
 		}
 
@@ -2682,7 +2724,20 @@ func main() {
 	logging.Init()
 	defer logging.Close()
 
-	if err := rootCmd.Execute(); err != nil {
+	// Execute command and capture error for eventlog
+	err := rootCmd.Execute()
+
+	// Log command completion
+	data := map[string]any{
+		"rid": currentRequestID,
+		"ok":  err == nil,
+	}
+	if err != nil {
+		data["err"] = err.Error()
+	}
+	eventlog.Log("cmd.done", data)
+
+	if err != nil {
 		os.Exit(1)
 	}
 }

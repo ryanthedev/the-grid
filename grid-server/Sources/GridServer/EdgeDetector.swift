@@ -8,7 +8,6 @@
 
 import Foundation
 import CoreGraphics
-import Logging
 
 /// Result of edge detection
 struct EdgeHit {
@@ -23,12 +22,8 @@ struct EdgeDetector {
     /// Detection threshold in pixels
     let threshold: CGFloat
 
-    /// Logger
-    private let logger: Logger
-
-    init(threshold: CGFloat = 10.0, logger: Logger) {
+    init(threshold: CGFloat = 10.0) {
         self.threshold = threshold
-        self.logger = logger
     }
 
     /// Detect if point is near any resizable edge
@@ -55,14 +50,14 @@ struct EdgeDetector {
     private func detectCellBoundary(point: CGPoint, state: WindowManagerState) -> EdgeHit? {
         // Get the active space
         guard let activeSpaceID = state.metadata.activeSpaceID else {
-            logger.debug("No active space for cell boundary detection")
+            Task { await EventLog.shared.log("dbg.edge.no_active_space", [:]) }
             return nil
         }
 
         // Get windows on this space to build cell boundaries
         let spaceKey = String(activeSpaceID)
         guard let space = state.spaces[spaceKey] else {
-            logger.debug("Space not found: \(spaceKey)")
+            Task { await EventLog.shared.log("dbg.edge.space_not_found", ["space": spaceKey]) }
             return nil
         }
 
@@ -102,6 +97,12 @@ struct EdgeDetector {
                                 // Determine direction: cursor is on right of left window, or left of right window
                                 let edge: ResizeEdge = point.x < boundaryX ? .right : .left
 
+                                Task { await EventLog.shared.log("edge.detect", [
+                                    "type": "cell",
+                                    "edge": edge.rawValue,
+                                    "distance": abs(point.x - boundaryX)
+                                ]) }
+
                                 return EdgeHit(
                                     resizeType: .cell,
                                     targetID: "column",  // Generic cell boundary ID
@@ -135,6 +136,12 @@ struct EdgeDetector {
                             if point.x >= minX && point.x <= maxX {
                                 // Determine direction
                                 let edge: ResizeEdge = point.y < boundaryY ? .bottom : .top
+
+                                Task { await EventLog.shared.log("edge.detect", [
+                                    "type": "cell",
+                                    "edge": edge.rawValue,
+                                    "distance": abs(point.y - boundaryY)
+                                ]) }
 
                                 return EdgeHit(
                                     resizeType: .cell,
@@ -189,10 +196,19 @@ struct EdgeDetector {
 
                     if gap < 20 && abs(point.y - boundary) < threshold {
                         if point.x >= window.frame.minX && point.x <= window.frame.maxX {
+                            let edge: ResizeEdge = window.frame.maxY < other.frame.minY ? .bottom : .top
+
+                            Task { await EventLog.shared.log("edge.detect", [
+                                "type": "window",
+                                "window": window.id,
+                                "edge": edge.rawValue,
+                                "distance": abs(point.y - boundary)
+                            ]) }
+
                             return EdgeHit(
                                 resizeType: .window,
                                 targetID: String(window.id),
-                                edge: window.frame.maxY < other.frame.minY ? .bottom : .top,
+                                edge: edge,
                                 distance: abs(point.y - boundary)
                             )
                         }
@@ -208,10 +224,19 @@ struct EdgeDetector {
 
                     if gap < 20 && abs(point.x - boundary) < threshold {
                         if point.y >= window.frame.minY && point.y <= window.frame.maxY {
+                            let edge: ResizeEdge = window.frame.maxX < other.frame.minX ? .right : .left
+
+                            Task { await EventLog.shared.log("edge.detect", [
+                                "type": "window",
+                                "window": window.id,
+                                "edge": edge.rawValue,
+                                "distance": abs(point.x - boundary)
+                            ]) }
+
                             return EdgeHit(
                                 resizeType: .window,
                                 targetID: String(window.id),
-                                edge: window.frame.maxX < other.frame.minX ? .right : .left,
+                                edge: edge,
                                 distance: abs(point.x - boundary)
                             )
                         }

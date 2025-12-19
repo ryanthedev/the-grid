@@ -2,9 +2,11 @@ import AppKit
 import CoreGraphics
 import Foundation
 import IOKit
+import Logging
 
 /// Helper class for enriching display information from NSScreen and CGDisplay APIs
 class DisplayInfoHelper {
+    private static let logger = Logger(label: "com.grid.DisplayInfo")
 
     /// Enriches a display with comprehensive information from NSScreen and CGDisplay
     static func enrichDisplayInfo(uuid: String, screenIndex: Int, currentSpaceID: UInt64, spaces: [UInt64]) -> DisplayState {

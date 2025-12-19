@@ -9,7 +9,6 @@
 import Foundation
 import CoreGraphics
 import AppKit
-import Logging
 
 /// Resize target type
 enum ResizeType: String, Codable {
@@ -56,9 +55,6 @@ class MouseHandler {
     /// Edge detector for hit testing
     private let edgeDetector: EdgeDetector
 
-    /// Logger
-    private let logger: Logger
-
     /// Callback for resize events
     var onResize: ((ResizeType, String, ResizeEdge, CGFloat) -> Void)?
 
@@ -70,10 +66,9 @@ class MouseHandler {
 
     // MARK: - Initialization
 
-    init(logger: Logger) {
-        self.logger = logger
-        self.edgeDetector = EdgeDetector(threshold: 10.0, logger: logger)
-        logger.info("MouseHandler initialized")
+    init() {
+        self.edgeDetector = EdgeDetector(threshold: 10.0)
+        Task { await EventLog.shared.log("mouse.init", [:]) }
     }
 
     deinit {
@@ -85,7 +80,7 @@ class MouseHandler {
     /// Start capturing mouse events
     func start() -> Bool {
         guard eventTap == nil else {
-            logger.debug("MouseHandler already started")
+            Task { await EventLog.shared.log("dbg.mouse.already_started", [:]) }
             return true
         }
 
@@ -109,7 +104,7 @@ class MouseHandler {
             },
             userInfo: Unmanaged.passUnretained(self).toOpaque()
         ) else {
-            logger.error("Failed to create CGEventTap - check Accessibility permissions")
+            Task { await EventLog.shared.log("err.mouse.tap_failed", [:]) }
             return false
         }
 
@@ -119,7 +114,7 @@ class MouseHandler {
         runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
 
         guard let source = runLoopSource else {
-            logger.error("Failed to create run loop source")
+            Task { await EventLog.shared.log("err.mouse.runloop_failed", [:]) }
             CFMachPortInvalidate(tap)
             eventTap = nil
             return false
@@ -132,7 +127,7 @@ class MouseHandler {
         CGEvent.tapEnable(tap: tap, enable: true)
 
         isEnabled = true
-        logger.notice("MouseHandler started - listening for resize events")
+        Task { await EventLog.shared.log("mouse.start", [:]) }
 
         return true
     }
@@ -157,7 +152,7 @@ class MouseHandler {
         isEnabled = false
         dragState = nil
 
-        logger.notice("MouseHandler stopped")
+        Task { await EventLog.shared.log("mouse.stop", [:]) }
     }
 
     /// Check if mouse handling is active
@@ -177,7 +172,7 @@ class MouseHandler {
         case .tapDisabledByTimeout, .tapDisabledByUserInput:
             // Re-enable if disabled
             if let tap = eventTap {
-                logger.warning("Event tap was disabled, re-enabling")
+                Task { await EventLog.shared.log("warn.mouse.tap_disabled", [:]) }
                 CGEvent.tapEnable(tap: tap, enable: true)
             }
             return Unmanaged.passRetained(event)
@@ -199,7 +194,7 @@ class MouseHandler {
     private func handleMouseDown(event: CGEvent) -> Unmanaged<CGEvent>? {
         let point = event.location
 
-        logger.debug("Mouse down at (\(point.x), \(point.y))")
+        Task { await EventLog.shared.log("mouse.down", ["x": point.x, "y": point.y]) }
 
         // Get current state and check for edge hit
         let state = StateManager.shared.getState()
@@ -213,12 +208,13 @@ class MouseHandler {
                 edge: hit.edge
             )
 
-            logger.info("Resize drag started", metadata: [
-                "type": "\(hit.resizeType)",
-                "targetID": "\(hit.targetID)",
-                "edge": "\(hit.edge)",
-                "point": "(\(point.x), \(point.y))"
-            ])
+            Task { await EventLog.shared.log("resize.drag.start", [
+                "type": hit.resizeType.rawValue,
+                "target": hit.targetID,
+                "edge": hit.edge.rawValue,
+                "x": point.x,
+                "y": point.y
+            ]) }
 
             // Notify callback
             onDragStart?(hit.resizeType, hit.targetID, hit.edge)
@@ -254,10 +250,10 @@ class MouseHandler {
 
         // Only trigger resize if delta is significant
         if abs(delta) > 1.0 {
-            logger.debug("Resize drag", metadata: [
-                "delta": "\(delta)",
-                "edge": "\(state.edge)"
-            ])
+            Task { await EventLog.shared.log("mouse.drag", [
+                "delta": delta,
+                "edge": state.edge.rawValue
+            ]) }
 
             // Notify callback
             onResize?(state.resizeType, state.targetID, state.edge, delta)
@@ -279,9 +275,10 @@ class MouseHandler {
 
         let point = event.location
 
-        logger.info("Resize drag ended", metadata: [
-            "point": "(\(point.x), \(point.y))"
-        ])
+        Task { await EventLog.shared.log("resize.drag.end", [
+            "x": point.x,
+            "y": point.y
+        ]) }
 
         // Clear drag state
         dragState = nil

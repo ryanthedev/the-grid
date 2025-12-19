@@ -8,6 +8,7 @@ import (
 	"github.com/yourusername/grid-cli/internal/client"
 	"github.com/yourusername/grid-cli/internal/config"
 	"github.com/yourusername/grid-cli/internal/layout"
+	"github.com/yourusername/grid-cli/internal/reconcile"
 	"github.com/yourusername/grid-cli/internal/server"
 	"github.com/yourusername/grid-cli/internal/state"
 	"github.com/yourusername/grid-cli/internal/types"
@@ -262,7 +263,15 @@ func moveFocusCrossDisplay(
 	}
 
 	// Focus the cell on the target space
-	return focusCellByID(ctx, c, rs, targetSpaceIDStr, targetCell)
+	windowID, err := focusCellByID(ctx, c, rs, targetSpaceIDStr, targetCell)
+	if err != nil {
+		return 0, err
+	}
+
+	// Sync borders for target display so border appears immediately
+	reconcile.SyncBordersForDisplay(ctx, c, *adjacentDisplay, targetSpaceIDStr, rs, cfg)
+
+	return windowID, nil
 }
 
 // FindOppositeDisplay finds a display on the opposite edge for wrap-around.
@@ -653,7 +662,7 @@ func FindClosestCellToPoint(point types.Point, cellBounds map[string]types.Rect)
 
 // SelectCrossDisplayTargetCell determines which cell to focus when crossing displays.
 // Uses the last focused cell on the target space if available, otherwise falls back
-// to the closest cell based on visual position mapping.
+// to the closest cell with windows based on visual position mapping.
 func SelectCrossDisplayTargetCell(
 	targetSpaceState *state.SpaceState,
 	targetCellBounds map[string]types.Rect,
@@ -663,15 +672,34 @@ func SelectCrossDisplayTargetCell(
 ) string {
 	// Check if we have a previously focused cell on the target space
 	if targetSpaceState != nil && targetSpaceState.FocusedCell != "" {
-		// Verify the cell still exists in the current layout
+		// Verify the cell still exists in the current layout AND has windows
 		if _, exists := targetCellBounds[targetSpaceState.FocusedCell]; exists {
-			return targetSpaceState.FocusedCell
+			if cell := targetSpaceState.Cells[targetSpaceState.FocusedCell]; cell != nil && len(cell.Windows) > 0 {
+				return targetSpaceState.FocusedCell
+			}
 		}
 	}
 
-	// Fall back to closest cell based on visual position mapping
+	// Fall back to closest cell WITH WINDOWS based on visual position mapping
 	targetPoint := MatchVisualPosition(currentCellBounds, currentDisplayBounds, targetDisplayBounds)
-	return FindClosestCellToPoint(targetPoint, targetCellBounds)
+
+	// Filter cellBounds to only cells with windows
+	cellsWithWindows := make(map[string]types.Rect)
+	if targetSpaceState != nil {
+		for cellID, bounds := range targetCellBounds {
+			if cell := targetSpaceState.Cells[cellID]; cell != nil && len(cell.Windows) > 0 {
+				cellsWithWindows[cellID] = bounds
+			}
+		}
+	}
+
+	// If we have cells with windows, find closest among them
+	if len(cellsWithWindows) > 0 {
+		return FindClosestCellToPoint(targetPoint, cellsWithWindows)
+	}
+
+	// No cells with windows - return empty (will cause "no cells on adjacent display" error)
+	return ""
 }
 
 // GetDisplayCells calculates cell bounds for a specific display's active space.

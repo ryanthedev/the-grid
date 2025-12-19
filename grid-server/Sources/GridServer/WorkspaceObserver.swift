@@ -7,11 +7,9 @@
 
 import Foundation
 import AppKit
-import Logging
 
 /// Manages NSWorkspace notifications for system-level events
 class WorkspaceObserver {
-    private let logger = Logger(label: "com.grid.WorkspaceObserver")
     weak var stateManager: StateManager?
 
     init() {}
@@ -82,24 +80,32 @@ class WorkspaceObserver {
             object: nil
         )
 
-        logger.info("✓ Workspace observer registered for system notifications")
+        Task {
+            await EventLog.shared.log("ws.register", [:])
+        }
     }
 
     /// Stop observing
     func stopObserving() {
         NSWorkspace.shared.notificationCenter.removeObserver(self)
-        logger.debug("Workspace observer stopped")
+        Task {
+            await EventLog.shared.log("ws.stop", [:])
+        }
     }
 
     // MARK: - Space/Display Event Handlers
 
     @objc private func spaceChanged(_ notification: Notification) {
-        logger.info("📍 Active space changed (notification received)")
+        Task {
+            await EventLog.shared.log("ws.space", [:])
+        }
         stateManager?.handleSpaceChanged()
     }
 
     @objc private func screenParametersChanged(_ notification: Notification) {
-        logger.info("📐 Screen parameters changed (resolution/arrangement)")
+        Task {
+            await EventLog.shared.log("ws.screen", [:])
+        }
         stateManager?.handleDisplayConfigurationChanged()
     }
 
@@ -110,10 +116,12 @@ class WorkspaceObserver {
             return
         }
 
-        logger.info("🚀 Application launched", metadata: [
-            "app": "\(app.localizedName ?? "Unknown")",
-            "pid": "\(app.processIdentifier)"
-        ])
+        Task {
+            await EventLog.shared.log("app.launch", [
+                "app": app.localizedName ?? "?",
+                "pid": app.processIdentifier
+            ])
+        }
 
         stateManager?.handleApplicationLaunched(app)
     }
@@ -123,10 +131,12 @@ class WorkspaceObserver {
             return
         }
 
-        logger.info("💀 Application terminated", metadata: [
-            "app": "\(app.localizedName ?? "Unknown")",
-            "pid": "\(app.processIdentifier)"
-        ])
+        Task {
+            await EventLog.shared.log("app.term", [
+                "app": app.localizedName ?? "?",
+                "pid": app.processIdentifier
+            ])
+        }
 
         stateManager?.handleApplicationTerminated(app)
     }
@@ -135,11 +145,6 @@ class WorkspaceObserver {
         guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else {
             return
         }
-
-        logger.debug("Application activated", metadata: [
-            "app": "\(app.localizedName ?? "Unknown")",
-            "pid": "\(app.processIdentifier)"
-        ])
 
         stateManager?.handleApplicationActivated(app)
     }
@@ -151,10 +156,12 @@ class WorkspaceObserver {
             return
         }
 
-        logger.debug("Application hidden", metadata: [
-            "app": "\(app.localizedName ?? "Unknown")",
-            "pid": "\(app.processIdentifier)"
-        ])
+        Task {
+            await EventLog.shared.log("app.hide", [
+                "app": app.localizedName ?? "?",
+                "pid": app.processIdentifier
+            ])
+        }
 
         stateManager?.handleApplicationHidden(app)
     }
@@ -164,10 +171,12 @@ class WorkspaceObserver {
             return
         }
 
-        logger.debug("Application unhidden", metadata: [
-            "app": "\(app.localizedName ?? "Unknown")",
-            "pid": "\(app.processIdentifier)"
-        ])
+        Task {
+            await EventLog.shared.log("app.unhide", [
+                "app": app.localizedName ?? "?",
+                "pid": app.processIdentifier
+            ])
+        }
 
         stateManager?.handleApplicationUnhidden(app)
     }
@@ -175,7 +184,9 @@ class WorkspaceObserver {
     // MARK: - System Event Handlers
 
     @objc private func systemWoke(_ notification: Notification) {
-        logger.info("⏰ System woke from sleep")
+        Task {
+            await EventLog.shared.log("ws.wake", [:])
+        }
         stateManager?.handleSystemWoke()
     }
 }

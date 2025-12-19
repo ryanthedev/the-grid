@@ -8,6 +8,7 @@ type Config struct {
 	Layouts  []LayoutConfig         `yaml:"layouts" json:"layouts"`
 	Spaces   map[string]SpaceConfig `yaml:"spaces" json:"spaces"`
 	AppRules []AppRule              `yaml:"appRules" json:"appRules"`
+	Borders  *BorderConfig          `yaml:"borders,omitempty" json:"borders,omitempty"`
 }
 
 // Settings contains global application settings
@@ -56,14 +57,22 @@ type GridConfig struct {
 	Rows    []string `yaml:"rows" json:"rows"`       // Track size strings
 }
 
+// CellBorderConfigYAML is the YAML representation of per-cell border overrides
+type CellBorderConfigYAML struct {
+	ActiveCellColor *string `yaml:"active_cell_color,omitempty" json:"active_cell_color,omitempty"`
+	InactiveColor   *string `yaml:"inactive_color,omitempty" json:"inactive_color,omitempty"`
+	Style           *string `yaml:"style,omitempty" json:"style,omitempty"`
+}
+
 // CellConfig is the configuration representation of a cell
 type CellConfig struct {
-	ID            string          `yaml:"id" json:"id"`
-	Column        string          `yaml:"column" json:"column"`                               // "start/end" format, e.g., "1/3"
-	Row           string          `yaml:"row" json:"row"`                                     // "start/end" format, e.g., "1/2"
-	StackMode     types.StackMode `yaml:"stackMode,omitempty" json:"stackMode,omitempty"`
-	Padding       interface{}     `yaml:"padding,omitempty" json:"padding,omitempty"`         // Per-cell padding override (supports shorthand)
-	WindowSpacing interface{}     `yaml:"windowSpacing,omitempty" json:"windowSpacing,omitempty"` // Per-cell window spacing override (supports shorthand)
+	ID            string                `yaml:"id" json:"id"`
+	Column        string                `yaml:"column" json:"column"`                                    // "start/end" format, e.g., "1/3"
+	Row           string                `yaml:"row" json:"row"`                                          // "start/end" format, e.g., "1/2"
+	StackMode     types.StackMode       `yaml:"stackMode,omitempty" json:"stackMode,omitempty"`
+	Padding       interface{}           `yaml:"padding,omitempty" json:"padding,omitempty"`              // Per-cell padding override (supports shorthand)
+	WindowSpacing interface{}           `yaml:"windowSpacing,omitempty" json:"windowSpacing,omitempty"`  // Per-cell window spacing override (supports shorthand)
+	Border        *CellBorderConfigYAML `yaml:"border,omitempty" json:"border,omitempty"`                // Per-cell border style override
 }
 
 // SpaceConfig defines per-Space settings
@@ -81,4 +90,201 @@ type AppRule struct {
 	Layouts            []string        `yaml:"layouts,omitempty" json:"layouts,omitempty"`                 // Only applies to these layouts
 	Float              bool            `yaml:"float,omitempty" json:"float,omitempty"`                     // Never tile this app
 	PreferredStackMode types.StackMode `yaml:"preferredStackMode,omitempty" json:"preferredStackMode,omitempty"`
+}
+
+// AnimationConfig defines animation settings for borders
+type AnimationConfig struct {
+	Type      string   `yaml:"type,omitempty" json:"type,omitempty"`           // none, pulse, breathe, fade
+	Duration  *float64 `yaml:"duration,omitempty" json:"duration,omitempty"`   // seconds
+	Intensity *float64 `yaml:"intensity,omitempty" json:"intensity,omitempty"` // 0.0-1.0
+}
+
+// BorderStyle defines the visual appearance of a border
+type BorderStyle struct {
+	Color         string           `yaml:"color" json:"color"`
+	Width         float64          `yaml:"width" json:"width"`
+	CornerRadius  float64          `yaml:"cornerRadius" json:"cornerRadius"`
+	Opacity       float64          `yaml:"opacity" json:"opacity"`
+	GlowRadius    *float64         `yaml:"glowRadius,omitempty" json:"glowRadius,omitempty"`
+	GlowColor     *string          `yaml:"glowColor,omitempty" json:"glowColor,omitempty"`
+	GlowOpacity   *float64         `yaml:"glowOpacity,omitempty" json:"glowOpacity,omitempty"`
+	GlowSpread    *float64         `yaml:"glowSpread,omitempty" json:"glowSpread,omitempty"`
+	ShadowRadius  *float64         `yaml:"shadowRadius,omitempty" json:"shadowRadius,omitempty"`
+	ShadowOffset  *[]float64       `yaml:"shadowOffset,omitempty" json:"shadowOffset,omitempty"`
+	ShadowColor   *string          `yaml:"shadowColor,omitempty" json:"shadowColor,omitempty"`
+	ShadowOpacity *float64         `yaml:"shadowOpacity,omitempty" json:"shadowOpacity,omitempty"`
+	Animation     *AnimationConfig `yaml:"animation,omitempty" json:"animation,omitempty"`
+}
+
+// InactiveBorderStyle defines the inactive border style with an enabled flag
+type InactiveBorderStyle struct {
+	Enabled       bool             `yaml:"enabled" json:"enabled"`
+	Color         string           `yaml:"color" json:"color"`
+	Width         float64          `yaml:"width" json:"width"`
+	CornerRadius  float64          `yaml:"cornerRadius" json:"cornerRadius"`
+	Opacity       float64          `yaml:"opacity" json:"opacity"`
+	GlowRadius    *float64         `yaml:"glowRadius,omitempty" json:"glowRadius,omitempty"`
+	GlowColor     *string          `yaml:"glowColor,omitempty" json:"glowColor,omitempty"`
+	GlowOpacity   *float64         `yaml:"glowOpacity,omitempty" json:"glowOpacity,omitempty"`
+	GlowSpread    *float64         `yaml:"glowSpread,omitempty" json:"glowSpread,omitempty"`
+	ShadowRadius  *float64         `yaml:"shadowRadius,omitempty" json:"shadowRadius,omitempty"`
+	ShadowOffset  *[]float64       `yaml:"shadowOffset,omitempty" json:"shadowOffset,omitempty"`
+	ShadowColor   *string          `yaml:"shadowColor,omitempty" json:"shadowColor,omitempty"`
+	ShadowOpacity *float64         `yaml:"shadowOpacity,omitempty" json:"shadowOpacity,omitempty"`
+	Animation     *AnimationConfig `yaml:"animation,omitempty" json:"animation,omitempty"`
+}
+
+// BorderConfig defines window border appearance
+type BorderConfig struct {
+	// New nested structure
+	Enabled  *bool                `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	Active   *BorderStyle         `yaml:"active,omitempty" json:"active,omitempty"`
+	Inactive *InactiveBorderStyle `yaml:"inactive,omitempty" json:"inactive,omitempty"`
+
+	// Deprecated: Old fields kept for backwards compatibility
+	Width             *float64 `yaml:"width,omitempty" json:"width,omitempty"`
+	Style             *string  `yaml:"style,omitempty" json:"style,omitempty"`                         // round, square, uniform
+	CornerRadius      *float64 `yaml:"corner_radius,omitempty" json:"corner_radius,omitempty"`
+	Padding           *float64 `yaml:"padding,omitempty" json:"padding,omitempty"`
+	HiDPI             *bool    `yaml:"hidpi,omitempty" json:"hidpi,omitempty"`
+	ActiveWindowColor *string  `yaml:"active_window_color,omitempty" json:"active_window_color,omitempty"` // 0xAARRGGBB
+	ActiveCellColor   *string  `yaml:"active_cell_color,omitempty" json:"active_cell_color,omitempty"`
+	InactiveColor     *string  `yaml:"inactive_color,omitempty" json:"inactive_color,omitempty"`
+	Palette           []string `yaml:"palette,omitempty" json:"palette,omitempty"`
+	Whitelist         []string `yaml:"whitelist,omitempty" json:"whitelist,omitempty"`
+	Blacklist         []string `yaml:"blacklist,omitempty" json:"blacklist,omitempty"`
+}
+
+// GetEnabled returns the enabled state, defaulting to false if not set
+func (b *BorderConfig) GetEnabled() bool {
+	if b == nil || b.Enabled == nil {
+		return false
+	}
+	return *b.Enabled
+}
+
+// GetWidth returns the border width, defaulting to 5.0 if not set
+func (b *BorderConfig) GetWidth() float64 {
+	if b == nil || b.Width == nil {
+		return 5.0
+	}
+	return *b.Width
+}
+
+// GetStyle returns the border style, defaulting to "round" if not set
+func (b *BorderConfig) GetStyle() string {
+	if b == nil || b.Style == nil {
+		return "round"
+	}
+	return *b.Style
+}
+
+// GetCornerRadius returns the corner radius, defaulting to 8.0 if not set
+func (b *BorderConfig) GetCornerRadius() float64 {
+	if b == nil || b.CornerRadius == nil {
+		return 8.0
+	}
+	return *b.CornerRadius
+}
+
+// GetPadding returns the padding, defaulting to 2.0 if not set
+func (b *BorderConfig) GetPadding() float64 {
+	if b == nil || b.Padding == nil {
+		return 2.0
+	}
+	return *b.Padding
+}
+
+// GetHiDPI returns the HiDPI setting, defaulting to true if not set
+func (b *BorderConfig) GetHiDPI() bool {
+	if b == nil || b.HiDPI == nil {
+		return true
+	}
+	return *b.HiDPI
+}
+
+// GetActiveStyle returns the active border style with backwards compatibility
+// If Active is nil but old fields exist, constructs from legacy fields
+func (b *BorderConfig) GetActiveStyle() BorderStyle {
+	if b == nil {
+		return BorderStyle{
+			Color:        "#FF0000",
+			Width:        3.0,
+			CornerRadius: 8.0,
+			Opacity:      1.0,
+		}
+	}
+
+	// Use new Active field if present
+	if b.Active != nil {
+		return *b.Active
+	}
+
+	// Backwards compatibility: construct from old fields
+	color := "#FF0000"
+	if b.ActiveWindowColor != nil {
+		color = *b.ActiveWindowColor
+	} else if b.ActiveCellColor != nil {
+		color = *b.ActiveCellColor
+	}
+
+	width := 3.0
+	if b.Width != nil {
+		width = *b.Width
+	}
+
+	cornerRadius := 8.0
+	if b.CornerRadius != nil {
+		cornerRadius = *b.CornerRadius
+	}
+
+	return BorderStyle{
+		Color:        color,
+		Width:        width,
+		CornerRadius: cornerRadius,
+		Opacity:      1.0,
+	}
+}
+
+// GetInactiveStyle returns the inactive border style with backwards compatibility
+// Returns nil if inactive borders are disabled
+func (b *BorderConfig) GetInactiveStyle() *InactiveBorderStyle {
+	if b == nil {
+		return &InactiveBorderStyle{
+			Enabled:      true,
+			Color:        "#666666",
+			Width:        3.0,
+			CornerRadius: 8.0,
+			Opacity:      1.0,
+		}
+	}
+
+	// Use new Inactive field if present
+	if b.Inactive != nil {
+		return b.Inactive
+	}
+
+	// Backwards compatibility: construct from old fields
+	color := "#666666"
+	if b.InactiveColor != nil {
+		color = *b.InactiveColor
+	}
+
+	width := 3.0
+	if b.Width != nil {
+		width = *b.Width
+	}
+
+	cornerRadius := 8.0
+	if b.CornerRadius != nil {
+		cornerRadius = *b.CornerRadius
+	}
+
+	return &InactiveBorderStyle{
+		Enabled:      true,
+		Color:        color,
+		Width:        width,
+		CornerRadius: cornerRadius,
+		Opacity:      1.0,
+	}
 }

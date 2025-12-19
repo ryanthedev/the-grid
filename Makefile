@@ -1,4 +1,4 @@
-.PHONY: help build server cli test clean server-test cli-test server-clean cli-clean run-server install dist
+.PHONY: help build server cli test clean server-test cli-test server-clean cli-clean run-server install dist dev
 
 # Version from VERSION file
 VERSION := $(shell cat VERSION)
@@ -112,4 +112,30 @@ help:
 	@echo "  make cli          # Build just the CLI"
 	@echo "  make test         # Run all tests"
 	@echo "  make run-server   # Build and run the server"
+	@echo "  make dev          # Build, clear logs, restart server (interactive)"
 	@echo "  make dist         # Create distribution tarball"
+
+# Development: build, clear logs, restart server with output visible
+dev: build
+	@echo "Stopping existing server..."
+	@-pkill -f "grid-server" 2>/dev/null || true
+	@sleep 0.5
+	@echo "Clearing logs..."
+	@rm -f ~/.local/state/thegrid/grid-cli.log
+	@rm -f ~/.local/state/thegrid/events.jsonl
+	@rm -f ~/.local/state/thegrid/grid-server.log
+	@echo "Starting server (Ctrl+C to stop)..."
+	@script -q ~/.local/state/thegrid/grid-server.log ./grid-server/.build/debug/grid-server --debug
+
+# Quick reload: build, restart server in background, apply layout
+# Usage: make reload LAYOUT=two-column  (default: two-column)
+LAYOUT ?= two-column
+reload: build
+	@echo "Restarting server..."
+	@-pkill -f "grid-server" 2>/dev/null || true
+	@sleep 0.5
+	@./grid-server/.build/debug/grid-server &>/dev/null &
+	@sleep 1
+	@echo "Applying layout: $(LAYOUT)"
+	@./grid-cli/bin/thegrid layout apply $(LAYOUT)
+	@echo "✓ Server reloaded and layout applied"

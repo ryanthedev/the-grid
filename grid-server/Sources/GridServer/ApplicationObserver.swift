@@ -7,14 +7,12 @@
 
 import Foundation
 import ApplicationServices
-import Logging
 
 /// Manages AX accessibility observer for a single application
 class ApplicationObserver {
     let pid: pid_t
     let appName: String?
     private var observer: AXObserver?
-    private let logger = Logger(label: "com.grid.ApplicationObserver")
     weak var stateManager: StateManager?
 
     // Notification types we observe
@@ -43,11 +41,14 @@ class ApplicationObserver {
         let error = AXObserverCreate(pid, axNotificationCallback, &observerRef)
 
         guard error == .success, let observerRef = observerRef else {
-            logger.warning("Failed to create AX observer", metadata: [
-                "pid": "\(pid)",
-                "app": "\(appName ?? "unknown")",
-                "error": "\(error.rawValue)"
-            ])
+            Task {
+                await EventLog.shared.log("ax.fail", [
+                    "op": "create_observer",
+                    "pid": pid,
+                    "app": appName ?? "unknown",
+                    "err": error.rawValue
+                ])
+            }
             return false
         }
 
@@ -71,15 +72,23 @@ class ApplicationObserver {
             if result == .success {
                 successCount += 1
             } else {
-                logger.debug("Failed to register notification", metadata: [
-                    "notification": "\(notification)",
-                    "error": "\(result.rawValue)"
-                ])
+                Task {
+                    await EventLog.shared.log("ax.fail", [
+                        "op": "register_notif",
+                        "notif": notification as String,
+                        "err": result.rawValue
+                    ])
+                }
             }
         }
 
         guard successCount > 0 else {
-            logger.warning("No notifications registered successfully")
+            Task {
+                await EventLog.shared.log("ax.fail", [
+                    "op": "register_notifs",
+                    "msg": "no notifications registered"
+                ])
+            }
             return false
         }
 
@@ -87,11 +96,13 @@ class ApplicationObserver {
         let runLoopSource = AXObserverGetRunLoopSource(observerRef)
         CFRunLoopAddSource(CFRunLoopGetMain(), runLoopSource, .defaultMode)
 
-        logger.info("✓ AX observer created", metadata: [
-            "pid": "\(pid)",
-            "app": "\(appName ?? "unknown")",
-            "notifications": "\(successCount)/\(Self.observedNotifications.count)"
-        ])
+        Task {
+            await EventLog.shared.log("ax.observer.create", [
+                "pid": pid,
+                "app": appName ?? "?",
+                "notifs": "\(successCount)/\(Self.observedNotifications.count)"
+            ])
+        }
 
         return true
     }
@@ -105,10 +116,12 @@ class ApplicationObserver {
 
         self.observer = nil
 
-        logger.debug("AX observer stopped", metadata: [
-            "pid": "\(pid)",
-            "app": "\(appName ?? "unknown")"
-        ])
+        Task {
+            await EventLog.shared.log("ax.observer.stop", [
+                "pid": pid,
+                "app": appName ?? "unknown"
+            ])
+        }
     }
 
     /// Handle AX notification callback
@@ -142,17 +155,14 @@ class ApplicationObserver {
 
         // Extract window ID from AX element
         guard let windowID = getWindowID(from: element) else {
-            logger.debug("Could not get window ID from AX element", metadata: [
-                "notification": "\(notifName)"
-            ])
+            Task {
+                await EventLog.shared.log("ax.fail", [
+                    "op": "get_window_id",
+                    "notif": notifName
+                ])
+            }
             return
         }
-
-        logger.debug("AX notification received", metadata: [
-            "notification": "\(notifName)",
-            "windowID": "\(windowID)",
-            "pid": "\(pid)"
-        ])
 
         // Route to appropriate handler based on notification type
         switch notifName {
@@ -187,7 +197,9 @@ class ApplicationObserver {
             }
 
         default:
-            logger.debug("Unknown notification type", metadata: ["notification": "\(notifName)"])
+            Task {
+                await EventLog.shared.log("dbg.unknown_notif", ["notif": notifName])
+            }
         }
     }
 

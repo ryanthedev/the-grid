@@ -7,7 +7,6 @@
 //
 
 import Foundation
-import Logging
 import mss
 
 // MARK: - WindowLayer
@@ -49,15 +48,11 @@ enum WindowLayer: String, CustomStringConvertible {
 class MSSClient {
     private var ctx: OpaquePointer?
     private let queue = DispatchQueue(label: "com.grid.mss")
-    private let logger: Logger
 
     /// Initialize MSS client with optional custom socket path
     /// - Parameters:
-    ///   - logger: Logger instance for debugging
     ///   - socketPath: Optional custom socket path (defaults to MSS default)
-    init(logger: Logger, socketPath: String? = nil) {
-        self.logger = logger
-
+    init(socketPath: String? = nil) {
         queue.sync {
             // Create MSS context
             if let path = socketPath {
@@ -67,18 +62,17 @@ class MSSClient {
             }
 
             guard ctx != nil else {
-                logger.error("❌ Failed to create MSS context")
+                Task { await EventLog.shared.log("err.mss", ["op": "init"]) }
                 return
             }
 
-            logger.info("✓ MSS client initialized")
+            Task { await EventLog.shared.log("mss.init", [:]) }
         }
     }
 
     deinit {
         if let ctx = ctx {
             mss_destroy(ctx)
-            logger.info("MSS client destroyed")
         }
     }
 
@@ -89,7 +83,6 @@ class MSSClient {
     func isAvailable() -> Bool {
         return queue.sync {
             guard let ctx = ctx else {
-                logger.debug("MSS context not initialized")
                 return false
             }
 
@@ -99,16 +92,9 @@ class MSSClient {
             let result = mss_handshake(ctx, &capabilities, &version)
 
             if result == 0 {  // MSS_SUCCESS = 0
-                let versionString = version != nil ? String(cString: version!) : "unknown"
-                logger.info("✓ MSS available", metadata: [
-                    "version": "\(versionString)",
-                    "capabilities": "0x\(String(capabilities, radix: 16))"
-                ])
                 return true
             } else {
-                logger.debug("MSS handshake failed", metadata: [
-                    "error_code": "\(result)"
-                ])
+                Task { await EventLog.shared.log("mss.fail", ["op": "handshake", "err": result]) }
                 return false
             }
         }
@@ -143,21 +129,14 @@ class MSSClient {
     func moveWindowToSpace(windowID: UInt32, spaceID: UInt64) -> Bool {
         return queue.sync {
             guard let ctx = ctx else {
-                logger.error("❌ MSS context not available")
+                Task { await EventLog.shared.log("err.mss", ["op": "no_ctx"]) }
                 return false
             }
 
-            logger.info("Moving window to space via MSS", metadata: [
-                "windowID": "\(windowID)",
-                "spaceID": "\(spaceID)"
-            ])
-
             let result = mss_window_move_to_space(ctx, windowID, spaceID)
 
-            if result {
-                logger.info("✓ Window moved successfully")
-            } else {
-                logger.error("✗ Window move failed")
+            if !result {
+                Task { await EventLog.shared.log("mss.fail", ["op": "move", "wid": windowID, "sid": spaceID]) }
             }
 
             return result
@@ -174,11 +153,6 @@ class MSSClient {
             guard let ctx = ctx else { return false }
 
             let clampedOpacity = max(0.0, min(1.0, opacity))
-            logger.debug("Setting window opacity", metadata: [
-                "windowID": "\(windowID)",
-                "opacity": "\(clampedOpacity)"
-            ])
-
             return mss_window_set_opacity(ctx, windowID, clampedOpacity)
         }
     }
@@ -194,12 +168,6 @@ class MSSClient {
             guard let ctx = ctx else { return false }
 
             let clampedOpacity = max(0.0, min(1.0, opacity))
-            logger.debug("Fading window opacity", metadata: [
-                "windowID": "\(windowID)",
-                "opacity": "\(clampedOpacity)",
-                "duration": "\(duration)s"
-            ])
-
             return mss_window_fade_opacity(ctx, windowID, clampedOpacity, duration)
         }
     }
@@ -230,11 +198,6 @@ class MSSClient {
     func setWindowLayer(windowID: UInt32, layer: WindowLayer) -> Bool {
         return queue.sync {
             guard let ctx = ctx else { return false }
-
-            logger.debug("Setting window layer", metadata: [
-                "windowID": "\(windowID)",
-                "layer": "\(layer.description)"
-            ])
 
             return mss_window_set_layer(ctx, windowID, layer.mssValue)
         }
@@ -267,11 +230,6 @@ class MSSClient {
         return queue.sync {
             guard let ctx = ctx else { return false }
 
-            logger.debug("Setting window sticky state", metadata: [
-                "windowID": "\(windowID)",
-                "sticky": "\(sticky)"
-            ])
-
             return mss_window_set_sticky(ctx, windowID, sticky)
         }
     }
@@ -301,7 +259,7 @@ class MSSClient {
         return queue.sync {
             guard let ctx = ctx else { return false }
 
-            logger.debug("Focusing window via MSS", metadata: ["windowID": "\(windowID)"])
+            Task { await EventLog.shared.log("mss.focus", ["wid": windowID]) }
             return mss_window_focus(ctx, windowID)
         }
     }
@@ -313,7 +271,6 @@ class MSSClient {
         return queue.sync {
             guard let ctx = ctx else { return false }
 
-            logger.debug("Ordering window to front via MSS", metadata: ["windowID": "\(windowID)"])
             var wid = windowID
             return mss_window_order_in(ctx, &wid, 1)
         }
@@ -326,7 +283,6 @@ class MSSClient {
         return queue.sync {
             guard let ctx = ctx, !windowIDs.isEmpty else { return false }
 
-            logger.debug("Ordering \(windowIDs.count) windows to front via MSS")
             var wids = windowIDs
             return mss_window_order_in(ctx, &wids, Int32(windowIDs.count))
         }
@@ -341,10 +297,7 @@ class MSSClient {
         return queue.sync {
             guard let ctx = ctx else { return false }
 
-            logger.debug("Setting window shadow", metadata: [
-                "windowID": "\(windowID)",
-                "shadow": "\(shadow)"
-            ])
+            log("mss.shadow", ["wid": windowID, "shadow": shadow])
 
             return mss_window_set_shadow(ctx, windowID, shadow)
         }
@@ -357,7 +310,7 @@ class MSSClient {
         return queue.sync {
             guard let ctx = ctx else { return false }
 
-            logger.debug("Minimizing window", metadata: ["windowID": "\(windowID)"])
+            log("mss.minimize", ["wid": windowID])
             return mss_window_minimize(ctx, windowID)
         }
     }
@@ -369,7 +322,7 @@ class MSSClient {
         return queue.sync {
             guard let ctx = ctx else { return false }
 
-            logger.debug("Unminimizing window", metadata: ["windowID": "\(windowID)"])
+            log("mss.unminimize", ["wid": windowID])
             return mss_window_unminimize(ctx, windowID)
         }
     }
@@ -401,9 +354,7 @@ class MSSClient {
         return queue.sync {
             guard let ctx = ctx else { return false }
 
-            logger.info("Creating space", metadata: [
-                "displaySpaceID": "\(displaySpaceID)"
-            ])
+            log("spc.create", ["sid": displaySpaceID])
 
             return mss_space_create(ctx, displaySpaceID)
         }
@@ -416,9 +367,7 @@ class MSSClient {
         return queue.sync {
             guard let ctx = ctx else { return false }
 
-            logger.info("Destroying space", metadata: [
-                "spaceID": "\(spaceID)"
-            ])
+            log("spc.destroy", ["sid": spaceID])
 
             return mss_space_destroy(ctx, spaceID)
         }
@@ -431,9 +380,7 @@ class MSSClient {
         return queue.sync {
             guard let ctx = ctx else { return false }
 
-            logger.info("Focusing space", metadata: [
-                "spaceID": "\(spaceID)"
-            ])
+            log("spc.focus", ["sid": spaceID])
 
             return mss_space_focus(ctx, spaceID)
         }
@@ -450,10 +397,7 @@ class MSSClient {
         return queue.sync {
             guard let ctx = ctx else { return false }
 
-            logger.info("Moving space to different display", metadata: [
-                "sourceSpaceID": "\(sourceSpaceID)",
-                "destSpaceID": "\(destSpaceID)"
-            ])
+            log("spc.move", ["src_sid": sourceSpaceID, "dst_sid": destSpaceID])
 
             return mss_space_move(ctx, sourceSpaceID, destSpaceID, previousSpace, focus)
         }
@@ -489,19 +433,11 @@ class MSSClient {
         return queue.sync {
             guard let ctx = ctx, !windowIDs.isEmpty else { return false }
 
-            logger.info("Moving \(windowIDs.count) windows to space", metadata: [
-                "count": "\(windowIDs.count)",
-                "spaceID": "\(spaceID)"
-            ])
-
-            // Convert to C array
             var wids = windowIDs
             let result = mss_window_list_move_to_space(ctx, &wids, Int32(windowIDs.count), spaceID)
 
-            if result {
-                logger.info("✓ Batch window move successful")
-            } else {
-                logger.error("✗ Batch window move failed")
+            if !result {
+                log("err.mss.batch_move", ["count": windowIDs.count, "sid": spaceID])
             }
 
             return result
