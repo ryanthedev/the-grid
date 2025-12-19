@@ -119,11 +119,11 @@ jobs:
         with:
           go-version: '1.21'
 
-      - name: Build release tarball
+      - name: Build universal binary tarball
         run: |
-          make dist
+          make dist-universal
           NEW_VERSION="${{ steps.new_version.outputs.version }}"
-          TARBALL="dist/thegrid-${NEW_VERSION}.tar.gz"
+          TARBALL="dist/thegrid-${NEW_VERSION}-darwin-universal.tar.gz"
 
           if [ ! -f "$TARBALL" ]; then
             echo "Error: Tarball $TARBALL not found!"
@@ -133,15 +133,41 @@ jobs:
           echo "Successfully built $TARBALL"
           ls -lh "$TARBALL"
 
+          # Verify universal binaries
+          echo ""
+          echo "Verifying universal binaries:"
+          file dist/thegrid-${NEW_VERSION}/bin/grid-server
+          file dist/thegrid-${NEW_VERSION}/bin/thegrid
+
       - name: Calculate SHA256
         id: sha256
         run: |
           NEW_VERSION="${{ steps.new_version.outputs.version }}"
-          TARBALL="dist/thegrid-${NEW_VERSION}.tar.gz"
+          TARBALL="dist/thegrid-${NEW_VERSION}-darwin-universal.tar.gz"
 
           SHA256=$(shasum -a 256 "$TARBALL" | cut -d' ' -f1)
           echo "SHA256: $SHA256"
           echo "sha256=$SHA256" >> $GITHUB_OUTPUT
+
+      - name: Create and push tag
+        run: |
+          NEW_VERSION="${{ steps.new_version.outputs.version }}"
+          git tag -a "v$NEW_VERSION" -m "Release v$NEW_VERSION"
+          git push origin main
+          git push origin --tags
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.new_version.outputs.version }}
+          name: Release v${{ steps.new_version.outputs.version }}
+          body_path: ${{ steps.changelog.outputs.file }}
+          files: dist/thegrid-${{ steps.new_version.outputs.version }}-darwin-universal.tar.gz
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Trigger tap repository update
         env:
@@ -149,7 +175,8 @@ jobs:
         run: |
           NEW_VERSION="${{ steps.new_version.outputs.version }}"
           SHA256="${{ steps.sha256.outputs.sha256 }}"
-          TARBALL_URL="https://github.com/${{ github.repository }}/archive/refs/tags/v${NEW_VERSION}.tar.gz"
+          # Point to the binary release asset (uploaded in previous step)
+          TARBALL_URL="https://github.com/${{ github.repository }}/releases/download/v${NEW_VERSION}/thegrid-${NEW_VERSION}-darwin-universal.tar.gz"
 
           echo "Triggering formula update in homebrew-thegrid repository..."
 
@@ -166,40 +193,24 @@ jobs:
             exit 1
           fi
 
-      - name: Create and push tag
-        run: |
-          NEW_VERSION="${{ steps.new_version.outputs.version }}"
-          git tag -a "v$NEW_VERSION" -m "Release v$NEW_VERSION"
-          git push origin main
-          git push origin --tags
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ steps.new_version.outputs.version }}
-          name: Release v${{ steps.new_version.outputs.version }}
-          body_path: ${{ steps.changelog.outputs.file }}
-          files: dist/thegrid-${{ steps.new_version.outputs.version }}.tar.gz
-          draft: false
-          prerelease: false
-          generate_release_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Output release information
         run: |
           NEW_VERSION="${{ steps.new_version.outputs.version }}"
           SHA256="${{ steps.sha256.outputs.sha256 }}"
 
           echo ""
-          echo "Release v$NEW_VERSION created successfully!"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "✅ Release v$NEW_VERSION created successfully!"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo ""
-          echo "Tarball: thegrid-${NEW_VERSION}.tar.gz"
-          echo "SHA256: $SHA256"
-          echo "Tag: v$NEW_VERSION"
-          echo "Release URL: https://github.com/${{ github.repository }}/releases/tag/v$NEW_VERSION"
+          echo "📦 Binary tarball: thegrid-${NEW_VERSION}-darwin-universal.tar.gz"
+          echo "🔐 SHA256: $SHA256"
+          echo "🏷️  Tag: v$NEW_VERSION"
+          echo "🔗 Release URL: https://github.com/${{ github.repository }}/releases/tag/v$NEW_VERSION"
           echo ""
-          echo "Next steps:"
+          echo "📋 Next steps:"
           echo "  1. Verify the release"
           echo "  2. Verify tap update: https://github.com/ryanthedev/homebrew-thegrid"
           echo "  3. Test installation: brew tap ryanthedev/thegrid && brew install thegrid"
+          echo ""
+          echo "ℹ️  Users no longer need Xcode - binaries are pre-built!"

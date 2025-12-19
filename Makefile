@@ -64,7 +64,7 @@ run-server-release: server-release
 verify: build test
 	@echo "✓ Build and test verification complete"
 
-# Distribution tarball
+# Distribution tarball (single architecture - for local use)
 dist: server-release cli
 	@echo "Creating distribution tarball v$(VERSION)..."
 	@rm -rf dist
@@ -82,6 +82,53 @@ dist: server-release cli
 	@echo "SHA256:"
 	@shasum -a 256 dist/thegrid-$(VERSION).tar.gz
 
+# Universal binary builds (arm64 + x86_64)
+server-universal:
+	@echo "Building grid-server (universal binary)..."
+	@cd grid-server && swift build -c release --arch arm64 --arch x86_64
+	@echo "Verifying universal binary..."
+	@if ! file grid-server/.build/apple/Products/Release/grid-server | grep -q "universal binary"; then \
+		echo "Error: Failed to create universal binary for grid-server"; \
+		exit 1; \
+	fi
+
+cli-universal:
+	@echo "Building thegrid CLI (universal binary)..."
+	@mkdir -p grid-cli/bin
+	@cd grid-cli && GOOS=darwin GOARCH=arm64 go build -o bin/thegrid-arm64 ./cmd/grid
+	@cd grid-cli && GOOS=darwin GOARCH=amd64 go build -o bin/thegrid-amd64 ./cmd/grid
+	@lipo -create -output grid-cli/bin/thegrid grid-cli/bin/thegrid-arm64 grid-cli/bin/thegrid-amd64
+	@rm grid-cli/bin/thegrid-arm64 grid-cli/bin/thegrid-amd64
+	@echo "Verifying universal binary..."
+	@if ! file grid-cli/bin/thegrid | grep -q "universal binary"; then \
+		echo "Error: Failed to create universal binary for thegrid CLI"; \
+		exit 1; \
+	fi
+	@echo "Created universal binary: grid-cli/bin/thegrid"
+	@file grid-cli/bin/thegrid
+
+# Distribution tarball with universal binaries (for Homebrew)
+dist-universal: server-universal cli-universal
+	@echo "Creating universal distribution tarball v$(VERSION)..."
+	@rm -rf dist
+	@mkdir -p dist/thegrid-$(VERSION)/bin
+	@cp grid-server/.build/apple/Products/Release/grid-server dist/thegrid-$(VERSION)/bin/
+	@cp grid-cli/bin/thegrid dist/thegrid-$(VERSION)/bin/
+	@cp VERSION dist/thegrid-$(VERSION)/
+	@cp LICENSE dist/thegrid-$(VERSION)/ 2>/dev/null || echo "No LICENSE file"
+	@cp README.md dist/thegrid-$(VERSION)/ 2>/dev/null || true
+	@cd dist && tar -czf thegrid-$(VERSION)-darwin-universal.tar.gz thegrid-$(VERSION)
+	@echo ""
+	@echo "Universal distribution tarball created:"
+	@ls -lh dist/thegrid-$(VERSION)-darwin-universal.tar.gz
+	@echo ""
+	@echo "SHA256:"
+	@shasum -a 256 dist/thegrid-$(VERSION)-darwin-universal.tar.gz
+	@echo ""
+	@echo "Verify universal binaries:"
+	@file dist/thegrid-$(VERSION)/bin/grid-server
+	@file dist/thegrid-$(VERSION)/bin/thegrid
+
 # Show help
 help:
 	@echo "TheGrid Monorepo Build System"
@@ -91,7 +138,8 @@ help:
 	@echo "  test             - Run all tests"
 	@echo "  clean            - Clean all build artifacts"
 	@echo "  verify           - Build and test everything"
-	@echo "  dist             - Create distribution tarball"
+	@echo "  dist             - Create distribution tarball (current arch)"
+	@echo "  dist-universal   - Create universal binary tarball (arm64+x86_64)"
 	@echo ""
 	@echo "Server targets:"
 	@echo "  server           - Build grid-server (debug)"
