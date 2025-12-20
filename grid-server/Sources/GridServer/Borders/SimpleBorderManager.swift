@@ -310,66 +310,49 @@ class SimpleBorderManager {
                 styleType = "inactive"
             }
 
-            // Capture before Task to avoid data race (windowStyleTypes accessed on background thread)
-            let prevStyleType = windowStyleTypes[windowID] ?? "none"
-            let hasActiveStyle = config.activeStyle != nil
-            let hasInactiveStyle = config.inactiveStyle != nil
-
-            // ULTRADEBUG: Log style determination
-            Task {
-                await EventLog.shared.log("dbg.style", [
-                    "wid": windowID,
-                    "isFocused": isFocused,
-                    "styleType": styleType,
-                    "prevStyleType": prevStyleType,
-                    "hasActiveStyle": hasActiveStyle,
-                    "hasInactiveStyle": hasInactiveStyle
-                ])
-            }
-
-            // Check if style type changed - if so, recreate the border window
-            // SkyLight windows cache their content, so we must destroy and recreate
-            let previousStyleType = windowStyleTypes[windowID]
+            // ALWAYS recreate border window on focus change for windows in active cell
+            // SkyLight windows cache their shape/content, causing stale bounds if reused
+            // This ensures consistent appearance regardless of previous state
             var currentBorder = border
+            let previousStyleType = windowStyleTypes[windowID]
 
-            if let prev = previousStyleType, prev != styleType {
-                // Style changed - destroy old border and create new one
-                currentBorder.destroy()
-                windowBorders.removeValue(forKey: windowID)
+            // Destroy existing border
+            currentBorder.destroy()
+            windowBorders.removeValue(forKey: windowID)
 
-                let newBorder = BorderWindow(connectionID: connectionID, targetWindowID: windowID)
-                if newBorder.create() {
-                    // Verify target window still exists (could have been destroyed during create)
-                    var bounds = CGRect.zero
-                    guard SLSGetWindowBounds(connectionID, windowID, &bounds) == .success else {
-                        newBorder.destroy()
-                        windowStyleTypes.removeValue(forKey: windowID)
-                        Task {
-                            await EventLog.shared.log("err.bdr.recreate", ["wid": windowID, "reason": "target_gone"])
-                        }
-                        continue
-                    }
-
-                    windowBorders[windowID] = newBorder
-                    currentBorder = newBorder
-                    Task {
-                        await EventLog.shared.log("bdr.recreate", [
-                            "wid": windowID,
-                            "from": prev,
-                            "to": styleType
-                        ])
-                    }
-                } else {
-                    // Recreation failed - clean up state so we can try again on next focus change
+            // Create fresh border
+            let newBorder = BorderWindow(connectionID: connectionID, targetWindowID: windowID)
+            if newBorder.create() {
+                // Verify target window still exists (could have been destroyed during create)
+                var bounds = CGRect.zero
+                guard SLSGetWindowBounds(connectionID, windowID, &bounds) == .success else {
+                    newBorder.destroy()
                     windowStyleTypes.removeValue(forKey: windowID)
                     Task {
-                        await EventLog.shared.log("err.bdr.recreate", [
-                            "wid": windowID,
-                            "warning": "window_has_no_border"
-                        ])
+                        await EventLog.shared.log("err.bdr.recreate", ["wid": windowID, "reason": "target_gone"])
                     }
                     continue
                 }
+
+                windowBorders[windowID] = newBorder
+                currentBorder = newBorder
+                Task {
+                    await EventLog.shared.log("bdr.recreate", [
+                        "wid": windowID,
+                        "from": previousStyleType ?? "none",
+                        "to": styleType
+                    ])
+                }
+            } else {
+                // Recreation failed - clean up state so we can try again on next focus change
+                windowStyleTypes.removeValue(forKey: windowID)
+                Task {
+                    await EventLog.shared.log("err.bdr.recreate", [
+                        "wid": windowID,
+                        "warning": "window_has_no_border"
+                    ])
+                }
+                continue
             }
 
             // Update tracked style type
@@ -388,25 +371,12 @@ class SimpleBorderManager {
                 continue
             }
 
-            // Update border position
-            currentBorder.update(targetFrame: windowFrame)
+            // Update border position with correct style for expansion calculation
+            // Pass the style here so bounds are calculated correctly on first update
+            currentBorder.update(targetFrame: windowFrame, style: style)
 
             // Update border style (nil hides the border)
             currentBorder.updateStyle(style: style, styleType: styleType)
-
-            // ULTRADEBUG: Log actual style values being applied
-            Task {
-                await EventLog.shared.log("dbg.updateStyle", [
-                    "wid": windowID,
-                    "styleType": styleType,
-                    "styleNil": style == nil,
-                    "opacity": style?.opacity ?? -1,
-                    "cornerRadius": style?.cornerRadius ?? -1,
-                    "width": style?.width ?? -1,
-                    "shadowRadius": style?.shadowRadius ?? -1,
-                    "shadowOpacity": style?.shadowOpacity ?? -1
-                ])
-            }
 
             // Log if visible
             if style != nil {
