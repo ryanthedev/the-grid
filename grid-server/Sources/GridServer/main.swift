@@ -112,6 +112,14 @@ struct GridServerCommand: ParsableCommand {
             messageHandler.simpleBorderManager = simpleBorderManager
             log("bdr.init")
 
+            // Initialize BFD hotkey daemon
+            let bfdManager = BFDManager()
+            if bfdManager.start() {
+                Task { await EventLog.shared.log("bfd.ready", [:]) }
+            } else {
+                Task { await EventLog.shared.log("warn.bfd.init", ["msg": "Failed to start BFD"]) }
+            }
+
             // Start heartbeat if requested
             if heartbeat {
                 eventBroadcaster.startHeartbeat(interval: heartbeatInterval)
