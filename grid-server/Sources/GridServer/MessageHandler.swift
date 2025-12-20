@@ -5,12 +5,15 @@ import CoreGraphics
 
 /// Handles incoming requests and routes them to appropriate handlers
 class MessageHandler {
-    typealias RequestHandler = (Request, @escaping (Response) -> Void) -> Void
+    typealias RequestHandler = (Request, Int32, @escaping (Response) -> Void) -> Void
 
     private var handlers: [String: RequestHandler] = [:]
 
     /// Simple border manager for handling simplified border system
     weak var simpleBorderManager: SimpleBorderManager?
+
+    /// Notification manager for toast notifications
+    var notificationManager: NotificationManager?
 
     init(logger: Logger? = nil) {
         registerBuiltInHandlers()
@@ -25,9 +28,9 @@ class MessageHandler {
     }
 
     /// Handle a request and call completion with the response
-    func handle(request: Request, completion: @escaping (Response) -> Void) {
+    func handle(request: Request, socketID: Int32, completion: @escaping (Response) -> Void) {
         Task {
-            await EventLog.shared.log("msg.handle", ["id": request.id, "method": request.method])
+            await EventLog.shared.log("msg.handle", ["id": request.id, "method": request.method, "socket": socketID])
         }
 
         guard let handler = handlers[request.method] else {
@@ -52,8 +55,8 @@ class MessageHandler {
             return
         }
 
-        // Execute handler
-        handler(request) { response in
+        // Execute handler with socket ID
+        handler(request, socketID) { response in
             completion(response)
         }
     }
@@ -61,7 +64,7 @@ class MessageHandler {
     /// Register built-in handlers for demonstration
     private func registerBuiltInHandlers() {
         // Ping handler - simple echo to test connectivity
-        register(method: "ping") { request, completion in
+        register(method: "ping") { request, socketID, completion in
             let response = Response(
                 id: request.id,
                 result: AnyCodable(["pong": true, "timestamp": Date().timeIntervalSince1970])
@@ -70,7 +73,7 @@ class MessageHandler {
         }
 
         // Echo handler - returns the params back
-        register(method: "echo") { request, completion in
+        register(method: "echo") { request, socketID, completion in
             let response = Response(
                 id: request.id,
                 result: AnyCodable(request.params ?? [:])
@@ -79,7 +82,7 @@ class MessageHandler {
         }
 
         // Get server info
-        register(method: "getServerInfo") { request, completion in
+        register(method: "getServerInfo") { request, socketID, completion in
             let info: [String: Any] = [
                 "name": "GridServer",
                 "version": "0.1.0",
@@ -100,7 +103,7 @@ class MessageHandler {
         }
 
         // Dump - returns complete window manager state
-        register(method: "dump") { [weak self] request, completion in
+        register(method: "dump") { [weak self] request, socketID, completion in
             do {
                 // Get state from StateManager (Codable type preserves all type information)
                 let state = try StateManager.shared.getStateDictionary()
@@ -126,7 +129,7 @@ class MessageHandler {
         }
 
         // UpdateWindow - manipulate window position, size, space, or display
-        register(method: "updateWindow") { [weak self] request, completion in
+        register(method: "updateWindow") { [weak self] request, socketID, completion in
             guard let self = self else {
                 completion(Response(id: request.id, error: ErrorInfo(code: -32603, message: "Handler not available")))
                 return
@@ -278,7 +281,7 @@ class MessageHandler {
         // MARK: - Window Opacity Methods (MSS)
 
         // Set window opacity
-        register(method: "window.setOpacity") { [weak self] request, completion in
+        register(method: "window.setOpacity") { [weak self] request, socketID, completion in
             guard let self = self else { return }
             guard let params = request.params else {
                 completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
@@ -303,7 +306,7 @@ class MessageHandler {
         }
 
         // Fade window opacity
-        register(method: "window.fadeOpacity") { [weak self] request, completion in
+        register(method: "window.fadeOpacity") { [weak self] request, socketID, completion in
             guard let self = self else { return }
             guard let params = request.params else {
                 completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
@@ -329,7 +332,7 @@ class MessageHandler {
         }
 
         // Get window opacity
-        register(method: "window.getOpacity") { [weak self] request, completion in
+        register(method: "window.getOpacity") { [weak self] request, socketID, completion in
             guard let self = self else { return }
             guard let params = request.params else {
                 completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
@@ -355,7 +358,7 @@ class MessageHandler {
         // MARK: - Window Layer Methods (MSS)
 
         // Set window layer
-        register(method: "window.setLayer") { [weak self] request, completion in
+        register(method: "window.setLayer") { [weak self] request, socketID, completion in
             guard let self = self else { return }
             guard let params = request.params else {
                 completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
@@ -385,7 +388,7 @@ class MessageHandler {
         }
 
         // Get window layer
-        register(method: "window.getLayer") { [weak self] request, completion in
+        register(method: "window.getLayer") { [weak self] request, socketID, completion in
             guard let self = self else { return }
             guard let params = request.params else {
                 completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
@@ -412,7 +415,7 @@ class MessageHandler {
         // MARK: - Window Sticky/Minimize Methods (MSS)
 
         // Set window sticky
-        register(method: "window.setSticky") { [weak self] request, completion in
+        register(method: "window.setSticky") { [weak self] request, socketID, completion in
             guard let self = self else { return }
             guard let params = request.params else {
                 completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
@@ -437,7 +440,7 @@ class MessageHandler {
         }
 
         // Get window sticky status
-        register(method: "window.isSticky") { [weak self] request, completion in
+        register(method: "window.isSticky") { [weak self] request, socketID, completion in
             guard let self = self else { return }
             guard let params = request.params else {
                 completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
@@ -461,7 +464,7 @@ class MessageHandler {
         }
 
         // Minimize window
-        register(method: "window.minimize") { [weak self] request, completion in
+        register(method: "window.minimize") { [weak self] request, socketID, completion in
             guard let self = self else { return }
             guard let params = request.params else {
                 completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
@@ -485,7 +488,7 @@ class MessageHandler {
         }
 
         // Unminimize window
-        register(method: "window.unminimize") { [weak self] request, completion in
+        register(method: "window.unminimize") { [weak self] request, socketID, completion in
             guard let self = self else { return }
             guard let params = request.params else {
                 completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
@@ -509,7 +512,7 @@ class MessageHandler {
         }
 
         // Check if window is minimized
-        register(method: "window.isMinimized") { [weak self] request, completion in
+        register(method: "window.isMinimized") { [weak self] request, socketID, completion in
             guard let self = self else { return }
             guard let params = request.params else {
                 completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
@@ -535,7 +538,7 @@ class MessageHandler {
         // MARK: - Window Focus Methods
 
         // Focus window (raise and activate)
-        register(method: "window.focus") { [weak self] request, completion in
+        register(method: "window.focus") { [weak self] request, socketID, completion in
             guard let self = self else { return }
             guard let params = request.params else {
                 completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
@@ -598,7 +601,7 @@ class MessageHandler {
         // MARK: - Space Management Methods (MSS)
 
         // Create space
-        register(method: "space.create") { [weak self] request, completion in
+        register(method: "space.create") { [weak self] request, socketID, completion in
             guard let self = self else { return }
             guard let params = request.params else {
                 completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
@@ -622,7 +625,7 @@ class MessageHandler {
         }
 
         // Destroy space
-        register(method: "space.destroy") { [weak self] request, completion in
+        register(method: "space.destroy") { [weak self] request, socketID, completion in
             guard let self = self else { return }
             guard let params = request.params else {
                 completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
@@ -646,7 +649,7 @@ class MessageHandler {
         }
 
         // Focus space
-        register(method: "space.focus") { [weak self] request, completion in
+        register(method: "space.focus") { [weak self] request, socketID, completion in
             guard let self = self else { return }
             guard let params = request.params else {
                 completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
@@ -672,7 +675,7 @@ class MessageHandler {
         // MARK: - Mouse Methods
 
         // Warp mouse cursor to center of a window
-        register(method: "mouse.warp") { [weak self] request, completion in
+        register(method: "mouse.warp") { [weak self] request, socketID, completion in
             guard let self = self else { return }
             guard let params = request.params else {
                 completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
@@ -730,7 +733,7 @@ class MessageHandler {
         // MARK: - Border Configuration Methods
 
         // Configure border settings (from CLI config)
-        register(method: "borders.configure") { [weak self] request, completion in
+        register(method: "borders.configure") { [weak self] request, socketID, completion in
             guard let self = self else {
                 completion(Response(id: request.id, error: ErrorInfo(code: -32603, message: "Internal error")))
                 return
@@ -760,7 +763,7 @@ class MessageHandler {
         }
 
         // Set cell assignments
-        register(method: "borders.setCellAssignments") { [weak self] request, completion in
+        register(method: "borders.setCellAssignments") { [weak self] request, socketID, completion in
             guard let self = self else { return }
             guard let params = request.params else {
                 completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
@@ -821,7 +824,7 @@ class MessageHandler {
         }
 
         // Query border info for a window
-        register(method: "borders.query") { [weak self] request, completion in
+        register(method: "borders.query") { [weak self] request, socketID, completion in
             guard let self = self else {
                 completion(Response(id: request.id, error: ErrorInfo(code: -32603, message: "Internal error")))
                 return
@@ -859,6 +862,140 @@ class MessageHandler {
                     "message": "No border found for this window"
                 ])))
             }
+        }
+
+        // MARK: - Notification Methods
+
+        // Create notification
+        register(method: "notify.create") { [weak self] request, socketID, completion in
+            guard let self = self,
+                  let notificationManager = self.notificationManager else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32603, message: "Notification manager not available")))
+                return
+            }
+
+            guard let params = request.params,
+                  let createParams = CreateNotificationParams.parse(from: params) else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params: requires notificationId, title, and position")))
+                return
+            }
+
+            notificationManager.create(createParams, socketID: socketID) { result in
+                switch result {
+                case .success(let data):
+                    completion(Response(id: request.id, result: AnyCodable(data)))
+                case .failure(let error):
+                    completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: error.localizedDescription)))
+                }
+            }
+        }
+
+        // Get cached notification response
+        register(method: "notify.get") { [weak self] request, socketID, completion in
+            guard let self = self,
+                  let notificationManager = self.notificationManager else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32603, message: "Notification manager not available")))
+                return
+            }
+
+            guard let params = request.params,
+                  let notificationId = params["notificationId"]?.value as? String else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Missing notificationId")))
+                return
+            }
+
+            if let cached = notificationManager.get(notificationId) {
+                let result: [String: Any] = [
+                    "found": true,
+                    "response": [
+                        "notificationId": cached.notificationId,
+                        "button": cached.button as Any,
+                        "text": cached.text as Any,
+                        "cancelled": cached.cancelled,
+                        "timedOut": cached.timedOut,
+                        "timestamp": ISO8601DateFormatter().string(from: cached.timestamp)
+                    ]
+                ]
+                completion(Response(id: request.id, result: AnyCodable(result)))
+            } else {
+                completion(Response(id: request.id, result: AnyCodable(["found": false, "notificationId": notificationId])))
+            }
+        }
+
+        // Cancel pending notification
+        register(method: "notify.cancel") { [weak self] request, socketID, completion in
+            guard let self = self,
+                  let notificationManager = self.notificationManager else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32603, message: "Notification manager not available")))
+                return
+            }
+
+            guard let params = request.params,
+                  let notificationId = params["notificationId"]?.value as? String else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Missing notificationId")))
+                return
+            }
+
+            let cancelled = notificationManager.cancel(notificationId)
+            completion(Response(id: request.id, result: AnyCodable([
+                "success": cancelled,
+                "notificationId": notificationId
+            ])))
+        }
+
+        // List notifications
+        register(method: "notify.list") { [weak self] request, socketID, completion in
+            guard let self = self,
+                  let notificationManager = self.notificationManager else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32603, message: "Notification manager not available")))
+                return
+            }
+
+            let filterStr = (request.params?["status"]?.value as? String) ?? "all"
+            let filter: NotificationListFilter
+            switch filterStr {
+            case "active": filter = .active
+            case "cached": filter = .cached
+            default: filter = .all
+            }
+
+            let notifications = notificationManager.list(filter: filter)
+            completion(Response(id: request.id, result: AnyCodable([
+                "notifications": notifications
+            ])))
+        }
+
+        // Clear cached response
+        register(method: "notify.clear") { [weak self] request, socketID, completion in
+            guard let self = self,
+                  let notificationManager = self.notificationManager else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32603, message: "Notification manager not available")))
+                return
+            }
+
+            guard let params = request.params,
+                  let notificationId = params["notificationId"]?.value as? String else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Missing notificationId")))
+                return
+            }
+
+            let cleared = notificationManager.clear(notificationId)
+            completion(Response(id: request.id, result: AnyCodable([
+                "success": cleared,
+                "notificationId": notificationId
+            ])))
+        }
+
+        // Get notification system status (debugging)
+        register(method: "notify.status") { [weak self] request, socketID, completion in
+            guard let self = self,
+                  let notificationManager = self.notificationManager else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32603, message: "Notification manager not available")))
+                return
+            }
+
+            let status = notificationManager.status()
+            completion(Response(id: request.id, result: AnyCodable(status)))
         }
 
     }

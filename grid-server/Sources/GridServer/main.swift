@@ -112,6 +112,11 @@ struct GridServerCommand: ParsableCommand {
             messageHandler.simpleBorderManager = simpleBorderManager
             log("bdr.init")
 
+            // Initialize notification system
+            let notificationManager = NotificationManager(socketServer: socketServer)
+            messageHandler.notificationManager = notificationManager
+            log("notif.init")
+
             // Initialize BFD hotkey daemon
             let bfdManager = BFDManager()
             if bfdManager.start() {

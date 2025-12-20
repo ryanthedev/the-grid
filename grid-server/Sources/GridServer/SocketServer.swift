@@ -224,8 +224,21 @@ class SocketServer {
             return
         }
 
-        handler.handle(request: request) { [weak self] response in
+        handler.handle(request: request, socketID: clientSocket) { [weak self] response in
             self?.sendMessage(Message(response: response), to: clientSocket)
+        }
+    }
+
+    /// Send an event to a specific client (targeted delivery)
+    func sendEvent(_ event: Event, to socket: Int32) {
+        let message = Message(event: event)
+        sendMessage(message, to: socket)
+    }
+
+    /// Check if a socket is still connected
+    func isSocketConnected(_ socket: Int32) -> Bool {
+        return socketQueue.sync {
+            clientSockets.contains(socket)
         }
     }
 

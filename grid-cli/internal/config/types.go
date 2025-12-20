@@ -4,11 +4,12 @@ import "github.com/yourusername/grid-cli/internal/types"
 
 // Config is the root configuration structure
 type Config struct {
-	Settings Settings               `yaml:"settings" json:"settings"`
-	Layouts  []LayoutConfig         `yaml:"layouts" json:"layouts"`
-	Spaces   map[string]SpaceConfig `yaml:"spaces" json:"spaces"`
-	AppRules []AppRule              `yaml:"appRules" json:"appRules"`
-	Borders  *BorderConfig          `yaml:"borders,omitempty" json:"borders,omitempty"`
+	Settings      Settings               `yaml:"settings" json:"settings"`
+	Layouts       []LayoutConfig         `yaml:"layouts" json:"layouts"`
+	Spaces        map[string]SpaceConfig `yaml:"spaces" json:"spaces"`
+	AppRules      []AppRule              `yaml:"appRules" json:"appRules"`
+	Borders       *BorderConfig          `yaml:"borders,omitempty" json:"borders,omitempty"`
+	Notifications *NotificationConfig    `yaml:"notifications,omitempty" json:"notifications,omitempty"`
 }
 
 // Settings contains global application settings
@@ -287,4 +288,20 @@ func (b *BorderConfig) GetInactiveStyle() *InactiveBorderStyle {
 		CornerRadius: cornerRadius,
 		Opacity:      1.0,
 	}
+}
+
+// NotificationConfig defines notification display settings
+type NotificationConfig struct {
+	Cell   string                   `yaml:"cell,omitempty" json:"cell,omitempty"`     // Default cell for positioning
+	Anchor string                   `yaml:"anchor,omitempty" json:"anchor,omitempty"` // center, topLeft, topRight, bottomLeft, bottomRight
+	Style  *NotificationStyleConfig `yaml:"style,omitempty" json:"style,omitempty"`
+}
+
+// NotificationStyleConfig defines visual appearance of notifications
+type NotificationStyleConfig struct {
+	BackgroundColor string  `yaml:"backgroundColor,omitempty" json:"backgroundColor,omitempty"`
+	TextColor       string  `yaml:"textColor,omitempty" json:"textColor,omitempty"`
+	CornerRadius    float64 `yaml:"cornerRadius,omitempty" json:"cornerRadius,omitempty"`
+	Width           float64 `yaml:"width,omitempty" json:"width,omitempty"`
+	Padding         float64 `yaml:"padding,omitempty" json:"padding,omitempty"`
 }
