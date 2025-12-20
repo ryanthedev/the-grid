@@ -7,6 +7,7 @@ class BFDManager {
     private var configWatcher: DispatchSourceFileSystemObject?
     private var config: BFDConfig?
     private let configPath: String
+    private var pendingReload: DispatchWorkItem?
 
     init(configPath: String = BFDConfig.defaultPath) {
         self.configPath = configPath
@@ -98,10 +99,17 @@ class BFDManager {
         )
 
         configWatcher?.setEventHandler { [weak self] in
-            // Debounce rapid file changes
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            guard let self = self else { return }
+
+            // Cancel any pending reload
+            self.pendingReload?.cancel()
+
+            // Schedule new reload with debounce
+            let workItem = DispatchWorkItem { [weak self] in
                 self?.reload()
             }
+            self.pendingReload = workItem
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: workItem)
         }
 
         configWatcher?.setCancelHandler {

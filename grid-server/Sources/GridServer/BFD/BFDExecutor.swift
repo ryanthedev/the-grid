@@ -29,7 +29,24 @@ class BFDExecutor {
 
         do {
             try process.run()
+
+            // Set up timeout (30 seconds)
+            let timeoutSeconds: TimeInterval = 30
+            let timeout = DispatchWorkItem {
+                if process.isRunning {
+                    process.terminate()
+                    Task {
+                        await BFDLogger.shared.logError(
+                            "Command timed out after \(Int(timeoutSeconds))s",
+                            hotkey: hotkey
+                        )
+                    }
+                }
+            }
+            DispatchQueue.global().asyncAfter(deadline: .now() + timeoutSeconds, execute: timeout)
+
             process.waitUntilExit()
+            timeout.cancel()
 
             let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
             let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()

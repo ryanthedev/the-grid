@@ -15,6 +15,7 @@ class BFDKeyHandler {
 
     // Rate limiting
     private var lastExecutionTime: [BFDHotkeyKey: Date] = [:]
+    private let lastExecutionTimeLock = NSLock()
     private var config: BFDConfig?
 
     // Callbacks
@@ -209,6 +210,9 @@ class BFDKeyHandler {
         // Check rate limit
         let rateLimit = config.effectiveRateLimit(for: def)
         let now = Date()
+
+        lastExecutionTimeLock.lock()
+        defer { lastExecutionTimeLock.unlock() }
 
         if let lastTime = lastExecutionTime[key] {
             let elapsed = now.timeIntervalSince(lastTime) * 1000
