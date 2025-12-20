@@ -35,3 +35,6 @@ xcuserdata/
 
 # Distribution
 dist/
+
+# Git worktrees
+.worktrees/
