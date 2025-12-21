@@ -17,7 +17,8 @@ let package = Package(
     dependencies: [
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.3.0"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.5.0"),
-        .package(url: "https://github.com/jpsim/Yams.git", from: "5.0.0")
+        .package(url: "https://github.com/jpsim/Yams.git", from: "5.0.0"),
+        .package(url: "https://github.com/open-telemetry/opentelemetry-swift-core.git", from: "2.3.0")
     ],
     targets: [
         .systemLibrary(
@@ -31,7 +32,9 @@ let package = Package(
                 "mss",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
                 .product(name: "Logging", package: "swift-log"),
-                .product(name: "Yams", package: "Yams")
+                .product(name: "Yams", package: "Yams"),
+                .product(name: "OpenTelemetryApi", package: "opentelemetry-swift-core"),
+                .product(name: "OpenTelemetrySdk", package: "opentelemetry-swift-core")
             ],
             path: "Sources/GridServer",
             linkerSettings: [

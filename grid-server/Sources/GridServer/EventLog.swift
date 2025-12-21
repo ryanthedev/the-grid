@@ -47,6 +47,14 @@ actor EventLog {
             "ev": eventType
         ]
 
+        // Add trace context if available
+        if let tid = CurrentSpan.traceId {
+            event["tid"] = tid
+        }
+        if let sid = CurrentSpan.spanId {
+            event["sid"] = sid
+        }
+
         // Merge additional data
         for (key, value) in data {
             event[key] = value
