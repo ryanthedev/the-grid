@@ -157,7 +157,7 @@ class SimpleBorderManager {
                 border.destroy()
                 windowStyleTypes.removeValue(forKey: windowID)
                 Task {
-                    await EventLog.shared.log("bdr.removed", [
+                    await JSONLogger.shared.log("bdr.removed", data: [
                         "wid": windowID,
                         "reason": "no_longer_assigned"
                     ])
@@ -174,7 +174,7 @@ class SimpleBorderManager {
                 var bounds = CGRect.zero
                 guard SLSGetWindowBounds(connectionID, windowID, &bounds) == .success else {
                     border.destroy()
-                    Task { await EventLog.shared.log("bdr.fail", ["wid": windowID, "reason": "window_gone_after_create"]) }
+                    Task { await JSONLogger.shared.log("bdr.fail", data: ["wid": windowID, "reason": "window_gone_after_create"]) }
                     continue
                 }
 
@@ -185,14 +185,14 @@ class SimpleBorderManager {
                 }
                 windowBorders[windowID] = border
                 Task {
-                    await EventLog.shared.log("bdr.created", [
+                    await JSONLogger.shared.log("bdr.created", data: [
                         "wid": windowID,
                         "cell": assignments[windowID] ?? ""
                     ])
                 }
             } else {
                 Task {
-                    await EventLog.shared.log("bdr.fail", [
+                    await JSONLogger.shared.log("bdr.fail", data: [
                         "wid": windowID,
                         "reason": "create_failed"
                     ])
@@ -349,7 +349,7 @@ class SimpleBorderManager {
                     newBorder.destroy()
                     windowStyleTypes.removeValue(forKey: windowID)
                     Task {
-                        await EventLog.shared.log("err.bdr.recreate", ["wid": windowID, "reason": "target_gone"])
+                        await JSONLogger.shared.log("err.bdr.recreate", data: ["wid": windowID, "reason": "target_gone"])
                     }
                     continue
                 }
@@ -357,7 +357,7 @@ class SimpleBorderManager {
                 windowBorders[windowID] = newBorder
                 currentBorder = newBorder
                 Task {
-                    await EventLog.shared.log("bdr.recreate", [
+                    await JSONLogger.shared.log("bdr.recreate", data: [
                         "wid": windowID,
                         "from": previousStyleType ?? "none",
                         "to": styleType
@@ -367,7 +367,7 @@ class SimpleBorderManager {
                 // Recreation failed - clean up state so we can try again on next focus change
                 windowStyleTypes.removeValue(forKey: windowID)
                 Task {
-                    await EventLog.shared.log("err.bdr.recreate", [
+                    await JSONLogger.shared.log("err.bdr.recreate", data: [
                         "wid": windowID,
                         "warning": "window_has_no_border"
                     ])
@@ -383,7 +383,7 @@ class SimpleBorderManager {
             guard SLSGetWindowBounds(connectionID, windowID, &windowFrame) == .success else {
                 currentBorder.hide(reason: "no_bounds")
                 Task {
-                    await EventLog.shared.log("bdr.hide", [
+                    await JSONLogger.shared.log("bdr.hide", data: [
                         "wid": windowID,
                         "reason": "no_bounds"
                     ])
@@ -401,7 +401,7 @@ class SimpleBorderManager {
             // Log if visible
             if style != nil {
                 Task {
-                    await EventLog.shared.log("bdr.show", [
+                    await JSONLogger.shared.log("bdr.show", data: [
                         "wid": windowID,
                         "style": styleType,
                         "cell": windowCellID,
@@ -436,7 +436,7 @@ class SimpleBorderManager {
 
         // Log border move event
         Task {
-            await EventLog.shared.log("bdr.move", [
+            await JSONLogger.shared.log("bdr.move", data: [
                 "wid": windowID,
                 "frame": [newFrame.origin.x, newFrame.origin.y, newFrame.size.width, newFrame.size.height]
             ])
@@ -462,7 +462,7 @@ class SimpleBorderManager {
 
         // Log border hide event
         Task {
-            await EventLog.shared.log("bdr.hide", [
+            await JSONLogger.shared.log("bdr.hide", data: [
                 "wid": windowID,
                 "reason": "minimized"
             ])
@@ -507,7 +507,7 @@ class SimpleBorderManager {
 
         // Log border hide event
         Task {
-            await EventLog.shared.log("bdr.hide_all", [
+            await JSONLogger.shared.log("bdr.hide_all", data: [
                 "reason": "app_hidden",
                 "bundleID": bundleID
             ])
@@ -582,7 +582,7 @@ class SimpleBorderManager {
             windowStyleTypes.removeValue(forKey: windowID)
 
             Task {
-                await EventLog.shared.log("bdr.removed", [
+                await JSONLogger.shared.log("bdr.removed", data: [
                     "wid": windowID,
                     "reason": "destroyed"
                 ])
@@ -628,7 +628,7 @@ class SimpleBorderManager {
                 }
             }
             Task {
-                await EventLog.shared.log("bdr.display_disconnect", [
+                await JSONLogger.shared.log("bdr.display_disconnect", data: [
                     "uuid": displayUUID,
                     "windows_cleaned": assignments.count
                 ])

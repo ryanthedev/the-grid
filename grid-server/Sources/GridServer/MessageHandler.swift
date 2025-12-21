@@ -20,7 +20,7 @@ class MessageHandler {
     func register(method: String, handler: @escaping RequestHandler) {
         handlers[method] = handler
         Task {
-            await EventLog.shared.log("msg.register", ["method": method])
+            await JSONLogger.shared.log("msg.register", data: ["method": method])
         }
     }
 
@@ -40,7 +40,7 @@ class MessageHandler {
         // Execute handler within span context
         Task {
             await CurrentSpan.$current.withValue(span) {
-                await EventLog.shared.log("msg.handle", ["id": request.id, "method": request.method])
+                await JSONLogger.shared.log("msg.handle", data: ["id": request.id, "method": request.method])
 
                 guard let handler = handlers[request.method] else {
                     let response = Response(
@@ -51,7 +51,7 @@ class MessageHandler {
                         )
                     )
 
-                    await EventLog.shared.log("msg.err", [
+                    await JSONLogger.shared.log("msg.err", data: [
                         "op": "method_not_found",
                         "method": request.method,
                         "id": request.id
@@ -125,7 +125,7 @@ class MessageHandler {
                 completion(response)
             } catch {
                 Task {
-                    await EventLog.shared.log("err.state", ["op": "dump", "error": "\(error)"])
+                    await JSONLogger.shared.log("err.state", data: ["op": "dump", "error": "\(error)"])
                 }
                 let response = Response(
                     id: request.id,
@@ -177,7 +177,7 @@ class MessageHandler {
 
                 // Log error event
                 Task {
-                    await EventLog.shared.log("err.window", [
+                    await JSONLogger.shared.log("err.window", data: [
                         "op": "updateWindow",
                         "msg": "not_found",
                         "wid": windowID,
@@ -276,7 +276,7 @@ class MessageHandler {
 
                 // Log error event
                 Task {
-                    await EventLog.shared.log("err.window", [
+                    await JSONLogger.shared.log("err.window", data: [
                         "op": "updateWindow",
                         "msg": errors.joined(separator: ", "),
                         "wid": windowID,
@@ -574,7 +574,7 @@ class MessageHandler {
             guard let windowState = state.windows[String(wid)] else {
                 // Log error event
                 Task {
-                    await EventLog.shared.log("err.window", [
+                    await JSONLogger.shared.log("err.window", data: [
                         "op": "window.focus",
                         "msg": "not_found",
                         "wid": wid,
@@ -597,7 +597,7 @@ class MessageHandler {
             } else {
                 // Log error event
                 Task {
-                    await EventLog.shared.log("err.window", [
+                    await JSONLogger.shared.log("err.window", data: [
                         "op": "window.focus",
                         "msg": "failed",
                         "wid": wid,
@@ -721,7 +721,7 @@ class MessageHandler {
             let result = CGWarpMouseCursorPosition(center)
             if result == .success {
                 Task {
-                    await EventLog.shared.log("dbg.mouse_warp", [
+                    await JSONLogger.shared.log("dbg.mouse_warp", data: [
                         "wid": wid,
                         "x": center.x,
                         "y": center.y
@@ -734,7 +734,7 @@ class MessageHandler {
                 ])))
             } else {
                 Task {
-                    await EventLog.shared.log("err.mouse", ["op": "warp", "result": result.rawValue])
+                    await JSONLogger.shared.log("err.mouse", data: ["op": "warp", "result": result.rawValue])
                 }
                 completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to warp mouse cursor")))
             }
@@ -762,7 +762,7 @@ class MessageHandler {
             BorderConfigManager.shared.update(from: configDict)
 
             Task {
-                await EventLog.shared.log("dbg.border_config", [
+                await JSONLogger.shared.log("dbg.border_config", data: [
                     "enabled": BorderConfigManager.shared.enabled,
                     "activeWidth": BorderConfigManager.shared.activeStyle.width,
                     "padding": BorderConfigManager.shared.padding
@@ -810,7 +810,7 @@ class MessageHandler {
                         cellBounds[cellID] = CGRect(x: x, y: y, width: width, height: height)
                     } else {
                         Task {
-                            await EventLog.shared.log("warn.cell_bounds", ["op": "parse", "cell": cellID])
+                            await JSONLogger.shared.log("warn.cell_bounds", data: ["op": "parse", "cell": cellID])
                         }
                     }
                 }
@@ -825,7 +825,7 @@ class MessageHandler {
             }
 
             Task {
-                await EventLog.shared.log("dbg.cell_assign", [
+                await JSONLogger.shared.log("dbg.cell_assign", data: [
                     "display": displayUUID,
                     "count": cellAssignments.count
                 ])
