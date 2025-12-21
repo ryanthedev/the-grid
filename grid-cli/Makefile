@@ -5,16 +5,21 @@ BUILD_DIR=bin
 GO=go
 GOFLAGS=-v
 
+# Version from parent VERSION file, git commit hash
+VERSION := $(shell cat ../VERSION 2>/dev/null || echo "dev")
+COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+LDFLAGS := -ldflags "-X main.version=$(VERSION) -X main.commit=$(COMMIT)"
+
 # Build the CLI
 build:
-	@echo "Building $(BINARY_NAME)..."
+	@echo "Building $(BINARY_NAME) v$(VERSION) ($(COMMIT))..."
 	@mkdir -p $(BUILD_DIR)
-	$(GO) build $(GOFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/grid
+	$(GO) build $(GOFLAGS) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/grid
 
 # Install to $GOPATH/bin
 install:
-	@echo "Installing $(BINARY_NAME)..."
-	$(GO) install $(GOFLAGS) ./cmd/grid
+	@echo "Installing $(BINARY_NAME) v$(VERSION) ($(COMMIT))..."
+	$(GO) install $(GOFLAGS) $(LDFLAGS) ./cmd/grid
 
 # Clean build artifacts
 clean:

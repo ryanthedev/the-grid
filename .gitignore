@@ -2,6 +2,7 @@
 grid-server/.build/
 grid-server/.swiftpm/
 grid-server/Package.resolved
+grid-server/Sources/GridServer/Version.swift
 # Go build artifacts (grid-cli)
 grid-cli/bin/
 grid-cli/thegrid

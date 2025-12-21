@@ -10,12 +10,20 @@ all: build
 build: server cli
 	@echo "✓ Built all components"
 
+# Generate Version.swift with build-time version info
+generate-version:
+	@echo "Generating Version.swift..."
+	@COMMIT=$$(git rev-parse --short HEAD 2>/dev/null || echo "unknown"); \
+	echo "// Auto-generated at build time - do not edit" > grid-server/Sources/GridServer/Version.swift; \
+	echo "let appVersion = \"$(VERSION)\"" >> grid-server/Sources/GridServer/Version.swift; \
+	echo "let appCommit = \"$$COMMIT\"" >> grid-server/Sources/GridServer/Version.swift
+
 # Server targets
-server:
+server: generate-version
 	@echo "Building grid-server..."
 	@cd grid-server && swift build
 
-server-release:
+server-release: generate-version
 	@echo "Building grid-server (release)..."
 	@cd grid-server && swift build -c release
 
@@ -83,7 +91,7 @@ dist: server-release cli
 	@shasum -a 256 dist/thegrid-$(VERSION).tar.gz
 
 # Universal binary builds (arm64 + x86_64)
-server-universal:
+server-universal: generate-version
 	@echo "Building grid-server (universal binary)..."
 	@cd grid-server && swift build -c release --arch arm64 --arch x86_64
 	@echo "Verifying universal binary..."
@@ -117,9 +125,9 @@ app-bundle: server-universal
 	@cp grid-server/Info.plist dist/GridServer.app/Contents/
 	@sed -i '' "s/VERSION_PLACEHOLDER/$(VERSION)/g" dist/GridServer.app/Contents/Info.plist
 	@grep -q "$(VERSION)" dist/GridServer.app/Contents/Info.plist || (echo "ERROR: Version substitution failed" && exit 1)
-	@echo "Signing app bundle (inside-out)..."
-	@codesign -fs - dist/GridServer.app/Contents/MacOS/grid-server
-	@codesign -fs - dist/GridServer.app
+	@echo "Signing app bundle with entitlements (inside-out)..."
+	@codesign -fs - --entitlements grid-server/GridServer.entitlements dist/GridServer.app/Contents/MacOS/grid-server
+	@codesign -fs - --entitlements grid-server/GridServer.entitlements dist/GridServer.app
 	@echo "Verifying app bundle..."
 	@codesign --verify --verbose dist/GridServer.app
 	@codesign -dv dist/GridServer.app 2>&1 | head -5
@@ -205,3 +213,26 @@ reload: build
 	@echo "Applying layout: $(LAYOUT)"
 	@./grid-cli/bin/thegrid layout apply $(LAYOUT)
 	@echo "✓ Server reloaded and layout applied"
+
+# Development with app bundle (for accessibility permissions)
+# Builds server, updates app bundle binary, runs from app bundle
+dev-app: server cli
+	@echo "Stopping existing server..."
+	@-pkill -f "grid-server" 2>/dev/null || true
+	@-pkill -f "GridServer" 2>/dev/null || true
+	@sleep 0.5
+	@echo "Updating dev app bundle..."
+	@mkdir -p dist/GridServer.app/Contents/MacOS
+	@mkdir -p dist/GridServer.app/Contents/Resources
+	@cp grid-server/.build/debug/grid-server dist/GridServer.app/Contents/MacOS/
+	@cp grid-server/Info.plist dist/GridServer.app/Contents/
+	@sed -i '' "s/VERSION_PLACEHOLDER/$(VERSION)-dev/g" dist/GridServer.app/Contents/Info.plist 2>/dev/null || true
+	@echo "Signing dev app bundle..."
+	@codesign -fs - --entitlements grid-server/GridServer.entitlements dist/GridServer.app/Contents/MacOS/grid-server
+	@codesign -fs - --entitlements grid-server/GridServer.entitlements dist/GridServer.app
+	@echo "Clearing logs..."
+	@rm -f ~/.local/state/thegrid/grid-cli.log
+	@rm -f ~/.local/state/thegrid/events.jsonl
+	@rm -f ~/.local/state/thegrid/grid-server.log
+	@echo "Starting server from app bundle (Ctrl+C to stop)..."
+	@script -q ~/.local/state/thegrid/grid-server.log dist/GridServer.app/Contents/MacOS/grid-server --debug

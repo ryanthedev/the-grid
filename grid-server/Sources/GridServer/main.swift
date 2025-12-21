@@ -3,6 +3,11 @@ import Foundation
 import AppKit
 import Logging
 
+// Note: appVersion and appCommit are defined in Version.swift (auto-generated at build time)
+
+/// Full version string combining version and commit
+var appVersionFull: String { "\(appVersion) (\(appCommit))" }
+
 /// Helper to log events synchronously from non-async contexts
 func log(_ event: String, _ data: [String: Any] = [:]) {
     Task { await EventLog.shared.log(event, data) }
@@ -24,7 +29,7 @@ struct GridServerCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "grid-server",
         abstract: "Unix domain socket server for macOS window management",
-        version: "0.1.0"
+        version: appVersionFull
     )
 
     @Option(name: .shortAndLong, help: "Path to the Unix domain socket")
@@ -47,7 +52,7 @@ struct GridServerCommand: ParsableCommand {
         LoggingSystem.bootstrap { _ in SilentLogHandler() }
 
         // Log server start
-        log("srv.start", ["ver": "0.1.0", "socket": socketPath])
+        log("srv.start", ["ver": appVersionFull, "socket": socketPath])
 
         // Check for Accessibility permission
         if !PermissionChecker.checkAccessibilityPermission() {

@@ -31,6 +31,12 @@ import (
 	gridWindow "github.com/yourusername/grid-cli/internal/window"
 )
 
+// Version info - injected at build time via ldflags
+var (
+	version = "dev"
+	commit  = "unknown"
+)
+
 var (
 	socketPath string
 	timeout    time.Duration
@@ -64,7 +70,7 @@ var rootCmd = &cobra.Command{
 
 It allows you to query window state, manipulate window positions and sizes,
 and move windows between spaces and displays.`,
-	Version: "0.1.0",
+	Version: fmt.Sprintf("%s (%s)", version, commit),
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		// Generate request ID and log command start
 		currentRequestID = generateRequestID()
