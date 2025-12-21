@@ -71,8 +71,6 @@ USAGE: grid-server [OPTIONS]
 OPTIONS:
   -s, --socket-path <socket-path>
                           Path to the Unix domain socket (default: /tmp/grid-server.sock)
-  -v, --verbose           Enable verbose logging
-  -d, --debug             Enable debug logging
   --heartbeat             Enable periodic heartbeat events for testing
   --heartbeat-interval <heartbeat-interval>
                           Heartbeat interval in seconds (default: 10.0)
@@ -89,11 +87,8 @@ OPTIONS:
 # Custom socket path
 ./grid-server/.build/debug/grid-server --socket-path /tmp/my-grid.sock
 
-# Verbose logging
-./grid-server/.build/debug/grid-server --verbose
-
-# Debug logging with heartbeat
-./grid-server/.build/debug/grid-server --debug --heartbeat --heartbeat-interval 5
+# With heartbeat for testing
+./grid-server/.build/debug/grid-server --heartbeat --heartbeat-interval 5
 ```
 
 ## Development
@@ -207,11 +202,17 @@ lldb .build/debug/grid-server
 
 ### Logging
 
-The server uses different log levels:
+All server logs are written to `~/.local/state/thegrid/thegrid-server.json` in JSONL format:
 
-- **Normal**: Important operations and errors
-- **Verbose** (`--verbose`): Detailed operation logs
-- **Debug** (`--debug`): All operations including internal state changes
+```json
+{"ts":1702840000,"ev":"srv.start","data":{"ver":"0.1.0"}}
+{"ts":1702840001,"ev":"win.focus","data":{"wid":123}}
+```
+
+Use `jlog()` for logging in Swift code:
+```swift
+jlog("win.focus", data: ["wid": windowID])
+```
 
 ## Performance Considerations
 

@@ -187,11 +187,10 @@ dev: build
 	@-pkill -f "grid-server" 2>/dev/null || true
 	@sleep 0.5
 	@echo "Clearing logs..."
-	@rm -f ~/.local/state/thegrid/grid-cli.log
-	@rm -f ~/.local/state/thegrid/events.jsonl
-	@rm -f ~/.local/state/thegrid/grid-server.log
+	@rm -f ~/.local/state/thegrid/thegrid-cli.json
+	@rm -f ~/.local/state/thegrid/thegrid-server.json
 	@echo "Starting server (Ctrl+C to stop)..."
-	@script -q ~/.local/state/thegrid/grid-server.log ./grid-server/.build/debug/grid-server --debug
+	@./grid-server/.build/debug/grid-server
 
 # Install dev build to ~/.local/state/thegrid/bin for wrapper resolution
 install-dev: cli
