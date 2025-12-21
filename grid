@@ -1,6 +1,5 @@
 #!/bin/bash
 make
-rm -f ~/.local/state/thegrid/grid-cli.log
-rm -f ~/.local/state/thegrid/events.jsonl
-rm -f ~/.local/state/thegrid/grid-server.log
-script -q ~/.local/state/thegrid/grid-server.log grid-server/.build/debug/grid-server --debug
+rm -f ~/.local/state/thegrid/thegrid-cli.json
+rm -f ~/.local/state/thegrid/thegrid-server.json
+./grid-server/.build/debug/grid-server

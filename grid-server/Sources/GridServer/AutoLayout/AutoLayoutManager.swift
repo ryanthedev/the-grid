@@ -21,18 +21,18 @@ class AutoLayoutManager {
 
                 handleSpaceChange(spaceID: spaceState.id, spaceType: spaceState.type)
             }
-            await EventLog.shared.log("autolayout.startup.done", [:])
+            await JSONLogger.shared.log("autolayout.startup.done", data: [:])
         }
     }
 
     func handleSpaceChange(spaceID: UInt64, spaceType: String) {
         guard spaceType == "user" else {
-            Task { await EventLog.shared.log("autolayout.skip.fullscreen", ["sid": spaceID]) }
+            Task { await JSONLogger.shared.log("autolayout.skip.fullscreen", data: ["sid": spaceID]) }
             return
         }
 
         if CLIStateReader.shared.hasLayout(spaceID: String(spaceID)) {
-            Task { await EventLog.shared.log("autolayout.skip.exists", ["sid": spaceID]) }
+            Task { await JSONLogger.shared.log("autolayout.skip.exists", data: ["sid": spaceID]) }
             return
         }
 
@@ -41,11 +41,11 @@ class AutoLayoutManager {
 
     private func executeApply(spaceID: UInt64, layoutID: String) {
         guard let cli = cliPath else {
-            Task { await EventLog.shared.log("autolayout.error", ["sid": spaceID, "err": "CLI not found"]) }
+            Task { await JSONLogger.shared.log("autolayout.error", data: ["sid": spaceID, "err": "CLI not found"]) }
             return
         }
 
-        Task { await EventLog.shared.log("autolayout.apply", ["sid": spaceID, "layout": layoutID]) }
+        Task { await JSONLogger.shared.log("autolayout.apply", data: ["sid": spaceID, "layout": layoutID]) }
 
         queue.async {
             let process = Process()
@@ -60,12 +60,12 @@ class AutoLayoutManager {
                 process.waitUntilExit()
 
                 if process.terminationStatus == 0 {
-                    Task { await EventLog.shared.log("autolayout.success", ["sid": spaceID]) }
+                    Task { await JSONLogger.shared.log("autolayout.success", data: ["sid": spaceID]) }
                 } else {
-                    Task { await EventLog.shared.log("autolayout.error", ["sid": spaceID, "code": Int(process.terminationStatus)]) }
+                    Task { await JSONLogger.shared.log("autolayout.error", data: ["sid": spaceID, "code": Int(process.terminationStatus)]) }
                 }
             } catch {
-                Task { await EventLog.shared.log("autolayout.error", ["sid": spaceID, "err": error.localizedDescription]) }
+                Task { await JSONLogger.shared.log("autolayout.error", data: ["sid": spaceID, "err": error.localizedDescription]) }
             }
         }
     }

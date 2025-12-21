@@ -127,8 +127,9 @@ thegrid render <space-id>             # Render window positions (JSON)
 --timeout <duration> Request timeout (default: 30s)
 --json               Output in JSON format
 --no-color           Disable colored output
---debug              Enable debug logging
 ```
+
+All CLI logs are written to `~/.local/state/thegrid/thegrid-cli.json` in JSONL format.
 
 ## MSS Requirements
 

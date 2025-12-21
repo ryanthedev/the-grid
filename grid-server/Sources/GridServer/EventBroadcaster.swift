@@ -19,13 +19,13 @@ class EventBroadcaster {
     func broadcast(event: Event, excludeSocket: Int32? = nil) {
         guard let server = socketServer else {
             Task {
-                await EventLog.shared.log("warn.broadcast", ["msg": "no_socket_server"])
+                await JSONLogger.shared.log("warn.broadcast", data: ["msg": "no_socket_server"])
             }
             return
         }
 
         Task {
-            await EventLog.shared.log("event.broadcast", ["type": event.eventType])
+            await JSONLogger.shared.log("event.broadcast", data: ["type": event.eventType])
         }
 
         let message = Message(event: event)
@@ -53,7 +53,7 @@ class EventBroadcaster {
         stopHeartbeat()
 
         Task {
-            await EventLog.shared.log("event.heartbeat", ["op": "start", "interval": interval])
+            await JSONLogger.shared.log("event.heartbeat", data: ["op": "start", "interval": interval])
         }
 
         let timer = DispatchSource.makeTimerSource(queue: timerQueue)
@@ -71,7 +71,7 @@ class EventBroadcaster {
         eventTimer?.cancel()
         eventTimer = nil
         Task {
-            await EventLog.shared.log("event.heartbeat", ["op": "stop"])
+            await JSONLogger.shared.log("event.heartbeat", data: ["op": "stop"])
         }
     }
 

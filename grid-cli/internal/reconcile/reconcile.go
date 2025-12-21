@@ -5,8 +5,8 @@ import (
 
 	"github.com/yourusername/grid-cli/internal/client"
 	"github.com/yourusername/grid-cli/internal/config"
+	"github.com/yourusername/grid-cli/internal/jsonlog"
 	"github.com/yourusername/grid-cli/internal/layout"
-	"github.com/yourusername/grid-cli/internal/logging"
 	"github.com/yourusername/grid-cli/internal/server"
 	"github.com/yourusername/grid-cli/internal/state"
 	"github.com/yourusername/grid-cli/internal/types"
@@ -191,10 +191,7 @@ func syncBorders(ctx context.Context, c *client.Client, snap *server.Snapshot, r
 	// 4. Get layout definition from config
 	layoutDef, err := cfg.GetLayout(layoutID)
 	if err != nil {
-		logging.Warn().
-			Str("layoutID", layoutID).
-			Err(err).
-			Msg("syncBorders: failed to get layout definition")
+		jsonlog.Log("warn.sync_borders", jsonlog.WithData(map[string]any{"lid": layoutID, "err": err.Error()}))
 		return
 	}
 
@@ -218,13 +215,13 @@ func syncBorders(ctx context.Context, c *client.Client, snap *server.Snapshot, r
 	// 8. Get display UUID for per-display caching
 	displayUUID := snap.GetCurrentDisplayUUID()
 	if displayUUID == "" {
-		logging.Warn().Msg("syncBorders: could not determine display UUID, skipping")
+		jsonlog.Log("warn.sync_borders", jsonlog.WithMsg("could not determine display UUID"))
 		return
 	}
 
 	// 9. Send to server
 	if err := c.SendCellAssignments(ctx, displayUUID, assignments, nil, paddedCellBounds); err != nil {
-		logging.Warn().Err(err).Msg("syncBorders: failed to send cell assignments")
+		jsonlog.Log("warn.sync_borders", jsonlog.WithData(map[string]any{"err": err.Error()}))
 		return
 	}
 }
@@ -248,10 +245,7 @@ func SyncBordersForDisplay(ctx context.Context, c *client.Client, displayInfo se
 
 	layoutDef, err := cfg.GetLayout(spaceState.CurrentLayoutID)
 	if err != nil {
-		logging.Warn().
-			Err(err).
-			Str("layoutID", spaceState.CurrentLayoutID).
-			Msg("SyncBordersForDisplay: layout not found")
+		jsonlog.Log("warn.sync_borders_display", jsonlog.WithData(map[string]any{"lid": spaceState.CurrentLayoutID, "err": err.Error()}))
 		return
 	}
 
@@ -261,9 +255,7 @@ func SyncBordersForDisplay(ctx context.Context, c *client.Client, displayInfo se
 		displayBounds = displayInfo.Frame
 	}
 	if displayBounds == (types.Rect{}) {
-		logging.Warn().
-			Str("displayUUID", displayInfo.UUID).
-			Msg("SyncBordersForDisplay: display has no frame information")
+		jsonlog.Log("warn.sync_borders_display", jsonlog.WithData(map[string]any{"display": displayInfo.UUID, "msg": "no frame info"}))
 		return
 	}
 
@@ -289,7 +281,7 @@ func SyncBordersForDisplay(ctx context.Context, c *client.Client, displayInfo se
 	paddedBounds := applyCellPadding(cellBounds, layoutDef, baseSpacing, settingsPadding)
 
 	if err := c.SendCellAssignments(ctx, displayInfo.UUID, assignments, nil, paddedBounds); err != nil {
-		logging.Warn().Err(err).Msg("SyncBordersForDisplay: failed to send cell assignments")
+		jsonlog.Log("warn.sync_borders_display", jsonlog.WithData(map[string]any{"err": err.Error()}))
 		return
 	}
 }
@@ -310,11 +302,9 @@ func applyCellPadding(cellBounds map[string]client.CellRect, layoutDef *types.La
 
 			// Warn if padding results in zero-size bounds
 			if width == 0 || height == 0 {
-				logging.Warn().
-					Str("cellID", cellID).
-					Float64("originalWidth", rect.Width).
-					Float64("originalHeight", rect.Height).
-					Msg("Cell padding resulted in zero-size bounds")
+				jsonlog.Log("warn.cell_padding_zero", jsonlog.WithData(map[string]any{
+					"cell": cellID, "origW": rect.Width, "origH": rect.Height,
+				}))
 			}
 
 			result[cellID] = client.CellRect{

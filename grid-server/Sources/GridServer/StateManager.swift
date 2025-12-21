@@ -48,7 +48,7 @@ class StateManager {
         self.mssClient = MSSClient()
 
         Task {
-            await EventLog.shared.log("state.init", ["cid": self.connectionID])
+            await JSONLogger.shared.log("state.init", data: ["cid": self.connectionID])
         }
     }
 
@@ -103,9 +103,7 @@ class StateManager {
     // MARK: - State Refresh
 
     private func refreshCompleteState() {
-        Task {
-            await EventLog.shared.log("state.refresh", [:])
-        }
+        jlog("state.refresh")
 
         // Refresh in order: displays -> spaces -> applications -> windows
         refreshDisplays()
@@ -165,7 +163,7 @@ class StateManager {
             }
 
             Task {
-                await EventLog.shared.log("win.focus", [
+                await JSONLogger.shared.log("win.focus", data: [
                     "wid": windowID,
                     "app": frontApp.localizedName ?? "unknown",
                     "sid": spaceID,
@@ -188,16 +186,12 @@ class StateManager {
         }
 
         state.applications = applications
-        Task {
-            await EventLog.shared.log("app.refresh", ["count": applications.count])
-        }
+        jlog("app.refresh", data: ["count": applications.count])
     }
 
     private func refreshDisplays() {
         guard let displaysArray = SLSCopyManagedDisplays(connectionID) else {
-            Task {
-                await EventLog.shared.log("warn.dsp", ["msg": "failed to get displays"])
-            }
+            jlog("warn.dsp", msg: "failed to get displays")
             return
         }
 
@@ -218,9 +212,7 @@ class StateManager {
         }
 
         state.displays = displays
-        Task {
-            await EventLog.shared.log("dsp.refresh", ["count": displays.count])
-        }
+        jlog("dsp.refresh", data: ["count": displays.count])
     }
 
     /// Refresh currentSpaceID for all displays without doing a full display refresh
@@ -235,9 +227,7 @@ class StateManager {
 
     private func refreshSpaces() {
         guard let spacesArray = SLSCopyManagedDisplaySpaces(connectionID) else {
-            Task {
-                await EventLog.shared.log("warn.spc", ["msg": "failed to get spaces"])
-            }
+            jlog("warn.spc", msg: "failed to get spaces")
             return
         }
 
@@ -298,9 +288,7 @@ class StateManager {
         }
 
         state.spaces = spaces
-        Task {
-            await EventLog.shared.log("spc.refresh", ["count": spaces.count])
-        }
+        jlog("spc.refresh", data: ["count": spaces.count])
     }
 
     /// Get the current space for a window using fallback mechanism
@@ -487,9 +475,7 @@ class StateManager {
         // Use .optionAll to get windows from all spaces, not just the active space
         let options: CGWindowListOption = [.optionAll, .excludeDesktopElements]
         guard let windowList = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
-            Task {
-                await EventLog.shared.log("warn.win", ["msg": "failed to get window list"])
-            }
+            jlog("warn.win", msg: "failed to get window list")
             return
         }
 
@@ -604,9 +590,7 @@ class StateManager {
         }
 
         state.windows = windows
-        Task {
-            await EventLog.shared.log("win.refresh", ["count": windows.count])
-        }
+        jlog("win.refresh", data: ["count": windows.count])
     }
 
     // MARK: - Observer Management
@@ -622,9 +606,7 @@ class StateManager {
             createObserver(for: app)
         }
 
-        Task {
-            await EventLog.shared.log("ax.observer.create", ["count": applicationObservers.count])
-        }
+        jlog("ax.observer.create", data: ["count": applicationObservers.count])
     }
 
     /// Create an AX observer for a specific application
@@ -658,9 +640,7 @@ class StateManager {
 
         applicationObservers.removeValue(forKey: pid)
 
-        Task {
-            await EventLog.shared.log("ax.observer.stop", ["pid": pid])
-        }
+        jlog("ax.observer.stop", data: ["pid": pid])
     }
 
     // MARK: - Polling
@@ -676,9 +656,7 @@ class StateManager {
         }
         timer.resume()
         pollTimer = timer
-        Task {
-            await EventLog.shared.log("state.poll", ["interval": interval])
-        }
+        jlog("state.poll", data: ["interval": interval])
     }
 
     /// Stop periodic window state polling
@@ -870,7 +848,7 @@ class StateManager {
                     // Log window created event
                     let appName = window.appName ?? "unknown"
                     let frame = window.frame
-                    await EventLog.shared.log("win.create", [
+                    await JSONLogger.shared.log("win.create", data: [
                         "wid": windowID,
                         "pid": pid,
                         "app": appName,
@@ -891,7 +869,7 @@ class StateManager {
             Task {
                 await CurrentSpan.$current.withValue(span) {
                     // Log window destroyed event
-                    await EventLog.shared.log("win.destroy", ["wid": windowID])
+                    await JSONLogger.shared.log("win.destroy", data: ["wid": windowID])
 
                     // Get PID before removing window
                     let pid = self.state.windows[String(windowID)]?.pid
@@ -943,7 +921,7 @@ class StateManager {
                     self.state.metadata.update()
 
                     // Log window moved event
-                    await EventLog.shared.log("win.move", [
+                    await JSONLogger.shared.log("win.move", data: [
                         "wid": windowID,
                         "frame": [frame.origin.x, frame.origin.y, frame.size.width, frame.size.height]
                     ])
@@ -978,6 +956,8 @@ class StateManager {
         queue.async { [span] in
             Task {
                 await CurrentSpan.$current.withValue(span) {
+                    let stateSpan = await CurrentSpan.current?.startChild("state", data: ["wid": Int(windowID)])
+
                     // Store previous focused window for event logging
                     let previousWindowID = self.state.metadata.focusedWindowID
 
@@ -990,7 +970,7 @@ class StateManager {
 
                         // Log if display changed
                         if self.state.metadata.activeDisplayUUID != displayStr {
-                            await EventLog.shared.log("dsp.change", [
+                            await JSONLogger.shared.log("dsp.change", data: [
                                 "display": displayStr,
                                 "wid": windowID
                             ])
@@ -1015,7 +995,7 @@ class StateManager {
 
                     // Log focus event
                     let appName = self.state.windows[String(windowID)]?.appName ?? "unknown"
-                    await EventLog.shared.log("win.focus", [
+                    await JSONLogger.shared.log("win.focus", data: [
                         "wid": windowID,
                         "app": appName,
                         "prev": previousWindowID ?? 0
@@ -1023,6 +1003,10 @@ class StateManager {
 
                     // Notify border system
                     self.borderEvents?.handleWindowFocused(windowID)
+
+                    if let stateSpan = stateSpan {
+                        await stateSpan.end()
+                    }
                 }
             }
         }
@@ -1033,7 +1017,7 @@ class StateManager {
         queue.async { [span] in
             Task {
                 await CurrentSpan.$current.withValue(span) {
-                    await EventLog.shared.log("win.min", ["wid": windowID])
+                    await JSONLogger.shared.log("win.min", data: ["wid": windowID])
 
                     guard var window = self.state.windows[String(windowID)] else { return }
                     window.isMinimized = true
@@ -1054,7 +1038,7 @@ class StateManager {
         queue.async { [span] in
             Task {
                 await CurrentSpan.$current.withValue(span) {
-                    await EventLog.shared.log("win.unmin", ["wid": windowID])
+                    await JSONLogger.shared.log("win.unmin", data: ["wid": windowID])
 
                     guard var window = self.state.windows[String(windowID)] else { return }
                     window.isMinimized = false
@@ -1115,7 +1099,7 @@ class StateManager {
                             foundChangedDisplay = true
 
                             // Log space change event
-                            await EventLog.shared.log("spc.change", [
+                            await JSONLogger.shared.log("spc.change", data: [
                                 "sid": display.currentSpaceID,
                                 "from": oldSpaceID
                             ])
@@ -1176,7 +1160,7 @@ class StateManager {
                 state.metadata.activeSpaceID = display.currentSpaceID  // Fix: also set activeSpaceID
                 if oldUUID != display.uuid {
                     Task {
-                        await EventLog.shared.log("dsp.update", [
+                        await JSONLogger.shared.log("dsp.update", data: [
                             "display": display.uuid,
                             "sid": display.currentSpaceID,
                             "prev": oldUUID ?? "nil"
@@ -1187,7 +1171,7 @@ class StateManager {
             }
         }
         Task {
-            await EventLog.shared.log("warn.dsp", ["msg": "no active space found"])
+            await JSONLogger.shared.log("warn.dsp", msg: "no active space found")
         }
     }
 
@@ -1197,7 +1181,7 @@ class StateManager {
         guard let space = state.spaces[spaceKey],
               let windowID = space.lastFocusedWindowID else {
             Task {
-                await EventLog.shared.log("dbg.focus", ["sid": spaceID, "msg": "no last focused window"])
+                await JSONLogger.shared.log("dbg.focus", msg: "no last focused window", data: ["sid": spaceID])
             }
             return
         }
@@ -1206,17 +1190,16 @@ class StateManager {
         guard let window = state.windows[String(windowID)],
               window.isOrderedIn && !window.isMinimized else {
             Task {
-                await EventLog.shared.log("dbg.focus", [
+                await JSONLogger.shared.log("dbg.focus", msg: "window unavailable", data: [
                     "sid": spaceID,
-                    "wid": windowID,
-                    "msg": "window unavailable"
+                    "wid": windowID
                 ])
             }
             return
         }
 
         Task {
-            await EventLog.shared.log("win.focus.restore", [
+            await JSONLogger.shared.log("win.focus.restore", data: [
                 "sid": spaceID,
                 "wid": windowID,
                 "app": window.appName ?? "unknown"
@@ -1229,7 +1212,7 @@ class StateManager {
 
         if !success {
             Task {
-                await EventLog.shared.log("warn.focus", ["wid": windowID, "msg": "restore failed"])
+                await JSONLogger.shared.log("warn.focus", msg: "restore failed", data: ["wid": windowID])
             }
         }
     }
@@ -1256,7 +1239,7 @@ class StateManager {
 
                     self.state.metadata.update()
 
-                    await EventLog.shared.log("dsp.config", [
+                    await JSONLogger.shared.log("dsp.config", data: [
                         "removed": disconnectedDisplays.count,
                         "total": newDisplayUUIDs.count
                     ])
@@ -1277,7 +1260,7 @@ class StateManager {
                     let pidKey = String(app.processIdentifier)
                     self.state.applications[pidKey] = appState
 
-                    await EventLog.shared.log("app.launch", [
+                    await JSONLogger.shared.log("app.launch", data: [
                         "pid": app.processIdentifier,
                         "app": app.localizedName ?? "unknown",
                         "bundle": app.bundleIdentifier ?? "unknown"
@@ -1304,7 +1287,7 @@ class StateManager {
                     if let focusedID = self.state.metadata.focusedWindowID,
                        let focusedWindow = self.state.windows[String(focusedID)],
                        focusedWindow.pid == pid {
-                        await EventLog.shared.log("dbg.focus", ["pid": pid, "msg": "clearing focus (app terminated)"])
+                        await JSONLogger.shared.log("dbg.focus", msg: "clearing focus (app terminated)", data: ["pid": pid])
                         self.state.metadata.focusedWindowID = nil
                     }
 
@@ -1362,7 +1345,7 @@ class StateManager {
         guard result == .success,
               let windowElement = focusedWindow else {
             Task {
-                await EventLog.shared.log("dbg.ax", ["pid": pid, "msg": "could not get focused window"])
+                await JSONLogger.shared.log("dbg.ax", msg: "could not get focused window", data: ["pid": pid])
             }
             return
         }
@@ -1373,13 +1356,13 @@ class StateManager {
 
         guard windowResult == .success, windowID != 0 else {
             Task {
-                await EventLog.shared.log("dbg.ax", ["pid": pid, "msg": "could not get window ID"])
+                await JSONLogger.shared.log("dbg.ax", msg: "could not get window ID", data: ["pid": pid])
             }
             return
         }
 
         Task {
-            await EventLog.shared.log("win.focus.app", ["wid": windowID, "pid": pid])
+            await JSONLogger.shared.log("win.focus.app", data: ["wid": windowID, "pid": pid])
         }
 
         self.state.metadata.focusedWindowID = windowID
@@ -1463,7 +1446,7 @@ class StateManager {
         queue.async { [span] in
             Task {
                 await CurrentSpan.$current.withValue(span) {
-                    await EventLog.shared.log("state.wake", [:])
+                    await JSONLogger.shared.log("state.wake")
                     self.refreshCompleteState()
                 }
             }
@@ -1475,9 +1458,7 @@ class StateManager {
     /// Get current mouse position in global screen coordinates (query-based, not event-driven)
     func getCurrentMousePosition() -> CGPoint {
         guard let event = CGEvent(source: nil) else {
-            Task {
-                await EventLog.shared.log("warn.mouse", ["msg": "failed to get position"])
-            }
+            jlog("warn.mouse", msg: "failed to get position")
             return .zero
         }
         return event.location
@@ -1491,9 +1472,7 @@ class StateManager {
 
         let error = CGGetOnlineDisplayList(32, &displays, &displayCount)
         guard error == .success else {
-            Task {
-                await EventLog.shared.log("warn.dsp", ["msg": "failed to get display list", "err": error.rawValue])
-            }
+            jlog("warn.dsp", msg: "failed to get display list", data: ["err": error.rawValue])
             return nil
         }
 

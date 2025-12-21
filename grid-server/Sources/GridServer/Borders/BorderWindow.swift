@@ -151,7 +151,7 @@ class BorderWindow {
         let targetID = targetWindowID
         destroy()
         // Use captured values (not self.properties) to avoid Swift runtime abort
-        Task { await EventLog.shared.log("bdr.destroy", ["wid": wid, "targetID": targetID]) }
+        Task { await JSONLogger.shared.log("bdr.destroy", data: ["wid": wid, "targetID": targetID]) }
     }
 
     // MARK: - Lifecycle
@@ -159,14 +159,14 @@ class BorderWindow {
     /// Create the overlay window
     func create() -> Bool {
         guard windowID == 0 else {
-            Task { await EventLog.shared.log("warn.bdr.exists", ["targetID": targetWindowID]) }
+            Task { await JSONLogger.shared.log("warn.bdr.exists", data: ["targetID": targetWindowID]) }
             return true
         }
 
         // Get target window bounds to size our overlay
         var targetBounds = CGRect.zero
         guard SLSGetWindowBounds(connectionID, targetWindowID, &targetBounds) == .success else {
-            Task { await EventLog.shared.log("bdr.fail", ["targetID": targetWindowID, "reason": "no_bounds"]) }
+            Task { await JSONLogger.shared.log("bdr.fail", data: ["targetID": targetWindowID, "reason": "no_bounds"]) }
             return false
         }
 
@@ -174,7 +174,7 @@ class BorderWindow {
         var bounds = CGRect(origin: .zero, size: targetBounds.size)
         var region: CFTypeRef?
         guard CGSNewRegionWithRect(&bounds, &region) == .success, let frameRegion = region else {
-            Task { await EventLog.shared.log("bdr.fail", ["targetID": targetWindowID, "reason": "region_failed"]) }
+            Task { await JSONLogger.shared.log("bdr.fail", data: ["targetID": targetWindowID, "reason": "region_failed"]) }
             return false
         }
 
@@ -191,7 +191,7 @@ class BorderWindow {
         )
 
         guard result == .success, newWindowID != 0 else {
-            Task { await EventLog.shared.log("bdr.fail", ["targetID": targetWindowID, "error": result.rawValue, "reason": "window_create_failed"]) }
+            Task { await JSONLogger.shared.log("bdr.fail", data: ["targetID": targetWindowID, "error": result.rawValue, "reason": "window_create_failed"]) }
             return false
         }
 
@@ -212,7 +212,7 @@ class BorderWindow {
         if tagsResult != .success || opacityResult != .success ||
            alphaResult != .success || levelResult != .success {
             Task {
-                await EventLog.shared.log("warn.bdr.setup", [
+                await JSONLogger.shared.log("warn.bdr.setup", data: [
                     "wid": windowID,
                     "tags": tagsResult.rawValue,
                     "opacity": opacityResult.rawValue,
@@ -226,7 +226,7 @@ class BorderWindow {
         context = SLWindowContextCreate(connectionID, windowID, nil)
 
         if context == nil {
-            Task { await EventLog.shared.log("bdr.fail", ["wid": windowID, "reason": "no_context"]) }
+            Task { await JSONLogger.shared.log("bdr.fail", data: ["wid": windowID, "reason": "no_context"]) }
             // Clean up the window we just created
             _ = SLSReleaseWindow(connectionID, windowID)
             self.windowID = 0
@@ -236,7 +236,7 @@ class BorderWindow {
         // Move border to same space as target window
         moveToTargetSpace()
 
-        Task { await EventLog.shared.log("bdr.create", ["wid": windowID, "targetID": targetWindowID]) }
+        Task { await JSONLogger.shared.log("bdr.create", data: ["wid": windowID, "targetID": targetWindowID]) }
         return true
     }
 
@@ -290,7 +290,7 @@ class BorderWindow {
 
         isVisible = false
 
-        Task { await EventLog.shared.log("bdr.hide", ["wid": windowID, "targetID": targetWindowID, "reason": reason]) }
+        Task { await JSONLogger.shared.log("bdr.hide", data: ["wid": windowID, "targetID": targetWindowID, "reason": reason]) }
     }
 
     // MARK: - Update
@@ -347,7 +347,7 @@ class BorderWindow {
         var origin = borderBounds.origin
         _ = SLSMoveWindow(connectionID, windowID, &origin)
 
-        Task { await EventLog.shared.log("bdr.move", ["wid": windowID, "targetID": targetWindowID, "frame": [borderBounds.origin.x, borderBounds.origin.y, borderBounds.size.width, borderBounds.size.height]]) }
+        Task { await JSONLogger.shared.log("bdr.move", data: ["wid": windowID, "targetID": targetWindowID, "frame": [borderBounds.origin.x, borderBounds.origin.y, borderBounds.size.width, borderBounds.size.height]]) }
 
         // Update shape if size changed
         let needsResize = borderBounds.size != currentBounds.size
@@ -374,7 +374,7 @@ class BorderWindow {
                 }
                 isResizing = false
                 processPendingFrame()
-                Task { await EventLog.shared.log("bdr.fail", ["wid": windowID, "reason": "resize_region_failed", "bounds": [borderBounds.origin.x, borderBounds.origin.y, borderBounds.size.width, borderBounds.size.height]]) }
+                Task { await JSONLogger.shared.log("bdr.fail", data: ["wid": windowID, "reason": "resize_region_failed", "bounds": [borderBounds.origin.x, borderBounds.origin.y, borderBounds.size.width, borderBounds.size.height]]) }
                 return
             }
             _ = SLSSetWindowShape(connectionID, windowID, 0, 0, shapeRegion)
@@ -447,7 +447,7 @@ class BorderWindow {
 
         // Style changed - redraw and show
         guard currentBounds.size.width > 0 && currentBounds.size.height > 0 else {
-            Task { await EventLog.shared.log("warn.bdr.bad_bounds", ["bounds": [currentBounds.origin.x, currentBounds.origin.y, currentBounds.size.width, currentBounds.size.height]]) }
+            Task { await JSONLogger.shared.log("warn.bdr.bad_bounds", data: ["bounds": [currentBounds.origin.x, currentBounds.origin.y, currentBounds.size.width, currentBounds.size.height]]) }
             return
         }
 
@@ -460,7 +460,7 @@ class BorderWindow {
         // JankyBorders approach: just use the context without dimension validation
         // CGContext.width/height may return 0 for window-backed contexts, but drawing still works
         guard let drawContext = context else {
-            Task { await EventLog.shared.log("warn.bdr.no_ctx", ["wid": windowID]) }
+            Task { await JSONLogger.shared.log("warn.bdr.no_ctx", data: ["wid": windowID]) }
             return
         }
 
@@ -522,7 +522,7 @@ class BorderWindow {
         }
 
         Task {
-            await EventLog.shared.log("bdr.anim", [
+            await JSONLogger.shared.log("bdr.anim", data: [
                 "wid": windowID,
                 "type": typeStr,
                 "duration": animDuration,
