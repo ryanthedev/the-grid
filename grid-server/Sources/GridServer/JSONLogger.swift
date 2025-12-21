@@ -44,15 +44,31 @@ actor JSONLogger {
     }
 
     /// Start a new span (called from MessageHandler with parent context)
-    func startSpan(_ name: String, tid: String, parentSid: String?, data: [String: Any]? = nil) -> Span {
-        let sid = parentSid != nil ? "\(parentSid!).\(name)" : tid
+    nonisolated func startSpan(_ name: String, tid: String, parentSid: String?, data: [String: Any]? = nil) -> Span {
+        let sid = parentSid.map { "\($0).\(name)" } ?? tid
         let span = Span(tid: tid, sid: sid, name: name, start: Date())
 
+        // Build start event
+        var event: [String: Any] = [:]
+        event["ev"] = "\(span.name).start"
+        event["sid"] = span.sid
+        event["tid"] = span.tid
+        if let data = data {
+            event["data"] = data
+        }
+        event["ts"] = Int64(Date().timeIntervalSince1970)
+
+        // Log synchronously through actor to prevent race condition
         Task {
-            await logSpanStart(span, data: data)
+            await JSONLogger.shared.writeEventFromNonisolated(event)
         }
 
         return span
+    }
+
+    /// Write event from nonisolated context (internal actor method)
+    func writeEventFromNonisolated(_ event: [String: Any]) {
+        writeEvent(event)
     }
 
     /// Log span start event
@@ -88,6 +104,16 @@ actor JSONLogger {
 
     /// Write event with correct field ordering
     private func writeEvent(_ event: [String: Any]) {
+        // Escape special characters in strings to produce valid JSON
+        func escapeString(_ str: String) -> String {
+            return str
+                .replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "\"", with: "\\\"")
+                .replacingOccurrences(of: "\n", with: "\\n")
+                .replacingOccurrences(of: "\r", with: "\\r")
+                .replacingOccurrences(of: "\t", with: "\\t")
+        }
+
         if !isInitialized {
             openFileHandle()
             isInitialized = true
@@ -107,7 +133,7 @@ actor JSONLogger {
         var jsonParts: [String] = []
         for (key, value) in orderedPairs {
             if let strVal = value as? String {
-                jsonParts.append("\"\(key)\":\"\(strVal)\"")
+                jsonParts.append("\"\(key)\":\"\(escapeString(strVal))\"")
             } else if let intVal = value as? Int64 {
                 jsonParts.append("\"\(key)\":\(intVal)")
             } else if let intVal = value as? Int {

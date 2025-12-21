@@ -26,16 +26,22 @@ class MessageHandler {
 
     /// Handle a request and call completion with the response
     func handle(request: Request, completion: @escaping (Response) -> Void) {
-        // Create span for this request
-        let tracer = Tracing.getTracer()
-        let spanBuilder = tracer.spanBuilder(spanName: request.method)
-
-        // Extract parent context if _trace is provided in params
-        if let parentContext = Tracing.extractContext(from: request.params) {
-            spanBuilder.setParent(parentContext)
+        // Extract trace context from params
+        var tid: String? = nil
+        var parentSid: String? = nil
+        if let traceInfo = request.params?["_trace"]?.value as? [String: String] {
+            tid = traceInfo["tid"]
+            parentSid = traceInfo["sid"]
         }
 
-        let span = spanBuilder.startSpan()
+        // Create server span (or generate new trace if none provided)
+        let span: Span
+        if let tid = tid {
+            span = JSONLogger.shared.startSpan("srv", tid: tid, parentSid: parentSid, data: ["method": request.method])
+        } else {
+            let newTid = UUID().uuidString.prefix(8).lowercased()
+            span = JSONLogger.shared.startSpan("srv", tid: String(newTid), parentSid: nil, data: ["method": request.method])
+        }
 
         // Execute handler within span context
         Task {
@@ -57,14 +63,16 @@ class MessageHandler {
                         "id": request.id
                     ])
 
-                    span.end()
+                    await span.end()
                     completion(response)
                     return
                 }
 
                 // Execute handler with span context
                 handler(request) { response in
-                    span.end()
+                    Task {
+                        await span.end()
+                    }
                     completion(response)
                 }
             }
