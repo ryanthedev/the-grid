@@ -48,6 +48,41 @@ jlog("win.focus", data: ["wid": 123])
 await JSONLogger.shared.log("err.bounds", msg: "failed to get bounds", data: ["wid": 456])
 ```
 
+### Span-Based Logging
+
+For timing and correlation, use spans:
+
+CLI (Go):
+```go
+span := jsonlog.StartSpan("cmd", jsonlog.WithData(map[string]any{"cmd": "focus"}))
+defer span.End()
+
+// Child span
+child := span.StartChild("validate")
+// ... work ...
+child.End()
+
+// End with error
+span.EndWithError("window not found")
+```
+
+Server (Swift):
+```swift
+let span = await JSONLogger.shared.startSpan("srv", tid: tid, parentSid: parentSid, data: ["method": method])
+
+// Child span
+let child = await span.startChild("border", data: ["wid": 123])
+await child.end()
+
+await span.end()
+```
+
+Output format:
+```jsonl
+{"ev":"cmd.start","sid":"a1b2","tid":"a1b2","data":{"cmd":"focus"},"ts":1702840000}
+{"ev":"cmd.end","sid":"a1b2","tid":"a1b2","dur":45,"ts":1702840045}
+```
+
 ## Project Paths
 - **Log files**: `~/.local/state/thegrid/`
   - `thegrid-cli.json` - CLI logs (JSONL)
