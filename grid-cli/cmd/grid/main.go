@@ -17,10 +17,9 @@ import (
 	"github.com/yourusername/grid-cli/internal/client"
 	gridCell "github.com/yourusername/grid-cli/internal/cell"
 	gridConfig "github.com/yourusername/grid-cli/internal/config"
-	"github.com/yourusername/grid-cli/internal/eventlog"
 	gridFocus "github.com/yourusername/grid-cli/internal/focus"
+	"github.com/yourusername/grid-cli/internal/jsonlog"
 	gridLayout "github.com/yourusername/grid-cli/internal/layout"
-	"github.com/yourusername/grid-cli/internal/logging"
 	"github.com/yourusername/grid-cli/internal/models"
 	gridMouse "github.com/yourusername/grid-cli/internal/mouse"
 	"github.com/yourusername/grid-cli/internal/output"
@@ -37,7 +36,6 @@ var (
 	timeout    time.Duration
 	jsonOutput bool
 	noColor    bool
-	debugMode  bool
 
 	// Color functions
 	successColor = color.New(color.FgGreen, color.Bold)
@@ -79,11 +77,11 @@ and move windows between spaces and displays.`,
 			}
 		}
 
-		eventlog.Log("cmd.start", map[string]any{
+		jsonlog.Log("cmd.start", jsonlog.WithData(map[string]any{
 			"cmd":  cmd.CommandPath(),
 			"args": argsMap,
 			"rid":  currentRequestID,
-		})
+		}))
 	},
 }
 
@@ -1666,7 +1664,7 @@ var focusLeftCmd = &cobra.Command{
 		extend, _ := cmd.Flags().GetBool("extend")
 		mouse, _ := cmd.Flags().GetBool("mouse")
 		if extend {
-			logging.Debug().Bool("extend", extend).Msg("cross-monitor focus enabled")
+			jsonlog.Log("focus.cross_monitor", jsonlog.WithData(map[string]any{"extend": extend}))
 		}
 		return focusDirectionHelper(gridTypes.DirLeft, wrap, extend, mouse)
 	},
@@ -1682,7 +1680,7 @@ var focusRightCmd = &cobra.Command{
 		extend, _ := cmd.Flags().GetBool("extend")
 		mouse, _ := cmd.Flags().GetBool("mouse")
 		if extend {
-			logging.Debug().Bool("extend", extend).Msg("cross-monitor focus enabled")
+			jsonlog.Log("focus.cross_monitor", jsonlog.WithData(map[string]any{"extend": extend}))
 		}
 		return focusDirectionHelper(gridTypes.DirRight, wrap, extend, mouse)
 	},
@@ -1698,7 +1696,7 @@ var focusUpCmd = &cobra.Command{
 		extend, _ := cmd.Flags().GetBool("extend")
 		mouse, _ := cmd.Flags().GetBool("mouse")
 		if extend {
-			logging.Debug().Bool("extend", extend).Msg("cross-monitor focus enabled")
+			jsonlog.Log("focus.cross_monitor", jsonlog.WithData(map[string]any{"extend": extend}))
 		}
 		return focusDirectionHelper(gridTypes.DirUp, wrap, extend, mouse)
 	},
@@ -1714,7 +1712,7 @@ var focusDownCmd = &cobra.Command{
 		extend, _ := cmd.Flags().GetBool("extend")
 		mouse, _ := cmd.Flags().GetBool("mouse")
 		if extend {
-			logging.Debug().Bool("extend", extend).Msg("cross-monitor focus enabled")
+			jsonlog.Log("focus.cross_monitor", jsonlog.WithData(map[string]any{"extend": extend}))
 		}
 		return focusDirectionHelper(gridTypes.DirDown, wrap, extend, mouse)
 	},
@@ -1840,7 +1838,7 @@ var windowMoveLeftCmd = &cobra.Command{
 		windowID, _ := cmd.Flags().GetUint32("window-id")
 		mouse, _ := cmd.Flags().GetBool("mouse")
 		if extend {
-			logging.Debug().Bool("extend", extend).Msg("cross-monitor window move enabled")
+			jsonlog.Log("move.cross_monitor", jsonlog.WithData(map[string]any{"extend": extend}))
 		}
 		return moveWindowDirectionHelper(gridTypes.DirLeft, wrap, extend, windowID, mouse)
 	},
@@ -1857,7 +1855,7 @@ var windowMoveRightCmd = &cobra.Command{
 		windowID, _ := cmd.Flags().GetUint32("window-id")
 		mouse, _ := cmd.Flags().GetBool("mouse")
 		if extend {
-			logging.Debug().Bool("extend", extend).Msg("cross-monitor window move enabled")
+			jsonlog.Log("move.cross_monitor", jsonlog.WithData(map[string]any{"extend": extend}))
 		}
 		return moveWindowDirectionHelper(gridTypes.DirRight, wrap, extend, windowID, mouse)
 	},
@@ -1874,7 +1872,7 @@ var windowMoveUpCmd = &cobra.Command{
 		windowID, _ := cmd.Flags().GetUint32("window-id")
 		mouse, _ := cmd.Flags().GetBool("mouse")
 		if extend {
-			logging.Debug().Bool("extend", extend).Msg("cross-monitor window move enabled")
+			jsonlog.Log("move.cross_monitor", jsonlog.WithData(map[string]any{"extend": extend}))
 		}
 		return moveWindowDirectionHelper(gridTypes.DirUp, wrap, extend, windowID, mouse)
 	},
@@ -1891,7 +1889,7 @@ var windowMoveDownCmd = &cobra.Command{
 		windowID, _ := cmd.Flags().GetUint32("window-id")
 		mouse, _ := cmd.Flags().GetBool("mouse")
 		if extend {
-			logging.Debug().Bool("extend", extend).Msg("cross-monitor window move enabled")
+			jsonlog.Log("move.cross_monitor", jsonlog.WithData(map[string]any{"extend": extend}))
 		}
 		return moveWindowDirectionHelper(gridTypes.DirDown, wrap, extend, windowID, mouse)
 	},
@@ -1962,12 +1960,12 @@ var focusNextCmd = &cobra.Command{
 		ctx, span := tracing.Tracer().Start(context.Background(), "next")
 		defer span.End()
 
-		logging.Info().Str("cmd", "focus-next").Msg("starting")
+		jsonlog.Log("focus.next.start")
 		mouse, _ := cmd.Flags().GetBool("mouse")
 
 		runtimeState, err := gridState.LoadState()
 		if err != nil {
-			logging.Error().Str("cmd", "focus-next").Err(err).Msg("failed to load state")
+			jsonlog.Log("err.focus_next", jsonlog.WithMsg("failed to load state"), jsonlog.WithData(map[string]any{"err": err.Error()}))
 			return fmt.Errorf("failed to load state: %w", err)
 		}
 
@@ -1978,7 +1976,7 @@ var focusNextCmd = &cobra.Command{
 		// 1. Fetch server state ONCE
 		snap, err := gridServer.Fetch(ctx, c)
 		if err != nil {
-			logging.Error().Str("cmd", "focus-next").Err(err).Msg("failed to fetch server state")
+			jsonlog.Log("err.focus_next", jsonlog.WithMsg("failed to fetch server state"), jsonlog.WithData(map[string]any{"err": err.Error()}))
 			return fmt.Errorf("failed to fetch server state: %w", err)
 		}
 
@@ -1987,22 +1985,22 @@ var focusNextCmd = &cobra.Command{
 
 		// 3. Reconcile local state with server (includes border sync)
 		if err := gridReconcile.Sync(ctx, c, snap, runtimeState, cfg); err != nil {
-			logging.Error().Str("cmd", "focus-next").Err(err).Msg("failed to reconcile")
+			jsonlog.Log("err.focus_next", jsonlog.WithMsg("failed to reconcile"), jsonlog.WithData(map[string]any{"err": err.Error()}))
 			return fmt.Errorf("failed to reconcile state: %w", err)
 		}
 
 		// 4. Cycle focus using local state
 		windowID, err := gridFocus.CycleFocus(ctx, c, runtimeState, snap.SpaceID, true)
 		if err != nil {
-			logging.Error().Str("cmd", "focus-next").Err(err).Msg("failed to cycle")
+			jsonlog.Log("err.focus_next", jsonlog.WithMsg("failed to cycle"), jsonlog.WithData(map[string]any{"err": err.Error()}))
 			return fmt.Errorf("failed to cycle focus: %w", err)
 		}
 
 		if windowID == 0 {
-			logging.Info().Str("cmd", "focus-next").Msg("no windows in cell")
+			jsonlog.Log("focus.next.empty")
 			fmt.Println("No windows in current cell")
 		} else {
-			logging.Info().Str("cmd", "focus-next").Int("window_id", int(windowID)).Msg("focused window")
+			jsonlog.Log("focus.next.done", jsonlog.WithData(map[string]any{"wid": windowID}))
 			successColor.Printf("✓ Focused window: %d\n", windowID)
 
 			// 4. Optionally warp mouse to focused window
@@ -2025,12 +2023,12 @@ var focusPrevCmd = &cobra.Command{
 		ctx, span := tracing.Tracer().Start(context.Background(), "prev")
 		defer span.End()
 
-		logging.Info().Str("cmd", "focus-prev").Msg("starting")
+		jsonlog.Log("focus.prev.start")
 		mouse, _ := cmd.Flags().GetBool("mouse")
 
 		runtimeState, err := gridState.LoadState()
 		if err != nil {
-			logging.Error().Str("cmd", "focus-prev").Err(err).Msg("failed to load state")
+			jsonlog.Log("err.focus_prev", jsonlog.WithMsg("failed to load state"), jsonlog.WithData(map[string]any{"err": err.Error()}))
 			return fmt.Errorf("failed to load state: %w", err)
 		}
 
@@ -2041,7 +2039,7 @@ var focusPrevCmd = &cobra.Command{
 		// 1. Fetch server state ONCE
 		snap, err := gridServer.Fetch(ctx, c)
 		if err != nil {
-			logging.Error().Str("cmd", "focus-prev").Err(err).Msg("failed to fetch server state")
+			jsonlog.Log("err.focus_prev", jsonlog.WithMsg("failed to fetch server state"), jsonlog.WithData(map[string]any{"err": err.Error()}))
 			return fmt.Errorf("failed to fetch server state: %w", err)
 		}
 
@@ -2050,22 +2048,22 @@ var focusPrevCmd = &cobra.Command{
 
 		// 3. Reconcile local state with server (includes border sync)
 		if err := gridReconcile.Sync(ctx, c, snap, runtimeState, cfg); err != nil {
-			logging.Error().Str("cmd", "focus-prev").Err(err).Msg("failed to reconcile")
+			jsonlog.Log("err.focus_prev", jsonlog.WithMsg("failed to reconcile"), jsonlog.WithData(map[string]any{"err": err.Error()}))
 			return fmt.Errorf("failed to reconcile state: %w", err)
 		}
 
 		// 4. Cycle focus using local state
 		windowID, err := gridFocus.CycleFocus(ctx, c, runtimeState, snap.SpaceID, false)
 		if err != nil {
-			logging.Error().Str("cmd", "focus-prev").Err(err).Msg("failed to cycle")
+			jsonlog.Log("err.focus_prev", jsonlog.WithMsg("failed to cycle"), jsonlog.WithData(map[string]any{"err": err.Error()}))
 			return fmt.Errorf("failed to cycle focus: %w", err)
 		}
 
 		if windowID == 0 {
-			logging.Info().Str("cmd", "focus-prev").Msg("no windows in cell")
+			jsonlog.Log("focus.prev.empty")
 			fmt.Println("No windows in current cell")
 		} else {
-			logging.Info().Str("cmd", "focus-prev").Int("window_id", int(windowID)).Msg("focused window")
+			jsonlog.Log("focus.prev.done", jsonlog.WithData(map[string]any{"wid": windowID}))
 			successColor.Printf("✓ Focused window: %d\n", windowID)
 
 			// 4. Optionally warp mouse to focused window
@@ -2639,7 +2637,6 @@ func init() {
 	rootCmd.PersistentFlags().DurationVar(&timeout, "timeout", client.DefaultTimeout, "Request timeout")
 	rootCmd.PersistentFlags().BoolVar(&jsonOutput, "json", false, "Output in JSON format")
 	rootCmd.PersistentFlags().BoolVar(&noColor, "no-color", false, "Disable colored output")
-	rootCmd.PersistentFlags().BoolVar(&debugMode, "debug", false, "Enable debug logging")
 
 	// Add top-level commands
 	rootCmd.AddCommand(pingCmd)
@@ -2800,26 +2797,19 @@ func init() {
 	windowUpdateCmd.Flags().Float64Var(&updateWidth, "width", 0, "Width in pixels (optional)")
 	windowUpdateCmd.Flags().Float64Var(&updateHeight, "height", 0, "Height in pixels (optional)")
 
-	// Disable color if requested, enable debug logging if requested
+	// Disable color if requested
 	cobra.OnInitialize(func() {
 		if noColor {
 			color.NoColor = true
-		}
-		if debugMode {
-			logging.SetDebug(true)
 		}
 	})
 }
 
 func main() {
-	// Initialize logging
-	logging.Init()
-	defer logging.Close()
-
 	// Initialize tracing
 	tracing.Init()
 
-	// Execute command and capture error for eventlog
+	// Execute command and capture error for log
 	err := rootCmd.Execute()
 
 	// Log command completion
@@ -2830,7 +2820,7 @@ func main() {
 	if err != nil {
 		data["err"] = err.Error()
 	}
-	eventlog.Log("cmd.done", data)
+	jsonlog.Log("cmd.done", jsonlog.WithData(data))
 
 	if err != nil {
 		os.Exit(1)

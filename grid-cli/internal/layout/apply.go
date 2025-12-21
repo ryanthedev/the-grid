@@ -6,8 +6,7 @@ import (
 
 	"github.com/yourusername/grid-cli/internal/client"
 	"github.com/yourusername/grid-cli/internal/config"
-	"github.com/yourusername/grid-cli/internal/eventlog"
-	"github.com/yourusername/grid-cli/internal/logging"
+	"github.com/yourusername/grid-cli/internal/jsonlog"
 	"github.com/yourusername/grid-cli/internal/server"
 	"github.com/yourusername/grid-cli/internal/state"
 	"github.com/yourusername/grid-cli/internal/types"
@@ -51,7 +50,7 @@ func ApplyLayout(
 		return fmt.Errorf("layout not found: %w", err)
 	}
 
-	logging.Info().Str("layout", layoutID).Str("space", snap.SpaceID).Msg("applying layout")
+	jsonlog.Log("layout.apply.start", jsonlog.WithData(map[string]any{"lid": layoutID, "sid": snap.SpaceID}))
 
 	// 2. Get existing track ratios if reapplying same layout
 	var columnRatios, rowRatios []float64
@@ -149,24 +148,24 @@ func ApplyLayout(
 	for _, cell := range layout.Cells {
 		cellIDs = append(cellIDs, cell.ID)
 	}
-	eventlog.Log("layout.apply", map[string]any{
+	jsonlog.Log("layout.apply", jsonlog.WithData(map[string]any{
 		"name":  layoutID,
 		"cells": cellIDs,
-	})
+	}))
 
 	// 8b. Send border config and cell assignments to server
 	if opts.SendBorders {
 		if err := sendBorderConfig(ctx, c, cfg); err != nil {
 			// Log but don't fail - borders are optional
-			logging.Warn().Err(err).Msg("failed to send border config")
+			jsonlog.Log("warn.border_config", jsonlog.WithData(map[string]any{"err": err.Error()}))
 		}
 
 		displayUUID := snap.GetCurrentDisplayUUID()
 		if displayUUID == "" {
-			logging.Warn().Msg("could not determine display UUID for cell assignments")
+			jsonlog.Log("warn.display_uuid", jsonlog.WithMsg("could not determine display UUID"))
 		} else if err := sendCellAssignments(ctx, c, displayUUID, layout, assignment.Assignments, calculatedLayout.CellBounds, opts.BaseSpacing, opts.SettingsPadding); err != nil {
 			// Log but don't fail - borders are optional
-			logging.Warn().Err(err).Msg("failed to send cell assignments")
+			jsonlog.Log("warn.cell_assignments", jsonlog.WithData(map[string]any{"err": err.Error()}))
 		}
 	}
 
@@ -366,11 +365,9 @@ func sendCellAssignments(ctx context.Context, c *client.Client, displayUUID stri
 
 			// Warn if padding results in zero-size bounds
 			if paddedRect.Width == 0 || paddedRect.Height == 0 {
-				logging.Warn().
-					Str("cellID", cellID).
-					Float64("originalWidth", rect.Width).
-					Float64("originalHeight", rect.Height).
-					Msg("Cell padding resulted in zero-size bounds")
+				jsonlog.Log("warn.cell_padding_zero", jsonlog.WithData(map[string]any{
+					"cell": cellID, "origW": rect.Width, "origH": rect.Height,
+				}))
 			}
 		}
 
