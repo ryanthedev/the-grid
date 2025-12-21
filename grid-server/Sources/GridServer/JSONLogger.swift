@@ -25,35 +25,101 @@ actor JSONLogger {
 
     /// Log an event
     func log(_ ev: String, msg: String? = nil, data: [String: Any]? = nil, tid: String? = nil, sid: String? = nil) {
+        var event: [String: Any] = [:]
+        event["ev"] = ev
+        if let sid = sid { event["sid"] = sid }
+        if let tid = tid { event["tid"] = tid }
+        if let msg = msg { event["msg"] = msg }
+        if let data = data { event["data"] = data }
+        event["ts"] = Int64(Date().timeIntervalSince1970)
+
+        writeEvent(event)
+    }
+
+    /// Log with trace context from CurrentSpan
+    func log(_ ev: String, msg: String? = nil, data: [String: Any]? = nil) async {
+        let tid = CurrentSpan.traceId
+        let sid = CurrentSpan.spanId
+        await self.log(ev, msg: msg, data: data, tid: tid, sid: sid)
+    }
+
+    /// Start a new span (called from MessageHandler with parent context)
+    func startSpan(_ name: String, tid: String, parentSid: String?, data: [String: Any]? = nil) -> Span {
+        let sid = parentSid != nil ? "\(parentSid!).\(name)" : tid
+        let span = Span(tid: tid, sid: sid, name: name, start: Date())
+
+        Task {
+            await logSpanStart(span, data: data)
+        }
+
+        return span
+    }
+
+    /// Log span start event
+    func logSpanStart(_ span: Span, data: [String: Any]? = nil) {
+        var event: [String: Any] = [:]
+        // Field order: ev, sid, tid, data, ts
+        event["ev"] = "\(span.name).start"
+        event["sid"] = span.sid
+        event["tid"] = span.tid
+        if let data = data {
+            event["data"] = data
+        }
+        event["ts"] = Int64(Date().timeIntervalSince1970)
+
+        writeEvent(event)
+    }
+
+    /// Log span end event with duration
+    func logSpanEnd(_ span: Span, dur: Int64, err: String? = nil) {
+        var event: [String: Any] = [:]
+        // Field order: ev, sid, tid, dur, err, ts
+        event["ev"] = "\(span.name).end"
+        event["sid"] = span.sid
+        event["tid"] = span.tid
+        event["dur"] = dur
+        if let err = err {
+            event["err"] = err
+        }
+        event["ts"] = Int64(Date().timeIntervalSince1970)
+
+        writeEvent(event)
+    }
+
+    /// Write event with correct field ordering
+    private func writeEvent(_ event: [String: Any]) {
         if !isInitialized {
             openFileHandle()
             isInitialized = true
         }
 
-        var event: [String: Any] = [
-            "ts": Int64(Date().timeIntervalSince1970),
-            "ev": ev
-        ]
+        // Create ordered key array for field ordering
+        let orderedKeys = ["ev", "sid", "tid", "dur", "err", "msg", "data", "ts"]
+        var orderedPairs: [(String, Any)] = []
 
-        if let msg = msg {
-            event["msg"] = msg
-        }
-        if let data = data {
-            event["data"] = data
-        }
-        if let tid = tid {
-            event["tid"] = tid
-        }
-        if let sid = sid {
-            event["sid"] = sid
+        for key in orderedKeys {
+            if let value = event[key] {
+                orderedPairs.append((key, value))
+            }
         }
 
-        guard let jsonData = try? JSONSerialization.data(withJSONObject: event, options: [.sortedKeys]),
-              let jsonString = String(data: jsonData, encoding: .utf8) else {
-            return
+        // Build JSON string manually for field ordering
+        var jsonParts: [String] = []
+        for (key, value) in orderedPairs {
+            if let strVal = value as? String {
+                jsonParts.append("\"\(key)\":\"\(strVal)\"")
+            } else if let intVal = value as? Int64 {
+                jsonParts.append("\"\(key)\":\(intVal)")
+            } else if let intVal = value as? Int {
+                jsonParts.append("\"\(key)\":\(intVal)")
+            } else if let dictVal = value as? [String: Any],
+                      let jsonData = try? JSONSerialization.data(withJSONObject: dictVal, options: [.sortedKeys]),
+                      let jsonStr = String(data: jsonData, encoding: .utf8) {
+                jsonParts.append("\"\(key)\":\(jsonStr)")
+            }
         }
 
-        let line = jsonString + "\n"
+        let line = "{" + jsonParts.joined(separator: ",") + "}\n"
         guard let lineData = line.data(using: .utf8) else { return }
 
         if fileHandle == nil {
@@ -62,13 +128,6 @@ actor JSONLogger {
 
         fileHandle?.write(lineData)
         fileHandle?.synchronizeFile()
-    }
-
-    /// Log with trace context from CurrentSpan
-    func log(_ ev: String, msg: String? = nil, data: [String: Any]? = nil) async {
-        let tid = CurrentSpan.traceId
-        let sid = CurrentSpan.spanId
-        await self.log(ev, msg: msg, data: data, tid: tid, sid: sid)
     }
 
     private func openFileHandle() {
@@ -81,6 +140,32 @@ actor JSONLogger {
 
     deinit {
         try? fileHandle?.close()
+    }
+}
+
+/// Represents a timed span with start/end events
+struct Span {
+    let tid: String
+    let sid: String
+    let name: String
+    let start: Date
+
+    /// Create a child span with dot-notation sid
+    func startChild(_ name: String, data: [String: Any]? = nil) async -> Span {
+        let child = Span(
+            tid: self.tid,
+            sid: "\(self.sid).\(name)",
+            name: name,
+            start: Date()
+        )
+        await JSONLogger.shared.logSpanStart(child, data: data)
+        return child
+    }
+
+    /// End the span and log duration
+    func end(err: String? = nil) async {
+        let dur = Int64(Date().timeIntervalSince(start) * 1000)
+        await JSONLogger.shared.logSpanEnd(self, dur: dur, err: err)
     }
 }
 
