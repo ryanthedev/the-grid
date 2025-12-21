@@ -21,13 +21,35 @@ var (
 )
 
 // LogEntry represents a single log entry
+// Field order: ev, sid, tid, dur, err, msg, data, ts
 type LogEntry struct {
-	Ts   int64          `json:"ts"`
 	Ev   string         `json:"ev"`
+	Sid  string         `json:"sid,omitempty"`
+	Tid  string         `json:"tid,omitempty"`
+	Dur  int64          `json:"dur,omitempty"`
+	Err  string         `json:"err,omitempty"`
 	Msg  string         `json:"msg,omitempty"`
 	Data map[string]any `json:"data,omitempty"`
-	Tid  string         `json:"tid,omitempty"`
-	Sid  string         `json:"sid,omitempty"`
+	Ts   int64          `json:"ts"`
+}
+
+// Span represents a timed operation with start/end events
+type Span struct {
+	tid   string
+	sid   string
+	name  string
+	start time.Time
+}
+
+// generateID creates a short random ID (4 chars)
+func generateID() string {
+	const chars = "abcdefghijklmnopqrstuvwxyz0123456789"
+	b := make([]byte, 4)
+	for i := range b {
+		b[i] = chars[time.Now().UnixNano()%int64(len(chars))]
+		time.Sleep(time.Nanosecond)
+	}
+	return string(b)
 }
 
 // Option configures a log entry
@@ -82,22 +104,93 @@ func ensureInit() error {
 	return nil
 }
 
-// Log writes an event to the log file
-func Log(ev string, opts ...Option) error {
+// StartSpan creates a new root span and logs the start event
+func StartSpan(name string, opts ...Option) *Span {
+	id := generateID()
+	span := &Span{
+		tid:   id,
+		sid:   id,
+		name:  name,
+		start: time.Now(),
+	}
+
+	entry := LogEntry{
+		Ev:  name + ".start",
+		Sid: span.sid,
+		Tid: span.tid,
+		Ts:  time.Now().Unix(),
+	}
+	for _, opt := range opts {
+		opt(&entry)
+	}
+	writeEntry(entry)
+
+	return span
+}
+
+// Tid returns the trace ID
+func (s *Span) Tid() string { return s.tid }
+
+// Sid returns the span ID
+func (s *Span) Sid() string { return s.sid }
+
+// StartChild creates a child span with dot-notation sid
+func (s *Span) StartChild(name string, opts ...Option) *Span {
+	child := &Span{
+		tid:   s.tid,
+		sid:   s.sid + "." + name,
+		name:  name,
+		start: time.Now(),
+	}
+
+	entry := LogEntry{
+		Ev:  name + ".start",
+		Sid: child.sid,
+		Tid: child.tid,
+		Ts:  time.Now().Unix(),
+	}
+	for _, opt := range opts {
+		opt(&entry)
+	}
+	writeEntry(entry)
+
+	return child
+}
+
+// End logs the span end event with duration
+func (s *Span) End() {
+	dur := time.Since(s.start).Milliseconds()
+	entry := LogEntry{
+		Ev:  s.name + ".end",
+		Sid: s.sid,
+		Tid: s.tid,
+		Dur: dur,
+		Ts:  time.Now().Unix(),
+	}
+	writeEntry(entry)
+}
+
+// EndWithError logs the span end event with error
+func (s *Span) EndWithError(err string) {
+	dur := time.Since(s.start).Milliseconds()
+	entry := LogEntry{
+		Ev:  s.name + ".end",
+		Sid: s.sid,
+		Tid: s.tid,
+		Dur: dur,
+		Err: err,
+		Ts:  time.Now().Unix(),
+	}
+	writeEntry(entry)
+}
+
+// writeEntry writes a log entry to the file
+func writeEntry(entry LogEntry) error {
 	mu.Lock()
 	defer mu.Unlock()
 
 	if err := ensureInit(); err != nil {
 		return err
-	}
-
-	entry := LogEntry{
-		Ts: time.Now().Unix(),
-		Ev: ev,
-	}
-
-	for _, opt := range opts {
-		opt(&entry)
 	}
 
 	data, err := json.Marshal(entry)
@@ -111,6 +204,20 @@ func Log(ev string, opts ...Option) error {
 	}
 
 	return file.Sync()
+}
+
+// Log writes an event to the log file
+func Log(ev string, opts ...Option) error {
+	entry := LogEntry{
+		Ts: time.Now().Unix(),
+		Ev: ev,
+	}
+
+	for _, opt := range opts {
+		opt(&entry)
+	}
+
+	return writeEntry(entry)
 }
 
 // Close closes the log file
