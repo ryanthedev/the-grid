@@ -113,6 +113,12 @@ class BorderWindow {
     /// Whether the border is currently visible
     private(set) var isVisible: Bool = false
 
+    /// Track resize state to queue updates instead of dropping them
+    private var isResizing: Bool = false
+
+    /// Pending frame to process after resize completes (queue instead of drop)
+    private var pendingFrame: CGRect?
+
     /// Animation controller for effects
     private var animator: BorderAnimator?
 
@@ -267,21 +273,10 @@ class BorderWindow {
             moveToTargetSpace()
         }
 
-        let alphaResult = SLSSetWindowAlpha(connectionID, windowID, 1.0)
-        let orderResult = SLSOrderWindow(connectionID, windowID, -1, targetWindowID)  // Below target
+        _ = SLSSetWindowAlpha(connectionID, windowID, 1.0)
+        _ = SLSOrderWindow(connectionID, windowID, -1, targetWindowID)  // Below target
 
         isVisible = true
-
-        Task {
-            await EventLog.shared.log("dbg.bdr.show", [
-                "wid": windowID,
-                "targetID": targetWindowID,
-                "borderSpace": borderSpace,
-                "targetSpace": targetSpace,
-                "alphaResult": alphaResult.rawValue,
-                "orderResult": orderResult.rawValue
-            ])
-        }
     }
 
     /// Hide the border
@@ -301,12 +296,30 @@ class BorderWindow {
     // MARK: - Update
 
     /// Update border position and size to match target window
-    func update(targetFrame: CGRect) {
+    /// - Parameters:
+    ///   - targetFrame: The target window's frame
+    ///   - style: Optional style to use for expansion calculation. If nil, uses currentStyle or activeStyle fallback.
+    func update(targetFrame: CGRect, style: BorderStyle? = nil) {
         guard windowID != 0 else { return }
 
+        // If we're in the middle of a resize, queue this frame instead of processing it.
+        // This prevents dropping updates while ensuring we don't interleave resize operations.
+        if isResizing {
+            pendingFrame = targetFrame
+            return
+        }
+
+        performUpdate(targetFrame, explicitStyle: style)
+    }
+
+    /// Internal update implementation - processes a single frame update
+    /// - Parameters:
+    ///   - targetFrame: The target window's frame
+    ///   - explicitStyle: Optional style passed from caller; takes priority over currentStyle
+    private func performUpdate(_ targetFrame: CGRect, explicitStyle: BorderStyle? = nil) {
         // Calculate border bounds (larger than target by width + padding + effects on each side)
-        // Use current style if available, otherwise use active style as default
-        let style = currentStyle ?? BorderConfigManager.shared.activeStyle
+        // Priority: explicit style from caller > currentStyle > activeStyle fallback
+        let style = explicitStyle ?? currentStyle ?? BorderConfigManager.shared.activeStyle
         let borderWidth = style.width
 
         // Calculate glow expansion: blur radius determines how far glow extends from stroke edge
@@ -323,11 +336,11 @@ class BorderWindow {
             shadowExpansion = shadowRadius + max(abs(offset.width), abs(offset.height))
         }
 
-        // Border stroke is centered on its path, so we only need half the width for expansion
-        // This makes the border hug the window edge (half inside, half outside)
-        // Additional expansion only for effects (glow/shadow)
+        // Border stroke is centered on its path, extending width/2 on each side
+        // To keep the entire stroke OUTSIDE the window, we need to expand by the full width
+        // (not half) so the inner edge of the stroke aligns with the window edge
         let effectsExpansion = max(glowExpansion, shadowExpansion)
-        let expansion = (borderWidth / 2) + effectsExpansion
+        let expansion = borderWidth + effectsExpansion
         let borderBounds = targetFrame.insetBy(dx: -expansion, dy: -expansion)
 
         // Move the window
@@ -341,6 +354,9 @@ class BorderWindow {
         let wasVisible = isVisible
 
         if needsResize {
+            // Mark resize in progress - any update() calls during resize will be queued
+            isResizing = true
+
             // CRITICAL: Hide window before shape change to prevent compositor race condition.
             // Without this, the Window Server may composite the resized window (with empty
             // backing store) before we can redraw, causing a "white box" flash.
@@ -356,6 +372,8 @@ class BorderWindow {
                 if wasVisible {
                     _ = SLSSetWindowAlpha(connectionID, windowID, 1.0)
                 }
+                isResizing = false
+                processPendingFrame()
                 Task { await EventLog.shared.log("bdr.fail", ["wid": windowID, "reason": "resize_region_failed", "bounds": [borderBounds.origin.x, borderBounds.origin.y, borderBounds.size.width, borderBounds.size.height]]) }
                 return
             }
@@ -388,16 +406,13 @@ class BorderWindow {
 
                     // Restore visibility
                     show()
-
-                    Task {
-                        await EventLog.shared.log("bdr.resize_redraw", [
-                            "wid": windowID,
-                            "targetID": targetWindowID,
-                            "bounds": [currentBounds.origin.x, currentBounds.origin.y, currentBounds.size.width, currentBounds.size.height]
-                        ])
-                    }
                 }
+                // Note: If context creation fails, border stays hidden until next update
             }
+
+            // Resize complete - process any queued frame
+            isResizing = false
+            processPendingFrame()
         } else {
             // No resize - just update bounds for position change
             currentBounds = borderBounds
@@ -407,6 +422,13 @@ class BorderWindow {
         if isVisible {
             _ = SLSOrderWindow(connectionID, windowID, -1, targetWindowID)
         }
+    }
+
+    /// Process any frame that was queued during resize
+    private func processPendingFrame() {
+        guard let frame = pendingFrame else { return }
+        pendingFrame = nil
+        performUpdate(frame)
     }
 
     /// Update the border's style and visibility
@@ -430,7 +452,6 @@ class BorderWindow {
         }
 
         // Create context if needed (after shape change)
-        let contextWasNil = (context == nil)
         if context == nil {
             _ = SLSFlushWindowContentRegion(connectionID, windowID, nil)
             context = SLWindowContextCreate(connectionID, windowID, nil)
@@ -449,20 +470,9 @@ class BorderWindow {
         BorderRenderer.draw(in: drawContext, bounds: drawBounds, style: newStyle)
 
         // Flush to screen
-        let flushResult = SLSFlushWindowContentRegion(connectionID, windowID, nil)
+        _ = SLSFlushWindowContentRegion(connectionID, windowID, nil)
 
         currentStyle = newStyle
-
-        Task {
-            await EventLog.shared.log("dbg.bdr.draw", [
-                "wid": windowID,
-                "targetID": targetWindowID,
-                "styleType": styleType,
-                "bounds": [currentBounds.origin.x, currentBounds.origin.y, currentBounds.size.width, currentBounds.size.height],
-                "contextCreated": contextWasNil,
-                "flushResult": flushResult.rawValue
-            ])
-        }
 
         // Always ensure border is shown after drawing
         // (alpha may have been set to 0 during size change in update())
