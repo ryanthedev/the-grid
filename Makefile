@@ -151,9 +151,8 @@ help:
 	@echo "  dist-universal   - Create universal binary tarball (arm64+x86_64)"
 	@echo ""
 	@echo "Development targets:"
-	@echo "  dev              - Build app bundle, clear logs, run server (interactive)"
-	@echo "  dev-app          - Build debug GridServer.app bundle"
-	@echo "  reload           - Rebuild, restart server in background, apply layout"
+	@echo "  dev              - Build debug GridServer.app bundle"
+	@echo "  run              - Build and restart thegrid-dev service"
 	@echo "  install-dev      - Install dev CLI to ~/.local/state/thegrid/bin"
 	@echo ""
 	@echo "Server targets:"
@@ -169,14 +168,16 @@ help:
 	@echo "  cli-install      - Install thegrid to \$$GOPATH/bin"
 	@echo ""
 	@echo "Usage examples:"
-	@echo "  make dev          # Build app bundle, clear logs, run server"
-	@echo "  make reload       # Quick rebuild and restart with layout"
+	@echo "  make dev          # Build debug app bundle"
+	@echo "  make run          # Build and restart thegrid service"
 	@echo "  make test         # Run all tests"
 	@echo "  make dist         # Create distribution tarball"
 
 # Debug app bundle (for development - required for Accessibility permissions)
 APP_BUNDLE := grid-server/.build/debug/GridServer.app
-dev-app: server
+
+# Build debug app bundle
+dev: server cli
 	@echo "Creating debug GridServer.app bundle..."
 	@mkdir -p $(APP_BUNDLE)/Contents/MacOS
 	@mkdir -p $(APP_BUNDLE)/Contents/Resources
@@ -184,35 +185,16 @@ dev-app: server
 	@cp grid-server/Info.plist $(APP_BUNDLE)/Contents/
 	@codesign -fs - $(APP_BUNDLE)/Contents/MacOS/grid-server
 	@codesign -fs - $(APP_BUNDLE)
-	@echo "✓ Debug GridServer.app created"
+	@echo "✓ Debug GridServer.app created at $(APP_BUNDLE)"
 
-# Development: build app bundle, clear logs, restart server with output visible
-dev: dev-app cli
-	@echo "Stopping existing server..."
-	@-pkill -f "grid-server" 2>/dev/null || true
-	@sleep 0.5
-	@echo "Clearing logs..."
-	@rm -f ~/.local/state/thegrid/thegrid-cli.json
-	@rm -f ~/.local/state/thegrid/thegrid-server.json
-	@echo "Starting server (Ctrl+C to stop)..."
-	@echo "App bundle: $(APP_BUNDLE)"
-	@$(APP_BUNDLE)/Contents/MacOS/grid-server
+# Build and restart thegrid service
+run: dev
+	@echo "Restarting thegrid-dev service..."
+	@services restart thegrid-dev
+	@echo "✓ Service restarted"
 
 # Install dev build to ~/.local/state/thegrid/bin for wrapper resolution
 install-dev: cli
 	@mkdir -p ~/.local/state/thegrid/bin
 	@cp grid-cli/bin/thegrid ~/.local/state/thegrid/bin/thegrid
 	@echo "✓ Installed dev CLI to ~/.local/state/thegrid/bin/thegrid"
-
-# Quick reload: build, restart server in background, apply layout
-# Usage: make reload LAYOUT=two-column  (default: two-column)
-LAYOUT ?= two-column
-reload: dev-app cli
-	@echo "Restarting server..."
-	@-pkill -f "grid-server" 2>/dev/null || true
-	@sleep 0.5
-	@$(APP_BUNDLE)/Contents/MacOS/grid-server &>/dev/null &
-	@sleep 1
-	@echo "Applying layout: $(LAYOUT)"
-	@./grid-cli/bin/thegrid layout apply $(LAYOUT)
-	@echo "✓ Server reloaded and layout applied"
