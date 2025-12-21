@@ -2,8 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -43,17 +41,9 @@ var (
 	infoColor    = color.New(color.FgCyan)
 	keyColor     = color.New(color.FgYellow)
 
-	// Request tracking for eventlog correlation
-	currentRequestID string
-	commandError     error
+	// Command span for tracing
+	currentSpan *jsonlog.Span
 )
-
-// generateRequestID creates a short 8-character request ID for event correlation
-func generateRequestID() string {
-	b := make([]byte, 4)
-	rand.Read(b)
-	return hex.EncodeToString(b)
-}
 
 // rootCmd is the base command
 var rootCmd = &cobra.Command{
@@ -65,10 +55,6 @@ It allows you to query window state, manipulate window positions and sizes,
 and move windows between spaces and displays.`,
 	Version: "0.1.0",
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
-		// Generate request ID and log command start
-		currentRequestID = generateRequestID()
-		commandError = nil
-
 		// Build args map with relevant command arguments
 		argsMap := make(map[string]any)
 		for _, arg := range args {
@@ -77,11 +63,20 @@ and move windows between spaces and displays.`,
 			}
 		}
 
-		jsonlog.Log("cmd.start", jsonlog.WithData(map[string]any{
+		// Start command span
+		currentSpan = jsonlog.StartSpan("cmd", jsonlog.WithData(map[string]any{
 			"cmd":  cmd.CommandPath(),
 			"args": argsMap,
-			"rid":  currentRequestID,
 		}))
+
+		// Register span with tracing context
+		tracing.SetCurrentSpan(currentSpan)
+	},
+	PersistentPostRun: func(cmd *cobra.Command, args []string) {
+		if currentSpan != nil {
+			currentSpan.End()
+			currentSpan = nil
+		}
 	},
 }
 
@@ -91,14 +86,11 @@ var pingCmd = &cobra.Command{
 	Short: "Test connection to GridServer",
 	Long:  `Sends a ping request to the server to test connectivity and response time.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx, span := tracing.Tracer().Start(context.Background(), "ping")
-		defer span.End()
-
 		c := client.NewClient(socketPath, timeout)
 		defer c.Close()
 
 		start := time.Now()
-		result, err := c.Ping(ctx)
+		result, err := c.Ping(context.Background())
 		elapsed := time.Since(start)
 
 		if err != nil {
@@ -126,13 +118,10 @@ var infoCmd = &cobra.Command{
 	Short: "Get GridServer information",
 	Long:  `Retrieves information about the GridServer including version and capabilities.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx, span := tracing.Tracer().Start(context.Background(), "info")
-		defer span.End()
-
 		c := client.NewClient(socketPath, timeout)
 		defer c.Close()
 
-		result, err := c.GetServerInfo(ctx)
+		result, err := c.GetServerInfo(context.Background())
 		if err != nil {
 			printError(fmt.Sprintf("Failed to get server info: %v", err))
 			return err
@@ -175,13 +164,10 @@ var dumpCmd = &cobra.Command{
 	Short: "Dump complete window manager state",
 	Long:  `Retrieves and displays the complete window manager state including windows, spaces, displays, and applications.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx, span := tracing.Tracer().Start(context.Background(), "dump")
-		defer span.End()
-
 		c := client.NewClient(socketPath, timeout)
 		defer c.Close()
 
-		result, err := c.Dump(ctx)
+		result, err := c.Dump(context.Background())
 		if err != nil {
 			printError(fmt.Sprintf("Failed to dump state: %v", err))
 			return err
@@ -485,8 +471,7 @@ var windowUpdateCmd = &cobra.Command{
 	Long:  `Updates a window's position and/or size. Specify any combination of --x, --y, --width, --height.`,
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx, span := tracing.Tracer().Start(context.Background(), "update")
-		defer span.End()
+		ctx := context.Background()
 
 		windowID, err := strconv.Atoi(args[0])
 		if err != nil {
@@ -540,8 +525,7 @@ var windowToSpaceCmd = &cobra.Command{
 	Long:  `Moves a window to the specified space ID.`,
 	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx, span := tracing.Tracer().Start(context.Background(), "to-space")
-		defer span.End()
+		ctx := context.Background()
 
 		windowID, err := strconv.Atoi(args[0])
 		if err != nil {
@@ -582,8 +566,7 @@ var windowToDisplayCmd = &cobra.Command{
 	Long:  `Moves a window to the specified display UUID.`,
 	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx, span := tracing.Tracer().Start(context.Background(), "to-display")
-		defer span.End()
+		ctx := context.Background()
 
 		windowID, err := strconv.Atoi(args[0])
 		if err != nil {
@@ -631,8 +614,7 @@ var windowSetOpacityCmd = &cobra.Command{
 	Long:  `Sets the opacity of a window instantly. Opacity range: 0.0 (transparent) to 1.0 (opaque). Requires MSS to be installed and loaded.`,
 	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx, span := tracing.Tracer().Start(context.Background(), "set-opacity")
-		defer span.End()
+		ctx := context.Background()
 
 		opacity, err := strconv.ParseFloat(args[1], 32)
 		if err != nil || opacity < 0 || opacity > 1 {
@@ -669,8 +651,7 @@ var windowFadeOpacityCmd = &cobra.Command{
 	Long:  `Fades window opacity to target value over the specified duration in seconds. Requires MSS.`,
 	Args:  cobra.ExactArgs(3),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx, span := tracing.Tracer().Start(context.Background(), "fade-opacity")
-		defer span.End()
+		ctx := context.Background()
 
 		opacity, err := strconv.ParseFloat(args[1], 32)
 		if err != nil || opacity < 0 || opacity > 1 {
@@ -713,8 +694,7 @@ var windowGetOpacityCmd = &cobra.Command{
 	Long:  `Retrieves the current opacity value of a window. Requires MSS.`,
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx, span := tracing.Tracer().Start(context.Background(), "get-opacity")
-		defer span.End()
+		ctx := context.Background()
 
 		params := map[string]interface{}{
 			"windowId": args[0],
@@ -747,8 +727,7 @@ var windowSetLayerCmd = &cobra.Command{
 	Long:  `Sets the window stacking layer. Values: 'above' (always on top), 'normal' (default), 'below' (always behind). Requires MSS.`,
 	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx, span := tracing.Tracer().Start(context.Background(), "set-layer")
-		defer span.End()
+		ctx := context.Background()
 
 		layer := strings.ToLower(args[1])
 		if layer != "above" && layer != "normal" && layer != "below" {
@@ -785,8 +764,7 @@ var windowGetLayerCmd = &cobra.Command{
 	Long:  `Retrieves the current stacking layer of a window. Requires MSS.`,
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx, span := tracing.Tracer().Start(context.Background(), "get-layer")
-		defer span.End()
+		ctx := context.Background()
 
 		params := map[string]interface{}{
 			"windowId": args[0],
@@ -819,8 +797,7 @@ var windowSetStickyCmd = &cobra.Command{
 	Long:  `Sets whether a window is sticky (visible on all spaces). Requires MSS.`,
 	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx, span := tracing.Tracer().Start(context.Background(), "set-sticky")
-		defer span.End()
+		ctx := context.Background()
 
 		sticky, err := strconv.ParseBool(args[1])
 		if err != nil {
@@ -861,8 +838,7 @@ var windowIsStickyCmd = &cobra.Command{
 	Long:  `Checks whether a window is sticky (visible on all spaces). Requires MSS.`,
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx, span := tracing.Tracer().Start(context.Background(), "is-sticky")
-		defer span.End()
+		ctx := context.Background()
 
 		params := map[string]interface{}{
 			"windowId": args[0],
@@ -899,8 +875,7 @@ var windowMinimizeCmd = &cobra.Command{
 	Long:  `Minimizes a window to the Dock. Requires MSS.`,
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx, span := tracing.Tracer().Start(context.Background(), "minimize")
-		defer span.End()
+		ctx := context.Background()
 
 		params := map[string]interface{}{
 			"windowId": args[0],
@@ -931,8 +906,7 @@ var windowUnminimizeCmd = &cobra.Command{
 	Long:  `Restores a minimized window from the Dock. Requires MSS.`,
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx, span := tracing.Tracer().Start(context.Background(), "unminimize")
-		defer span.End()
+		ctx := context.Background()
 
 		params := map[string]interface{}{
 			"windowId": args[0],
@@ -963,8 +937,7 @@ var windowIsMinimizedCmd = &cobra.Command{
 	Long:  `Checks whether a window is currently minimized. Requires MSS.`,
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx, span := tracing.Tracer().Start(context.Background(), "is-minimized")
-		defer span.End()
+		ctx := context.Background()
 
 		params := map[string]interface{}{
 			"windowId": args[0],
@@ -1010,8 +983,7 @@ var spaceCreateCmd = &cobra.Command{
 	Long:  `Creates a new space on the same display as the specified space ID. Requires MSS.`,
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx, span := tracing.Tracer().Start(context.Background(), "create")
-		defer span.End()
+		ctx := context.Background()
 
 		params := map[string]interface{}{
 			"displaySpaceId": args[0],
@@ -1042,8 +1014,7 @@ var spaceDestroyCmd = &cobra.Command{
 	Long:  `Destroys (deletes) a space. Windows on this space will be moved to other spaces. Requires MSS.`,
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx, span := tracing.Tracer().Start(context.Background(), "destroy")
-		defer span.End()
+		ctx := context.Background()
 
 		params := map[string]interface{}{
 			"spaceId": args[0],
@@ -1074,8 +1045,7 @@ var spaceFocusCmd = &cobra.Command{
 	Long:  `Switches to the specified space (makes it active). Requires MSS.`,
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx, span := tracing.Tracer().Start(context.Background(), "focus")
-		defer span.End()
+		ctx := context.Background()
 
 		params := map[string]interface{}{
 			"spaceId": args[0],
@@ -1193,8 +1163,7 @@ var layoutApplyCmd = &cobra.Command{
 	Short: "Apply a layout to the current space",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx, span := tracing.Tracer().Start(context.Background(), "apply")
-		defer span.End()
+		ctx := context.Background()
 
 		layoutID := args[0]
 		spaceID, _ := cmd.Flags().GetString("space")
@@ -1253,8 +1222,7 @@ var layoutCycleCmd = &cobra.Command{
 	Use:   "cycle",
 	Short: "Cycle to the next layout",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx, span := tracing.Tracer().Start(context.Background(), "cycle")
-		defer span.End()
+		ctx := context.Background()
 
 		cfg, err := gridConfig.LoadConfig("")
 		if err != nil {
@@ -1306,8 +1274,7 @@ var layoutCurrentCmd = &cobra.Command{
 	Use:   "current",
 	Short: "Show current layout for space",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx, span := tracing.Tracer().Start(context.Background(), "current")
-		defer span.End()
+		ctx := context.Background()
 
 		spaceID, _ := cmd.Flags().GetString("space")
 
@@ -1350,8 +1317,7 @@ var layoutReapplyCmd = &cobra.Command{
 	Use:   "reapply",
 	Short: "Reapply the current layout",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx, span := tracing.Tracer().Start(context.Background(), "reapply")
-		defer span.End()
+		ctx := context.Background()
 
 		cfg, err := gridConfig.LoadConfig("")
 		if err != nil {
@@ -1604,8 +1570,7 @@ var focusCmd = &cobra.Command{
 
 // focusDirectionHelper is a helper function for directional focus commands
 func focusDirectionHelper(direction gridTypes.Direction, wrapAround bool, extend bool, mouse bool) error {
-	ctx, span := tracing.Tracer().Start(context.Background(), "focus")
-	defer span.End()
+	ctx := context.Background()
 
 	cfg, err := gridConfig.LoadConfig("")
 	if err != nil {
@@ -1957,8 +1922,7 @@ var focusNextCmd = &cobra.Command{
 	Short: "Cycle focus to next window in current cell",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx, span := tracing.Tracer().Start(context.Background(), "next")
-		defer span.End()
+		ctx := context.Background()
 
 		jsonlog.Log("focus.next.start")
 		mouse, _ := cmd.Flags().GetBool("mouse")
@@ -2020,8 +1984,7 @@ var focusPrevCmd = &cobra.Command{
 	Short: "Cycle focus to previous window in current cell",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx, span := tracing.Tracer().Start(context.Background(), "prev")
-		defer span.End()
+		ctx := context.Background()
 
 		jsonlog.Log("focus.prev.start")
 		mouse, _ := cmd.Flags().GetBool("mouse")
@@ -2083,8 +2046,7 @@ var focusCellCmd = &cobra.Command{
 	Short: "Jump focus to specific cell",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx, span := tracing.Tracer().Start(context.Background(), "cell")
-		defer span.End()
+		ctx := context.Background()
 
 		cellID := args[0]
 		mouse, _ := cmd.Flags().GetBool("mouse")
@@ -2146,8 +2108,7 @@ var mouseCenterCmd = &cobra.Command{
 	Short: "Move mouse cursor to center of focused window",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx, span := tracing.Tracer().Start(context.Background(), "center")
-		defer span.End()
+		ctx := context.Background()
 
 		c := client.NewClient(socketPath, timeout)
 		defer c.Close()
@@ -2179,8 +2140,7 @@ var mouseWarpCmd = &cobra.Command{
 	Short: "Move mouse cursor to center of specified window",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx, span := tracing.Tracer().Start(context.Background(), "warp")
-		defer span.End()
+		ctx := context.Background()
 
 		windowID, err := strconv.ParseUint(args[0], 10, 32)
 		if err != nil {
@@ -2217,8 +2177,7 @@ var resizeAdjustCmd = &cobra.Command{
 	Short:   "Grow or shrink focused window",
 	Args:    cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx, span := tracing.Tracer().Start(context.Background(), "grow")
-		defer span.End()
+		ctx := context.Background()
 
 		action := cmd.CalledAs()
 
@@ -2273,8 +2232,7 @@ var resizeResetCmd = &cobra.Command{
 	Use:   "reset",
 	Short: "Reset splits to equal",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx, span := tracing.Tracer().Start(context.Background(), "reset")
-		defer span.End()
+		ctx := context.Background()
 
 		cfg, err := gridConfig.LoadConfig("")
 		if err != nil {
@@ -2343,8 +2301,7 @@ Examples:
 	Args:      cobra.RangeArgs(1, 2),
 	ValidArgs: []string{"left", "right", "up", "down"},
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx, span := tracing.Tracer().Start(context.Background(), "cell")
-		defer span.End()
+		ctx := context.Background()
 
 		direction := args[0]
 		if direction != "left" && direction != "right" && direction != "up" && direction != "down" {
@@ -2410,8 +2367,7 @@ var cellSendCmd = &cobra.Command{
 	Long:  `Move the focused window to an adjacent cell in the specified direction (left, right, up, down).`,
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx, span := tracing.Tracer().Start(context.Background(), "send")
-		defer span.End()
+		ctx := context.Background()
 
 		direction, ok := gridTypes.ParseDirection(args[0])
 		if !ok {
@@ -2494,8 +2450,7 @@ Example JSON input:
 }`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx, span := tracing.Tracer().Start(context.Background(), "render")
-		defer span.End()
+		ctx := context.Background()
 
 		spaceID := args[0]
 
@@ -2806,21 +2761,8 @@ func init() {
 }
 
 func main() {
-	// Initialize tracing
-	tracing.Init()
-
-	// Execute command and capture error for log
+	// Execute command
 	err := rootCmd.Execute()
-
-	// Log command completion
-	data := map[string]any{
-		"rid": currentRequestID,
-		"ok":  err == nil,
-	}
-	if err != nil {
-		data["err"] = err.Error()
-	}
-	jsonlog.Log("cmd.done", jsonlog.WithData(data))
 
 	if err != nil {
 		os.Exit(1)
