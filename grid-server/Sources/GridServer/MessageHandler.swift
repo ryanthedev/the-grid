@@ -26,35 +26,48 @@ class MessageHandler {
 
     /// Handle a request and call completion with the response
     func handle(request: Request, completion: @escaping (Response) -> Void) {
+        // Create span for this request
+        let tracer = Tracing.getTracer()
+        let spanBuilder = tracer.spanBuilder(spanName: request.method)
+
+        // Extract parent context if _trace is provided in params
+        if let parentContext = Tracing.extractContext(from: request.params) {
+            spanBuilder.setParent(parentContext)
+        }
+
+        let span = spanBuilder.startSpan()
+
+        // Execute handler within span context
         Task {
-            await EventLog.shared.log("msg.handle", ["id": request.id, "method": request.method])
-        }
+            await CurrentSpan.$current.withValue(span) {
+                await EventLog.shared.log("msg.handle", ["id": request.id, "method": request.method])
 
-        guard let handler = handlers[request.method] else {
-            let response = Response(
-                id: request.id,
-                error: ErrorInfo(
-                    code: -32601,
-                    message: "Method not found: \(request.method)"
-                )
-            )
+                guard let handler = handlers[request.method] else {
+                    let response = Response(
+                        id: request.id,
+                        error: ErrorInfo(
+                            code: -32601,
+                            message: "Method not found: \(request.method)"
+                        )
+                    )
 
-            // Log error event
-            Task {
-                await EventLog.shared.log("msg.err", [
-                    "op": "method_not_found",
-                    "method": request.method,
-                    "id": request.id
-                ])
+                    await EventLog.shared.log("msg.err", [
+                        "op": "method_not_found",
+                        "method": request.method,
+                        "id": request.id
+                    ])
+
+                    span.end()
+                    completion(response)
+                    return
+                }
+
+                // Execute handler with span context
+                handler(request) { response in
+                    span.end()
+                    completion(response)
+                }
             }
-
-            completion(response)
-            return
-        }
-
-        // Execute handler
-        handler(request) { response in
-            completion(response)
         }
     }
 
