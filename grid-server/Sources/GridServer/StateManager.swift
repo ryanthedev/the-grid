@@ -1025,9 +1025,7 @@ class StateManager {
                     window.lastUpdated = Date()
                     self.state.windows[String(windowID)] = window
                     self.state.metadata.update()
-
-                    // Notify border system
-                    self.borderEvents?.handleWindowMinimized(windowID)
+                    // Note: Border system handles this via focus change events
                 }
             }
         }
@@ -1046,9 +1044,7 @@ class StateManager {
                     window.lastUpdated = Date()
                     self.state.windows[String(windowID)] = window
                     self.state.metadata.update()
-
-                    // Notify border system
-                    self.borderEvents?.handleWindowDeminimized(windowID)
+                    // Note: Border system handles this via focus change events
                 }
             }
         }
@@ -1140,8 +1136,7 @@ class StateManager {
                         )
                     }
 
-                    // Notify border system of space change (must clear space-specific state)
-                    self.borderEvents?.handleSpaceChanged()
+                    // Note: Border system handles space changes via cell assignments from CLI
 
                     self.state.metadata.update()
                 }

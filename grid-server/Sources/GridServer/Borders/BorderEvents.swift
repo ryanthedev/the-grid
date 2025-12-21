@@ -49,25 +49,10 @@ class BorderEvents {
         simpleBorderManager?.updateFocus(newFocusedWindow: windowID)
     }
 
-    func handleWindowMinimized(_ windowID: UInt32) {
-        simpleBorderManager?.handleWindowMinimized(windowID: windowID)
-    }
-
-    func handleWindowDeminimized(_ windowID: UInt32) {
-        simpleBorderManager?.handleWindowDeminimized(windowID: windowID)
-    }
-
-    func handleAppHidden(bundleID: String) {
-        simpleBorderManager?.handleAppHidden(bundleID: bundleID)
-    }
-
-    func handleAppUnhidden(bundleID: String) {
-        simpleBorderManager?.handleAppUnhidden(bundleID: bundleID)
-    }
-
-    func handleSpaceChanged() {
-        simpleBorderManager?.handleSpaceChanged()
-    }
+    // NOTE: handleWindowMinimized, handleWindowDeminimized, handleAppHidden,
+    // handleAppUnhidden, and handleSpaceChanged are intentionally not routed.
+    // These events trigger focus changes upstream, and BorderManager reacts
+    // to the resulting focus/assignment changes instead.
 
     func handleDisplayDisconnected(displayUUID: String) {
         simpleBorderManager?.handleDisplayDisconnected(displayUUID: displayUUID)
