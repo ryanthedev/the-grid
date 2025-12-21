@@ -23,6 +23,7 @@ import (
 	"github.com/yourusername/grid-cli/internal/logging"
 	"github.com/yourusername/grid-cli/internal/models"
 	gridMouse "github.com/yourusername/grid-cli/internal/mouse"
+	gridNotify "github.com/yourusername/grid-cli/internal/notify"
 	"github.com/yourusername/grid-cli/internal/output"
 	gridReconcile "github.com/yourusername/grid-cli/internal/reconcile"
 	gridServer "github.com/yourusername/grid-cli/internal/server"
@@ -2365,6 +2366,281 @@ var cellSendCmd = &cobra.Command{
 	},
 }
 
+// MARK: - Notify Commands
+
+// notifyCmd is the parent command for notification operations
+var notifyCmd = &cobra.Command{
+	Use:   "notify",
+	Short: "Notification operations",
+	Long:  `Commands for displaying and managing toast notifications.`,
+}
+
+// notifyCreateCmd creates a notification and waits for response
+var notifyCreateCmd = &cobra.Command{
+	Use:   "create <title> [body]",
+	Short: "Create notification and wait for response",
+	Long: `Create a toast notification and block until the user responds.
+
+Examples:
+  thegrid notify create "Deploy?" "Ready to deploy v1.2.3" --buttons "Yes,No"
+  thegrid notify create "Enter name" --text --timeout 30s
+  thegrid notify create "Confirm" --buttons "OK" --id my-notification`,
+	Args: cobra.RangeArgs(1, 2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		title := args[0]
+		body := ""
+		if len(args) > 1 {
+			body = args[1]
+		}
+
+		id, _ := cmd.Flags().GetString("id")
+		if id == "" {
+			id = generateRequestID()
+		}
+
+		buttonsStr, _ := cmd.Flags().GetString("buttons")
+		var buttons []string
+		if buttonsStr != "" {
+			buttons = strings.Split(buttonsStr, ",")
+			for i := range buttons {
+				buttons[i] = strings.TrimSpace(buttons[i])
+			}
+		}
+
+		textInput, _ := cmd.Flags().GetBool("text")
+		timeoutDur, _ := cmd.Flags().GetDuration("timeout")
+
+		// Get position from config or use defaults
+		cfg, err := gridConfig.LoadConfig("")
+		if err != nil {
+			return fmt.Errorf("failed to load config: %w", err)
+		}
+
+		// Get current state for display bounds
+		c := client.NewClient(socketPath, timeout)
+		defer c.Close()
+
+		ctx := context.Background()
+		if timeoutDur > 0 {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, timeoutDur+5*time.Second)
+			defer cancel()
+		}
+
+		snap, err := gridServer.Fetch(ctx, c)
+		if err != nil {
+			return fmt.Errorf("failed to fetch server state: %w", err)
+		}
+
+		// Use first display bounds as default position
+		var position *gridNotify.NotificationPosition
+		for _, display := range snap.AllDisplays {
+			position = &gridNotify.NotificationPosition{
+				Bounds: gridNotify.NotificationBounds{
+					X:      display.VisibleFrame.X,
+					Y:      display.VisibleFrame.Y,
+					Width:  display.VisibleFrame.Width,
+					Height: display.VisibleFrame.Height,
+				},
+				Anchor: "top-right",
+			}
+			break
+		}
+
+		// Use config cell if specified (cfg.Notifications added in Phase 4)
+		_ = cfg
+
+		req := &gridNotify.NotificationRequest{
+			NotificationID: id,
+			Title:          title,
+			Body:           body,
+			Buttons:        buttons,
+			TextInput:      textInput,
+			Timeout:        int(timeoutDur.Milliseconds()),
+			Position:       position,
+		}
+
+		notifyClient := gridNotify.NewClient(c.GetConnection())
+		resp, err := notifyClient.Create(ctx, req)
+		if err != nil {
+			return fmt.Errorf("notification failed: %w", err)
+		}
+
+		if jsonOutput {
+			return printJSON(resp)
+		}
+
+		if resp.TimedOut {
+			infoColor.Println("Notification timed out")
+		} else if resp.Cancelled {
+			infoColor.Println("Notification cancelled")
+		} else if resp.Button != nil {
+			successColor.Printf("Button: %s\n", *resp.Button)
+		} else if resp.Text != nil {
+			successColor.Printf("Text: %s\n", *resp.Text)
+		}
+
+		return nil
+	},
+}
+
+// notifyGetCmd retrieves a cached notification response
+var notifyGetCmd = &cobra.Command{
+	Use:   "get <id>",
+	Short: "Get cached notification response",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		id := args[0]
+
+		c := client.NewClient(socketPath, timeout)
+		defer c.Close()
+
+		notifyClient := gridNotify.NewClient(c.GetConnection())
+		resp, found, err := notifyClient.Get(context.Background(), id)
+		if err != nil {
+			return err
+		}
+
+		if jsonOutput {
+			return printJSON(map[string]interface{}{
+				"found":    found,
+				"response": resp,
+			})
+		}
+
+		if !found {
+			infoColor.Printf("No cached response for: %s\n", id)
+			return nil
+		}
+
+		if resp.Button != nil {
+			successColor.Printf("Button: %s\n", *resp.Button)
+		} else if resp.Text != nil {
+			successColor.Printf("Text: %s\n", *resp.Text)
+		} else if resp.TimedOut {
+			infoColor.Println("Timed out")
+		} else if resp.Cancelled {
+			infoColor.Println("Cancelled")
+		}
+
+		return nil
+	},
+}
+
+// notifyCancelCmd cancels a pending notification
+var notifyCancelCmd = &cobra.Command{
+	Use:   "cancel <id>",
+	Short: "Cancel pending notification",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		id := args[0]
+
+		c := client.NewClient(socketPath, timeout)
+		defer c.Close()
+
+		notifyClient := gridNotify.NewClient(c.GetConnection())
+		cancelled, err := notifyClient.Cancel(context.Background(), id)
+		if err != nil {
+			return err
+		}
+
+		if jsonOutput {
+			return printJSON(map[string]interface{}{
+				"success":        cancelled,
+				"notificationId": id,
+			})
+		}
+
+		if cancelled {
+			successColor.Printf("✓ Cancelled: %s\n", id)
+		} else {
+			infoColor.Printf("Not found or already completed: %s\n", id)
+		}
+
+		return nil
+	},
+}
+
+// notifyListCmd lists notifications
+var notifyListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List notifications",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		filter, _ := cmd.Flags().GetString("status")
+
+		c := client.NewClient(socketPath, timeout)
+		defer c.Close()
+
+		notifyClient := gridNotify.NewClient(c.GetConnection())
+		items, err := notifyClient.List(context.Background(), filter)
+		if err != nil {
+			return err
+		}
+
+		if jsonOutput {
+			return printJSON(items)
+		}
+
+		if len(items) == 0 {
+			infoColor.Println("No notifications")
+			return nil
+		}
+
+		for _, item := range items {
+			status := item.Status
+			if item.TimedOut {
+				status = "timeout"
+			} else if item.Cancelled {
+				status = "cancelled"
+			}
+			fmt.Printf("%s [%s]", item.NotificationID, status)
+			if item.Button != nil {
+				fmt.Printf(" button=%s", *item.Button)
+			}
+			if item.Text != nil {
+				fmt.Printf(" text=%s", *item.Text)
+			}
+			fmt.Println()
+		}
+
+		return nil
+	},
+}
+
+// notifyClearCmd clears a cached notification response
+var notifyClearCmd = &cobra.Command{
+	Use:   "clear <id>",
+	Short: "Clear cached notification response",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		id := args[0]
+
+		c := client.NewClient(socketPath, timeout)
+		defer c.Close()
+
+		notifyClient := gridNotify.NewClient(c.GetConnection())
+		cleared, err := notifyClient.Clear(context.Background(), id)
+		if err != nil {
+			return err
+		}
+
+		if jsonOutput {
+			return printJSON(map[string]interface{}{
+				"success":        cleared,
+				"notificationId": id,
+			})
+		}
+
+		if cleared {
+			successColor.Printf("✓ Cleared: %s\n", id)
+		} else {
+			infoColor.Printf("Not found: %s\n", id)
+		}
+
+		return nil
+	},
+}
+
 // Helper function for formatting track sizes
 func formatTrackSizes(tracks []gridTypes.TrackSize) string {
 	var parts []string
@@ -2632,6 +2908,21 @@ func init() {
 	// Add the-grid cell commands
 	rootCmd.AddCommand(cellCmd)
 	cellCmd.AddCommand(cellSendCmd)
+
+	// Add notification commands
+	rootCmd.AddCommand(notifyCmd)
+	notifyCmd.AddCommand(notifyCreateCmd)
+	notifyCmd.AddCommand(notifyGetCmd)
+	notifyCmd.AddCommand(notifyCancelCmd)
+	notifyCmd.AddCommand(notifyListCmd)
+	notifyCmd.AddCommand(notifyClearCmd)
+
+	// Add notification command flags
+	notifyCreateCmd.Flags().String("id", "", "Notification ID (auto-generated if not specified)")
+	notifyCreateCmd.Flags().String("buttons", "", "Comma-separated button labels")
+	notifyCreateCmd.Flags().Bool("text", false, "Enable text input")
+	notifyCreateCmd.Flags().Duration("timeout", 0, "Timeout duration (e.g., 30s, 1m)")
+	notifyListCmd.Flags().String("status", "all", "Filter by status: active, cached, or all")
 
 	// Add show subcommands
 	showCmd.AddCommand(showLayoutCmd)

@@ -43,6 +43,11 @@ func (c *Client) Close() error {
 	return c.conn.Close()
 }
 
+// GetConnection returns the underlying connection for advanced operations
+func (c *Client) GetConnection() *Connection {
+	return c.conn
+}
+
 // request is a helper to send a request and get the response
 func (c *Client) request(ctx context.Context, method string, params map[string]interface{}) (*models.Response, error) {
 	if !c.conn.IsConnected() {

@@ -120,3 +120,68 @@ func (c *Connection) SendRequest(ctx context.Context, req *models.MessageEnvelop
 func (c *Connection) IsConnected() bool {
 	return c.conn != nil
 }
+
+// WaitForEvent waits for an event matching one of the specified types
+// It keeps reading messages until it receives a matching event or the context is cancelled
+func (c *Connection) WaitForEvent(ctx context.Context, eventTypes ...string) (*models.Event, error) {
+	// Build a set of event types for quick lookup
+	eventTypeSet := make(map[string]bool)
+	for _, et := range eventTypes {
+		eventTypeSet[et] = true
+	}
+
+	eventChan := make(chan *models.Event, 1)
+	errChan := make(chan error, 1)
+
+	go func() {
+		for {
+			// Check if context is done
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+
+			// Set read deadline based on context or timeout
+			deadline := time.Now().Add(c.timeout)
+			if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+				deadline = d
+			}
+			if err := c.conn.SetReadDeadline(deadline); err != nil {
+				errChan <- fmt.Errorf("failed to set read deadline: %w", err)
+				return
+			}
+
+			line, err := c.reader.ReadBytes('\n')
+			if err != nil {
+				errChan <- fmt.Errorf("failed to read message: %w", err)
+				return
+			}
+
+			var envelope models.MessageEnvelope
+			if err := json.Unmarshal(line, &envelope); err != nil {
+				errChan <- fmt.Errorf("failed to unmarshal message: %w", err)
+				return
+			}
+
+			// Check if it's an event we're waiting for
+			if envelope.Type == "event" && envelope.Event != nil {
+				if eventTypeSet[envelope.Event.EventType] {
+					eventChan <- envelope.Event
+					return
+				}
+				// Not a matching event, continue waiting
+			}
+			// Ignore responses and other message types while waiting for events
+		}
+	}()
+
+	select {
+	case <-ctx.Done():
+		return nil, fmt.Errorf("context cancelled while waiting for event: %w", ctx.Err())
+	case err := <-errChan:
+		return nil, err
+	case event := <-eventChan:
+		return event, nil
+	}
+}
