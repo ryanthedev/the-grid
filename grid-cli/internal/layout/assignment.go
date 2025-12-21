@@ -4,7 +4,7 @@ import (
 	"sort"
 
 	"github.com/yourusername/grid-cli/internal/config"
-	"github.com/yourusername/grid-cli/internal/eventlog"
+	"github.com/yourusername/grid-cli/internal/jsonlog"
 	"github.com/yourusername/grid-cli/internal/types"
 )
 
@@ -244,10 +244,10 @@ func assignAutoFlow(windows []Window, layout *types.Layout, cellBounds map[strin
 	for i, w := range windows {
 		cellID := sortedCells[i%len(sortedCells)]
 		result.Assignments[cellID] = append(result.Assignments[cellID], w.ID)
-		eventlog.Log("cell.assign", map[string]any{
+		jsonlog.Log("cell.assign", jsonlog.WithData(map[string]any{
 			"wid":  w.ID,
 			"cell": cellID,
-		})
+		}))
 	}
 }
 
@@ -263,10 +263,10 @@ func assignPinned(windows []Window, layout *types.Layout, rules []config.AppRule
 				// Check if cell exists in layout
 				if _, ok := result.Assignments[rule.PreferredCell]; ok {
 					result.Assignments[rule.PreferredCell] = append(result.Assignments[rule.PreferredCell], w.ID)
-					eventlog.Log("cell.assign", map[string]any{
+					jsonlog.Log("cell.assign", jsonlog.WithData(map[string]any{
 						"wid":  w.ID,
 						"cell": rule.PreferredCell,
-					})
+					}))
 					assigned = true
 					break
 				}
@@ -300,10 +300,10 @@ func assignPinned(windows []Window, layout *types.Layout, rules []config.AppRule
 				cellID = findLeastPopulatedCell(result.Assignments)
 			}
 			result.Assignments[cellID] = append(result.Assignments[cellID], w.ID)
-			eventlog.Log("cell.assign", map[string]any{
+			jsonlog.Log("cell.assign", jsonlog.WithData(map[string]any{
 				"wid":  w.ID,
 				"cell": cellID,
-			})
+			}))
 		}
 	}
 }
@@ -331,10 +331,10 @@ func assignPreserve(windows []Window, layout *types.Layout, previous map[string]
 		for _, wid := range windowIDs {
 			if !currentWindowSet[wid] {
 				// Log cell clear event for ghost windows
-				eventlog.Log("cell.clear", map[string]any{
+				jsonlog.Log("cell.clear", jsonlog.WithData(map[string]any{
 					"cell": cellID,
 					"wid":  wid,
-				})
+				}))
 			}
 		}
 	}
@@ -346,11 +346,11 @@ func assignPreserve(windows []Window, layout *types.Layout, previous map[string]
 			if _, cellExists := result.Assignments[prevCellID]; cellExists {
 				result.Assignments[prevCellID] = append(result.Assignments[prevCellID], w.ID)
 				// Log cell assignment event (preserving previous assignment)
-				eventlog.Log("cell.assign", map[string]any{
+				jsonlog.Log("cell.assign", jsonlog.WithData(map[string]any{
 					"wid":  w.ID,
 					"cell": prevCellID,
 					"prev": prevCellID, // Same cell, preserved
-				})
+				}))
 				continue
 			}
 		}
@@ -377,7 +377,7 @@ func assignPreserve(windows []Window, layout *types.Layout, previous map[string]
 			if prevCell != "" {
 				data["prev"] = prevCell
 			}
-			eventlog.Log("cell.assign", data)
+			jsonlog.Log("cell.assign", jsonlog.WithData(data))
 		}
 	}
 
@@ -432,17 +432,17 @@ func assignByPosition(windows []Window, cellBounds map[string]types.Rect, result
 
 		if bestCell != "" {
 			result.Assignments[bestCell] = append(result.Assignments[bestCell], w.ID)
-			eventlog.Log("cell.assign", map[string]any{
+			jsonlog.Log("cell.assign", jsonlog.WithData(map[string]any{
 				"wid":  w.ID,
 				"cell": bestCell,
-			})
+			}))
 		} else {
 			cellID := findLeastPopulatedCell(result.Assignments)
 			result.Assignments[cellID] = append(result.Assignments[cellID], w.ID)
-			eventlog.Log("cell.assign", map[string]any{
+			jsonlog.Log("cell.assign", jsonlog.WithData(map[string]any{
 				"wid":  w.ID,
 				"cell": cellID,
-			})
+			}))
 		}
 	}
 }

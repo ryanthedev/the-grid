@@ -7,8 +7,8 @@ import (
 	"github.com/yourusername/grid-cli/internal/client"
 	"github.com/yourusername/grid-cli/internal/config"
 	"github.com/yourusername/grid-cli/internal/focus"
+	"github.com/yourusername/grid-cli/internal/jsonlog"
 	"github.com/yourusername/grid-cli/internal/layout"
-	"github.com/yourusername/grid-cli/internal/logging"
 	"github.com/yourusername/grid-cli/internal/server"
 	"github.com/yourusername/grid-cli/internal/state"
 	"github.com/yourusername/grid-cli/internal/types"
@@ -63,11 +63,9 @@ func MoveWindow(
 		return nil, fmt.Errorf("window %d not assigned to any cell", windowID)
 	}
 
-	logging.Info().
-		Uint32("windowId", windowID).
-		Str("sourceCell", sourceCell).
-		Str("direction", direction.String()).
-		Msg("moving window")
+	jsonlog.Log("win.move.start", jsonlog.WithData(map[string]any{
+		"wid": windowID, "src": sourceCell, "dir": direction.String(),
+	}))
 
 	// Get current layout and calculate bounds
 	layoutDef, err := cfg.GetLayout(spaceState.CurrentLayoutID)
@@ -122,12 +120,9 @@ func moveWindowToCell(
 	targetCell string,
 	spaceID string,
 ) (*MoveResult, error) {
-	logging.Info().
-		Uint32("windowId", windowID).
-		Str("sourceCell", sourceCell).
-		Str("targetCell", targetCell).
-		Str("space", spaceID).
-		Msg("moving window to cell")
+	jsonlog.Log("win.move.to_cell", jsonlog.WithData(map[string]any{
+		"wid": windowID, "src": sourceCell, "dst": targetCell, "sid": spaceID,
+	}))
 
 	// Update state: move window from source to target cell
 	mutableSpace := rs.GetSpace(spaceID)
@@ -203,14 +198,14 @@ func moveWindowToCell(
 
 	// Focus the window
 	if err := focus.FocusWindow(ctx, c, windowID); err != nil {
-		logging.Warn().Err(err).Uint32("windowId", windowID).Msg("failed to focus moved window")
+		jsonlog.Log("warn.focus_moved", jsonlog.WithData(map[string]any{"wid": windowID, "err": err.Error()}))
 		// Non-fatal - window was moved successfully
 	}
 
 	// Save state
 	rs.MarkUpdated()
 	if err := rs.Save(); err != nil {
-		logging.Warn().Err(err).Msg("failed to save state")
+		jsonlog.Log("warn.save_state", jsonlog.WithData(map[string]any{"err": err.Error()}))
 	}
 
 	return &MoveResult{
@@ -296,14 +291,10 @@ func moveWindowCrossDisplay(
 
 	targetSpaceIDStr := fmt.Sprintf("%v", targetSpaceID)
 
-	logging.Info().
-		Uint32("windowId", windowID).
-		Str("sourceCell", currentCell).
-		Str("targetCell", targetCell).
-		Str("sourceSpace", snap.SpaceID).
-		Str("targetSpace", targetSpaceIDStr).
-		Str("targetDisplay", adjacentDisplay.UUID).
-		Msg("moving window cross-display")
+	jsonlog.Log("win.move.cross_display", jsonlog.WithData(map[string]any{
+		"wid": windowID, "src": currentCell, "dst": targetCell,
+		"src_space": snap.SpaceID, "dst_space": targetSpaceIDStr, "dst_display": adjacentDisplay.UUID,
+	}))
 
 	// Move window to target space via server RPC
 	_, err = c.UpdateWindow(ctx, int(windowID), map[string]interface{}{
@@ -324,7 +315,7 @@ func moveWindowCrossDisplay(
 	// Calculate placements for just the target cell (not full layout re-assignment)
 	layoutDef, err := cfg.GetLayout(targetSpace.CurrentLayoutID)
 	if err != nil {
-		logging.Warn().Err(err).Msg("layout not found for target space")
+		jsonlog.Log("warn.layout_not_found", jsonlog.WithData(map[string]any{"err": err.Error()}))
 	} else {
 		targetDisplayBounds := adjacentDisplay.VisibleFrame
 		if targetDisplayBounds == (types.Rect{}) {
@@ -380,7 +371,7 @@ func moveWindowCrossDisplay(
 		)
 
 		if err := layout.ApplyPlacements(ctx, c, placements); err != nil {
-			logging.Warn().Err(err).Msg("failed to apply placements on target space")
+			jsonlog.Log("warn.placements_target", jsonlog.WithData(map[string]any{"err": err.Error()}))
 		}
 	}
 
@@ -435,20 +426,20 @@ func moveWindowCrossDisplay(
 			)
 
 			if err := layout.ApplyPlacements(ctx, c, sourcePlacements); err != nil {
-				logging.Warn().Err(err).Msg("failed to apply placements on source space")
+				jsonlog.Log("warn.placements_source", jsonlog.WithData(map[string]any{"err": err.Error()}))
 			}
 		}
 	}
 
 	// Focus the window
 	if err := focus.FocusWindow(ctx, c, windowID); err != nil {
-		logging.Warn().Err(err).Uint32("windowId", windowID).Msg("failed to focus moved window")
+		jsonlog.Log("warn.focus_moved", jsonlog.WithData(map[string]any{"wid": windowID, "err": err.Error()}))
 	}
 
 	// Save state
 	rs.MarkUpdated()
 	if err := rs.Save(); err != nil {
-		logging.Warn().Err(err).Msg("failed to save state")
+		jsonlog.Log("warn.save_state", jsonlog.WithData(map[string]any{"err": err.Error()}))
 	}
 
 	return &MoveResult{

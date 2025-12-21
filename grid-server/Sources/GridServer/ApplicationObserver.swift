@@ -42,7 +42,7 @@ class ApplicationObserver {
 
         guard error == .success, let observerRef = observerRef else {
             Task {
-                await EventLog.shared.log("ax.fail", [
+                await JSONLogger.shared.log("ax.fail", data: [
                     "op": "create_observer",
                     "pid": pid,
                     "app": appName ?? "unknown",
@@ -73,7 +73,7 @@ class ApplicationObserver {
                 successCount += 1
             } else {
                 Task {
-                    await EventLog.shared.log("ax.fail", [
+                    await JSONLogger.shared.log("ax.fail", data: [
                         "op": "register_notif",
                         "notif": notification as String,
                         "err": result.rawValue
@@ -84,7 +84,7 @@ class ApplicationObserver {
 
         guard successCount > 0 else {
             Task {
-                await EventLog.shared.log("ax.fail", [
+                await JSONLogger.shared.log("ax.fail", data: [
                     "op": "register_notifs",
                     "msg": "no notifications registered"
                 ])
@@ -97,7 +97,7 @@ class ApplicationObserver {
         CFRunLoopAddSource(CFRunLoopGetMain(), runLoopSource, .defaultMode)
 
         Task {
-            await EventLog.shared.log("ax.observer.create", [
+            await JSONLogger.shared.log("ax.observer.create", data: [
                 "pid": pid,
                 "app": appName ?? "?",
                 "notifs": "\(successCount)/\(Self.observedNotifications.count)"
@@ -117,7 +117,7 @@ class ApplicationObserver {
         self.observer = nil
 
         Task {
-            await EventLog.shared.log("ax.observer.stop", [
+            await JSONLogger.shared.log("ax.observer.stop", data: [
                 "pid": pid,
                 "app": appName ?? "unknown"
             ])
@@ -156,7 +156,7 @@ class ApplicationObserver {
         // Extract window ID from AX element
         guard let windowID = getWindowID(from: element) else {
             Task {
-                await EventLog.shared.log("ax.fail", [
+                await JSONLogger.shared.log("ax.fail", data: [
                     "op": "get_window_id",
                     "notif": notifName
                 ])
@@ -198,7 +198,7 @@ class ApplicationObserver {
 
         default:
             Task {
-                await EventLog.shared.log("dbg.unknown_notif", ["notif": notifName])
+                await JSONLogger.shared.log("dbg.unknown_notif", data: ["notif": notifName])
             }
         }
     }

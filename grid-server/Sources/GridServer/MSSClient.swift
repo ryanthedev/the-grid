@@ -62,11 +62,11 @@ class MSSClient {
             }
 
             guard ctx != nil else {
-                Task { await EventLog.shared.log("err.mss", ["op": "init"]) }
+                Task { await JSONLogger.shared.log("err.mss", data: ["op": "init"]) }
                 return
             }
 
-            Task { await EventLog.shared.log("mss.init", [:]) }
+            Task { await JSONLogger.shared.log("mss.init", data: [:]) }
         }
     }
 
@@ -94,7 +94,7 @@ class MSSClient {
             if result == 0 {  // MSS_SUCCESS = 0
                 return true
             } else {
-                Task { await EventLog.shared.log("mss.fail", ["op": "handshake", "err": result]) }
+                Task { await JSONLogger.shared.log("mss.fail", data: ["op": "handshake", "err": result]) }
                 return false
             }
         }
@@ -129,14 +129,14 @@ class MSSClient {
     func moveWindowToSpace(windowID: UInt32, spaceID: UInt64) -> Bool {
         return queue.sync {
             guard let ctx = ctx else {
-                Task { await EventLog.shared.log("err.mss", ["op": "no_ctx"]) }
+                Task { await JSONLogger.shared.log("err.mss", data: ["op": "no_ctx"]) }
                 return false
             }
 
             let result = mss_window_move_to_space(ctx, windowID, spaceID)
 
             if !result {
-                Task { await EventLog.shared.log("mss.fail", ["op": "move", "wid": windowID, "sid": spaceID]) }
+                Task { await JSONLogger.shared.log("mss.fail", data: ["op": "move", "wid": windowID, "sid": spaceID]) }
             }
 
             return result
@@ -259,7 +259,7 @@ class MSSClient {
         return queue.sync {
             guard let ctx = ctx else { return false }
 
-            Task { await EventLog.shared.log("mss.focus", ["wid": windowID]) }
+            Task { await JSONLogger.shared.log("mss.focus", data: ["wid": windowID]) }
             return mss_window_focus(ctx, windowID)
         }
     }
@@ -297,7 +297,7 @@ class MSSClient {
         return queue.sync {
             guard let ctx = ctx else { return false }
 
-            log("mss.shadow", ["wid": windowID, "shadow": shadow])
+            jlog("mss.shadow", data: ["wid": windowID, "shadow": shadow])
 
             return mss_window_set_shadow(ctx, windowID, shadow)
         }
@@ -310,7 +310,7 @@ class MSSClient {
         return queue.sync {
             guard let ctx = ctx else { return false }
 
-            log("mss.minimize", ["wid": windowID])
+            jlog("mss.minimize", data: ["wid": windowID])
             return mss_window_minimize(ctx, windowID)
         }
     }
@@ -322,7 +322,7 @@ class MSSClient {
         return queue.sync {
             guard let ctx = ctx else { return false }
 
-            log("mss.unminimize", ["wid": windowID])
+            jlog("mss.unminimize", data: ["wid": windowID])
             return mss_window_unminimize(ctx, windowID)
         }
     }
@@ -354,7 +354,7 @@ class MSSClient {
         return queue.sync {
             guard let ctx = ctx else { return false }
 
-            log("spc.create", ["sid": displaySpaceID])
+            jlog("spc.create", data: ["sid": displaySpaceID])
 
             return mss_space_create(ctx, displaySpaceID)
         }
@@ -367,7 +367,7 @@ class MSSClient {
         return queue.sync {
             guard let ctx = ctx else { return false }
 
-            log("spc.destroy", ["sid": spaceID])
+            jlog("spc.destroy", data: ["sid": spaceID])
 
             return mss_space_destroy(ctx, spaceID)
         }
@@ -380,7 +380,7 @@ class MSSClient {
         return queue.sync {
             guard let ctx = ctx else { return false }
 
-            log("spc.focus", ["sid": spaceID])
+            jlog("spc.focus", data: ["sid": spaceID])
 
             return mss_space_focus(ctx, spaceID)
         }
@@ -397,7 +397,7 @@ class MSSClient {
         return queue.sync {
             guard let ctx = ctx else { return false }
 
-            log("spc.move", ["src_sid": sourceSpaceID, "dst_sid": destSpaceID])
+            jlog("spc.move", data: ["src_sid": sourceSpaceID, "dst_sid": destSpaceID])
 
             return mss_space_move(ctx, sourceSpaceID, destSpaceID, previousSpace, focus)
         }
@@ -437,7 +437,7 @@ class MSSClient {
             let result = mss_window_list_move_to_space(ctx, &wids, Int32(windowIDs.count), spaceID)
 
             if !result {
-                log("err.mss.batch_move", ["count": windowIDs.count, "sid": spaceID])
+                jlog("err.mss.batch_move", data: ["count": windowIDs.count, "sid": spaceID])
             }
 
             return result

@@ -64,7 +64,7 @@ class SocketServer {
 
         isRunning = true
         Task {
-            await EventLog.shared.log("sock.start", ["path": socketPath])
+            await JSONLogger.shared.log("sock.start", data: ["path": socketPath])
         }
 
         // Accept connections on background queue
@@ -93,7 +93,7 @@ class SocketServer {
 
         cleanupSocket()
         Task {
-            await EventLog.shared.log("sock.stop", [:])
+            await JSONLogger.shared.log("sock.stop", data: [:])
         }
     }
 
@@ -114,7 +114,7 @@ class SocketServer {
             guard clientSocket >= 0 else {
                 if isRunning {
                     Task {
-                        await EventLog.shared.log("sock.err", ["op": "accept", "errno": errno])
+                        await JSONLogger.shared.log("sock.err", data: ["op": "accept", "errno": errno])
                     }
                 }
                 continue
@@ -122,7 +122,7 @@ class SocketServer {
 
             // Log client connect event
             Task {
-                await EventLog.shared.log("sock.connect", ["cid": clientSocket])
+                await JSONLogger.shared.log("sock.connect", data: ["cid": clientSocket])
             }
 
             socketQueue.async(flags: .barrier) { [weak self] in
@@ -146,7 +146,7 @@ class SocketServer {
 
             // Log client disconnect event
             Task {
-                await EventLog.shared.log("sock.disconnect", ["cid": socket])
+                await JSONLogger.shared.log("sock.disconnect", data: ["cid": socket])
             }
         }
 
@@ -196,12 +196,12 @@ class SocketServer {
             case .response:
                 // Responses from client (not typical in server mode, but supported)
                 Task {
-                    await EventLog.shared.log("warn.client_response", ["socket": clientSocket])
+                    await JSONLogger.shared.log("warn.client_response", data: ["socket": clientSocket])
                 }
             }
         } catch {
             Task {
-                await EventLog.shared.log("msg.err", ["op": "parse", "socket": clientSocket, "error": "\(error)"])
+                await JSONLogger.shared.log("msg.err", data: ["op": "parse", "socket": clientSocket, "error": "\(error)"])
             }
 
             // Send error response if possible
@@ -243,12 +243,12 @@ class SocketServer {
 
             if sent < 0 {
                 Task {
-                    await EventLog.shared.log("sock.err", ["op": "send", "socket": socket, "errno": errno])
+                    await JSONLogger.shared.log("sock.err", data: ["op": "send", "socket": socket, "errno": errno])
                 }
             }
         } catch {
             Task {
-                await EventLog.shared.log("msg.err", ["op": "encode", "error": "\(error)"])
+                await JSONLogger.shared.log("msg.err", data: ["op": "encode", "error": "\(error)"])
             }
         }
     }

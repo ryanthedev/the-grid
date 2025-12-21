@@ -3,10 +3,6 @@ import Foundation
 import AppKit
 import Logging
 
-/// Helper to log events synchronously from non-async contexts
-func log(_ event: String, _ data: [String: Any] = [:]) {
-    Task { await EventLog.shared.log(event, data) }
-}
 
 /// No-op log handler to silence legacy Logger calls during migration
 struct SilentLogHandler: LogHandler {
@@ -30,12 +26,6 @@ struct GridServerCommand: ParsableCommand {
     @Option(name: .shortAndLong, help: "Path to the Unix domain socket")
     var socketPath: String = "/tmp/grid-server.sock"
 
-    @Flag(name: .shortAndLong, help: "Enable verbose logging")
-    var verbose: Bool = false
-
-    @Flag(name: .shortAndLong, help: "Enable debug logging")
-    var debug: Bool = false
-
     @Flag(name: .long, help: "Enable periodic heartbeat events for testing")
     var heartbeat: Bool = false
 
@@ -43,19 +33,22 @@ struct GridServerCommand: ParsableCommand {
     var heartbeatInterval: Double = 10.0
 
     func run() throws {
-        // Silence legacy Logger output (components will be migrated to EventLog)
+        // Silence legacy Logger output (components will be migrated to JSONLogger)
         LoggingSystem.bootstrap { _ in SilentLogHandler() }
+
+        // Print log path on startup
+        print("logging to \(JSONLogger.shared.getLogPath())")
 
         // Initialize OpenTelemetry tracing
         Tracing.initialize()
 
         // Log server start
-        log("srv.start", ["ver": "0.1.0", "socket": socketPath])
+        jlog("srv.start", data: ["ver": "0.1.0", "socket": socketPath])
 
         // Check for Accessibility permission
         if !PermissionChecker.checkAccessibilityPermission() {
-            log("warn.ax.permission")
-            log("ax.permission.request")
+            jlog("warn.ax.permission")
+            jlog("ax.permission.request")
             PermissionChecker.requestAccessibilityPermission()
         }
 
@@ -76,7 +69,7 @@ struct GridServerCommand: ParsableCommand {
 
         let signalSource = DispatchSource.makeSignalSource(signal: SIGINT, queue: signalQueue)
         signalSource.setEventHandler {
-            log("srv.sig.int")
+            jlog("srv.sig.int")
             shouldShutdown = true
             socketServer.stop()
             Darwin.exit(0)
@@ -86,7 +79,7 @@ struct GridServerCommand: ParsableCommand {
 
         let termSignalSource = DispatchSource.makeSignalSource(signal: SIGTERM, queue: signalQueue)
         termSignalSource.setEventHandler {
-            log("srv.sig.term")
+            jlog("srv.sig.term")
             shouldShutdown = true
             socketServer.stop()
             Darwin.exit(0)
@@ -104,7 +97,7 @@ struct GridServerCommand: ParsableCommand {
 
             // Initialize StateManager
             StateManager.shared.start()
-            log("state.init")
+            jlog("state.init")
 
             // Initialize border system
             let connectionID = SLSMainConnectionID()
@@ -113,14 +106,14 @@ struct GridServerCommand: ParsableCommand {
             borderEvents.setup(simpleBorderManager: simpleBorderManager, stateManager: StateManager.shared)
             StateManager.shared.borderEvents = borderEvents
             messageHandler.simpleBorderManager = simpleBorderManager
-            log("bdr.init")
+            jlog("bdr.init")
 
             // Initialize BFD hotkey daemon
             let bfdManager = BFDManager()
             if bfdManager.start() {
-                Task { await EventLog.shared.log("bfd.ready", [:]) }
+                jlog("bfd.ready")
             } else {
-                Task { await EventLog.shared.log("warn.bfd.init", ["msg": "Failed to start BFD"]) }
+                jlog("warn.bfd.init", msg: "Failed to start BFD")
             }
 
             // Start heartbeat if requested
@@ -128,11 +121,11 @@ struct GridServerCommand: ParsableCommand {
                 eventBroadcaster.startHeartbeat(interval: heartbeatInterval)
             }
 
-            log("srv.ready")
+            jlog("srv.ready")
 
             // Start auto-layout in background (don't block startup)
             AutoLayoutManager.shared.applyStartupLayoutsAsync()
-            Task { await EventLog.shared.log("autolayout.init", [:]) }
+            jlog("autolayout.init")
 
             // Keep the server running
             while !shouldShutdown {
@@ -140,7 +133,7 @@ struct GridServerCommand: ParsableCommand {
             }
 
         } catch {
-            log("err.srv.start", ["err": "\(error)"])
+            jlog("err.srv.start", data: ["err": "\(error)"])
             throw ExitCode.failure
         }
     }

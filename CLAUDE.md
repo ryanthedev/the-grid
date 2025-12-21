@@ -11,26 +11,82 @@
 - It's acceptable to create temporary tests and delete them after validation
 - Tests should prove the approach works, not provide coverage
 
-## Logging Requirements
+## Logging
 
-### Event Logging (primary - for debugging/post-mortem)
-- Use EventLog for all significant events (writes to `events.jsonl`)
-- CLI (Go): `eventlog.Log("event.code", map[string]any{"key": value})`
-- Server (Swift): `await EventLog.shared.log("event.code", ["key": value])`
-- Event codes use dot notation: `cmd.start`, `win.move`, `srv.init`, `bdr.show`
-- Use abbreviated keys: `wid` (window ID), `sid` (space ID), `pid`, `app`, `rid` (request ID)
-- Output format: `{"t":1702840000,"ev":"cmd.start","cmd":"focus","rid":"a1b2"}`
+All logging goes to JSONL files in `~/.local/state/thegrid/`:
+- `thegrid-cli.json` - CLI logs
+- `thegrid-server.json` - Server logs
 
-### Console/File Logging (errors and warnings only)
-- CLI uses zerolog (`logging.Error()`, `logging.Warn()`)
-- Server uses swift-log for console output
-- Reserve for errors, warnings, and user-facing messages
+### Log Schema
+
+```jsonl
+{"ts":1702840000,"ev":"win.focus","data":{"wid":123}}
+{"ts":1702840001,"ev":"srv.error","msg":"invalid window","data":{"wid":456}}
+```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `ts` | yes | Unix timestamp |
+| `ev` | yes | Event code (e.g., `win.focus`, `cmd.start`) |
+| `msg` | no | Extra context |
+| `data` | no | Event-specific payload |
+| `tid` | no | Trace ID |
+| `sid` | no | Span ID |
+
+### Usage
+
+CLI (Go):
+```go
+jsonlog.Log("cmd.start", jsonlog.WithData(map[string]any{"cmd": "focus"}))
+jsonlog.Log("err.focus", jsonlog.WithMsg("window not found"), jsonlog.WithData(map[string]any{"wid": 123}))
+```
+
+Server (Swift):
+```swift
+jlog("srv.init")
+jlog("win.focus", data: ["wid": 123])
+await JSONLogger.shared.log("err.bounds", msg: "failed to get bounds", data: ["wid": 456])
+```
+
+### Span-Based Logging
+
+For timing and correlation, use spans:
+
+CLI (Go):
+```go
+span := jsonlog.StartSpan("cmd", jsonlog.WithData(map[string]any{"cmd": "focus"}))
+defer span.End()
+
+// Child span
+child := span.StartChild("validate")
+// ... work ...
+child.End()
+
+// End with error
+span.EndWithError("window not found")
+```
+
+Server (Swift):
+```swift
+let span = await JSONLogger.shared.startSpan("srv", tid: tid, parentSid: parentSid, data: ["method": method])
+
+// Child span
+let child = await span.startChild("border", data: ["wid": 123])
+await child.end()
+
+await span.end()
+```
+
+Output format:
+```jsonl
+{"ev":"cmd.start","sid":"a1b2","tid":"a1b2","data":{"cmd":"focus"},"ts":1702840000}
+{"ev":"cmd.end","sid":"a1b2","tid":"a1b2","dur":45,"ts":1702840045}
+```
 
 ## Project Paths
 - **Log files**: `~/.local/state/thegrid/`
-  - `events.jsonl` - Unified event log (CLI + server, auto-rotates at 1MB)
-  - `grid-cli.log` - CLI client logs (errors/warnings)
-  - `grid-server.log` - Server logs (errors/warnings)
+  - `thegrid-cli.json` - CLI logs (JSONL)
+  - `thegrid-server.json` - Server logs (JSONL)
   - `state.json` - Runtime state
 - **Config**: `~/.config/thegrid/config.yaml`
 - **Server socket**: `/tmp/grid-server.sock`
@@ -64,11 +120,11 @@ stat -f "%Sm" grid-server/.build/debug/grid-server
 ### Check recent server events
 ```bash
 # Last 5 server startup events
-grep -E "mss\.init|state\.init" ~/.local/state/thegrid/events.jsonl | tail -5
+grep -E '"ev":"srv\.start"|"ev":"state\.init"' ~/.local/state/thegrid/thegrid-server.json | tail -5
 ```
 
 ### Full rebuild and restart
 ```bash
 make build && pkill -f grid-server && sleep 1 && \
-  nohup ./grid-server/.build/debug/grid-server --debug > /dev/null 2>&1 &
+  nohup ./grid-server/.build/debug/grid-server > /dev/null 2>&1 &
 ```

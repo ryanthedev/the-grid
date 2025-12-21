@@ -50,14 +50,14 @@ struct EdgeDetector {
     private func detectCellBoundary(point: CGPoint, state: WindowManagerState) -> EdgeHit? {
         // Get the active space
         guard let activeSpaceID = state.metadata.activeSpaceID else {
-            Task { await EventLog.shared.log("dbg.edge.no_active_space", [:]) }
+            Task { await JSONLogger.shared.log("dbg.edge.no_active_space", data: [:]) }
             return nil
         }
 
         // Get windows on this space to build cell boundaries
         let spaceKey = String(activeSpaceID)
         guard let space = state.spaces[spaceKey] else {
-            Task { await EventLog.shared.log("dbg.edge.space_not_found", ["space": spaceKey]) }
+            Task { await JSONLogger.shared.log("dbg.edge.space_not_found", data: ["space": spaceKey]) }
             return nil
         }
 
@@ -97,7 +97,7 @@ struct EdgeDetector {
                                 // Determine direction: cursor is on right of left window, or left of right window
                                 let edge: ResizeEdge = point.x < boundaryX ? .right : .left
 
-                                Task { await EventLog.shared.log("edge.detect", [
+                                Task { await JSONLogger.shared.log("edge.detect", data: [
                                     "type": "cell",
                                     "edge": edge.rawValue,
                                     "distance": abs(point.x - boundaryX)
@@ -137,7 +137,7 @@ struct EdgeDetector {
                                 // Determine direction
                                 let edge: ResizeEdge = point.y < boundaryY ? .bottom : .top
 
-                                Task { await EventLog.shared.log("edge.detect", [
+                                Task { await JSONLogger.shared.log("edge.detect", data: [
                                     "type": "cell",
                                     "edge": edge.rawValue,
                                     "distance": abs(point.y - boundaryY)
@@ -198,7 +198,7 @@ struct EdgeDetector {
                         if point.x >= window.frame.minX && point.x <= window.frame.maxX {
                             let edge: ResizeEdge = window.frame.maxY < other.frame.minY ? .bottom : .top
 
-                            Task { await EventLog.shared.log("edge.detect", [
+                            Task { await JSONLogger.shared.log("edge.detect", data: [
                                 "type": "window",
                                 "window": window.id,
                                 "edge": edge.rawValue,
@@ -226,7 +226,7 @@ struct EdgeDetector {
                         if point.y >= window.frame.minY && point.y <= window.frame.maxY {
                             let edge: ResizeEdge = window.frame.maxX < other.frame.minX ? .right : .left
 
-                            Task { await EventLog.shared.log("edge.detect", [
+                            Task { await JSONLogger.shared.log("edge.detect", data: [
                                 "type": "window",
                                 "window": window.id,
                                 "edge": edge.rawValue,

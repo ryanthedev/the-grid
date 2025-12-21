@@ -81,7 +81,7 @@ class WorkspaceObserver {
         )
 
         Task {
-            await EventLog.shared.log("ws.register", [:])
+            await JSONLogger.shared.log("ws.register", data: [:])
         }
     }
 
@@ -89,7 +89,7 @@ class WorkspaceObserver {
     func stopObserving() {
         NSWorkspace.shared.notificationCenter.removeObserver(self)
         Task {
-            await EventLog.shared.log("ws.stop", [:])
+            await JSONLogger.shared.log("ws.stop", data: [:])
         }
     }
 
@@ -97,14 +97,14 @@ class WorkspaceObserver {
 
     @objc private func spaceChanged(_ notification: Notification) {
         Task {
-            await EventLog.shared.log("ws.space", [:])
+            await JSONLogger.shared.log("ws.space", data: [:])
         }
         stateManager?.handleSpaceChanged()
     }
 
     @objc private func screenParametersChanged(_ notification: Notification) {
         Task {
-            await EventLog.shared.log("ws.screen", [:])
+            await JSONLogger.shared.log("ws.screen", data: [:])
         }
         stateManager?.handleDisplayConfigurationChanged()
     }
@@ -117,7 +117,7 @@ class WorkspaceObserver {
         }
 
         Task {
-            await EventLog.shared.log("app.launch", [
+            await JSONLogger.shared.log("app.launch", data: [
                 "app": app.localizedName ?? "?",
                 "pid": app.processIdentifier
             ])
@@ -132,7 +132,7 @@ class WorkspaceObserver {
         }
 
         Task {
-            await EventLog.shared.log("app.term", [
+            await JSONLogger.shared.log("app.term", data: [
                 "app": app.localizedName ?? "?",
                 "pid": app.processIdentifier
             ])
@@ -157,7 +157,7 @@ class WorkspaceObserver {
         }
 
         Task {
-            await EventLog.shared.log("app.hide", [
+            await JSONLogger.shared.log("app.hide", data: [
                 "app": app.localizedName ?? "?",
                 "pid": app.processIdentifier
             ])
@@ -172,7 +172,7 @@ class WorkspaceObserver {
         }
 
         Task {
-            await EventLog.shared.log("app.unhide", [
+            await JSONLogger.shared.log("app.unhide", data: [
                 "app": app.localizedName ?? "?",
                 "pid": app.processIdentifier
             ])
@@ -185,7 +185,7 @@ class WorkspaceObserver {
 
     @objc private func systemWoke(_ notification: Notification) {
         Task {
-            await EventLog.shared.log("ws.wake", [:])
+            await JSONLogger.shared.log("ws.wake", data: [:])
         }
         stateManager?.handleSystemWoke()
     }
