@@ -1109,6 +1109,16 @@ class StateManager {
                 self.restoreFocusForSpace(spaceID)
             }
 
+            // Auto-apply layout if space has none
+            if let spaceID = newSpaceID,
+               let spaceState = self.state.spaces[String(spaceID)],
+               spaceState.type == "user" {
+                AutoLayoutManager.shared.handleSpaceChange(
+                    spaceID: spaceID,
+                    spaceType: spaceState.type
+                )
+            }
+
             // Notify border system of space change (must clear space-specific state)
             self.borderEvents?.handleSpaceChanged()
 

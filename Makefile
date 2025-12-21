@@ -193,6 +193,12 @@ dev: build
 	@echo "Starting server (Ctrl+C to stop)..."
 	@script -q ~/.local/state/thegrid/grid-server.log ./grid-server/.build/debug/grid-server --debug
 
+# Install dev build to ~/.local/state/thegrid/bin for wrapper resolution
+install-dev: cli
+	@mkdir -p ~/.local/state/thegrid/bin
+	@cp grid-cli/bin/thegrid ~/.local/state/thegrid/bin/thegrid
+	@echo "✓ Installed dev CLI to ~/.local/state/thegrid/bin/thegrid"
+
 # Quick reload: build, restart server in background, apply layout
 # Usage: make reload LAYOUT=two-column  (default: two-column)
 LAYOUT ?= two-column

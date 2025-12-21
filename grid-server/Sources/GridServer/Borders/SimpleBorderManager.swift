@@ -168,6 +168,11 @@ class SimpleBorderManager {
                     continue
                 }
 
+                // Explicitly destroy any existing border before replacing
+                // (prevents crash from implicit deallocation during dictionary assignment)
+                if let existingBorder = windowBorders[windowID] {
+                    existingBorder.destroy()
+                }
                 windowBorders[windowID] = border
                 Task {
                     await EventLog.shared.log("bdr.created", [
