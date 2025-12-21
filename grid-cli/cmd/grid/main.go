@@ -1199,6 +1199,7 @@ var layoutApplyCmd = &cobra.Command{
 		defer span.End()
 
 		layoutID := args[0]
+		spaceID, _ := cmd.Flags().GetString("space")
 
 		cfg, err := gridConfig.LoadConfig("")
 		if err != nil {
@@ -1218,6 +1219,11 @@ var layoutApplyCmd = &cobra.Command{
 		snap, err := gridServer.Fetch(ctx, c)
 		if err != nil {
 			return fmt.Errorf("failed to fetch server state: %w", err)
+		}
+
+		// Override space ID if --space flag is provided
+		if spaceID != "" {
+			snap.SpaceID = spaceID
 		}
 
 		// 2. Reconcile local state with server (includes border sync)

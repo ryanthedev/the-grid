@@ -130,6 +130,10 @@ struct GridServerCommand: ParsableCommand {
 
             log("srv.ready")
 
+            // Start auto-layout in background (don't block startup)
+            AutoLayoutManager.shared.applyStartupLayoutsAsync()
+            Task { await EventLog.shared.log("autolayout.init", [:]) }
+
             // Keep the server running
             while !shouldShutdown {
                 RunLoop.current.run(mode: .default, before: Date.distantFuture)

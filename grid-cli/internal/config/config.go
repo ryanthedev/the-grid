@@ -100,10 +100,15 @@ func GetConfigPath() string {
 
 // GetLayout returns a layout by ID, converting from LayoutConfig to types.Layout
 func (c *Config) GetLayout(id string) (*types.Layout, error) {
+	// Check user layouts first
 	for _, lc := range c.Layouts {
 		if lc.ID == id {
 			return lc.ToLayout()
 		}
+	}
+	// Check builtins
+	if builtin := GetBuiltinLayout(id); builtin != nil {
+		return builtin.ToLayout()
 	}
 	return nil, fmt.Errorf("layout not found: %s", id)
 }
