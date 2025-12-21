@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/yourusername/grid-cli/internal/models"
+	"github.com/yourusername/grid-cli/internal/tracing"
 )
 
 const (
@@ -48,6 +49,20 @@ func (c *Client) request(ctx context.Context, method string, params map[string]i
 	if !c.conn.IsConnected() {
 		if err := c.Connect(); err != nil {
 			return nil, err
+		}
+	}
+
+	// Initialize params if nil
+	if params == nil {
+		params = make(map[string]interface{})
+	}
+
+	// Extract trace info from context and inject into request
+	tid, sid := tracing.GetTraceInfo(ctx)
+	if tid != "" && sid != "" {
+		params["_trace"] = map[string]string{
+			"tid": tid,
+			"sid": sid,
 		}
 	}
 
