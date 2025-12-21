@@ -46,6 +46,9 @@ struct GridServerCommand: ParsableCommand {
         // Silence legacy Logger output (components will be migrated to EventLog)
         LoggingSystem.bootstrap { _ in SilentLogHandler() }
 
+        // Initialize OpenTelemetry tracing
+        Tracing.initialize()
+
         // Log server start
         log("srv.start", ["ver": "0.1.0", "socket": socketPath])
 

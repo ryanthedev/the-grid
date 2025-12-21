@@ -89,8 +89,13 @@ class SimpleBorderManager {
 
     /// Set cell bounds received from CLI for a specific display
     func setCellBounds(_ bounds: [String: CGRect], forDisplay displayUUID: String) {
-        DispatchQueue.main.async { [weak self] in
-            self?.setCellBoundsImpl(bounds, forDisplay: displayUUID)
+        let span = CurrentSpan.current
+        DispatchQueue.main.async { [weak self, span] in
+            Task {
+                await CurrentSpan.$current.withValue(span) {
+                    self?.setCellBoundsImpl(bounds, forDisplay: displayUUID)
+                }
+            }
         }
     }
 
@@ -103,8 +108,13 @@ class SimpleBorderManager {
 
     /// Set cell assignments received from CLI for a specific display
     func setCellAssignments(_ assignments: [UInt32: String], forDisplay displayUUID: String) {
-        DispatchQueue.main.async { [weak self] in
-            self?.setCellAssignmentsImpl(assignments, forDisplay: displayUUID)
+        let span = CurrentSpan.current
+        DispatchQueue.main.async { [weak self, span] in
+            Task {
+                await CurrentSpan.$current.withValue(span) {
+                    self?.setCellAssignmentsImpl(assignments, forDisplay: displayUUID)
+                }
+            }
         }
     }
 
@@ -205,8 +215,13 @@ class SimpleBorderManager {
     /// Update focus when a different window becomes active
     /// This is the main entry point for focus changes from BorderEvents
     func updateFocus(newFocusedWindow: UInt32) {
-        DispatchQueue.main.async { [weak self] in
-            self?.updateFocusImpl(newFocusedWindow: newFocusedWindow)
+        let span = CurrentSpan.current
+        DispatchQueue.main.async { [weak self, span] in
+            Task {
+                await CurrentSpan.$current.withValue(span) {
+                    self?.updateFocusImpl(newFocusedWindow: newFocusedWindow)
+                }
+            }
         }
     }
 
@@ -394,8 +409,13 @@ class SimpleBorderManager {
 
     /// Handle window moved (update window border position)
     func handleWindowMoved(windowID: UInt32, newFrame: CGRect) {
-        DispatchQueue.main.async { [weak self] in
-            self?.handleWindowMovedImpl(windowID: windowID, newFrame: newFrame)
+        let span = CurrentSpan.current
+        DispatchQueue.main.async { [weak self, span] in
+            Task {
+                await CurrentSpan.$current.withValue(span) {
+                    self?.handleWindowMovedImpl(windowID: windowID, newFrame: newFrame)
+                }
+            }
         }
     }
 
@@ -420,8 +440,13 @@ class SimpleBorderManager {
 
     /// Handle window minimized (hide border if minimized)
     func handleWindowMinimized(windowID: UInt32) {
-        DispatchQueue.main.async { [weak self] in
-            self?.handleWindowMinimizedImpl(windowID: windowID)
+        let span = CurrentSpan.current
+        DispatchQueue.main.async { [weak self, span] in
+            Task {
+                await CurrentSpan.$current.withValue(span) {
+                    self?.handleWindowMinimizedImpl(windowID: windowID)
+                }
+            }
         }
     }
 
@@ -441,8 +466,13 @@ class SimpleBorderManager {
 
     /// Handle window deminimized (show border if it should be visible)
     func handleWindowDeminimized(windowID: UInt32) {
-        DispatchQueue.main.async { [weak self] in
-            self?.handleWindowDeminimizedImpl(windowID: windowID)
+        let span = CurrentSpan.current
+        DispatchQueue.main.async { [weak self, span] in
+            Task {
+                await CurrentSpan.$current.withValue(span) {
+                    self?.handleWindowDeminimizedImpl(windowID: windowID)
+                }
+            }
         }
     }
 
@@ -453,8 +483,13 @@ class SimpleBorderManager {
 
     /// Handle app hidden (hide borders for windows in this app)
     func handleAppHidden(bundleID: String) {
-        DispatchQueue.main.async { [weak self] in
-            self?.handleAppHiddenImpl(bundleID: bundleID)
+        let span = CurrentSpan.current
+        DispatchQueue.main.async { [weak self, span] in
+            Task {
+                await CurrentSpan.$current.withValue(span) {
+                    self?.handleAppHiddenImpl(bundleID: bundleID)
+                }
+            }
         }
     }
 
@@ -476,8 +511,13 @@ class SimpleBorderManager {
 
     /// Handle app unhidden (restore borders if needed)
     func handleAppUnhidden(bundleID: String) {
-        DispatchQueue.main.async { [weak self] in
-            self?.handleAppUnhiddenImpl(bundleID: bundleID)
+        let span = CurrentSpan.current
+        DispatchQueue.main.async { [weak self, span] in
+            Task {
+                await CurrentSpan.$current.withValue(span) {
+                    self?.handleAppUnhiddenImpl(bundleID: bundleID)
+                }
+            }
         }
     }
 
@@ -495,8 +535,13 @@ class SimpleBorderManager {
     ///
     /// We just clear focus-related state and hide all borders to prevent stale visuals.
     func handleSpaceChanged() {
-        DispatchQueue.main.async { [weak self] in
-            self?.handleSpaceChangedImpl()
+        let span = CurrentSpan.current
+        DispatchQueue.main.async { [weak self, span] in
+            Task {
+                await CurrentSpan.$current.withValue(span) {
+                    self?.handleSpaceChangedImpl()
+                }
+            }
         }
     }
 
@@ -515,8 +560,13 @@ class SimpleBorderManager {
 
     /// Handle window destroyed (remove border for destroyed window)
     func handleWindowDestroyed(windowID: UInt32) {
-        DispatchQueue.main.async { [weak self] in
-            self?.handleWindowDestroyedImpl(windowID: windowID)
+        let span = CurrentSpan.current
+        DispatchQueue.main.async { [weak self, span] in
+            Task {
+                await CurrentSpan.$current.withValue(span) {
+                    self?.handleWindowDestroyedImpl(windowID: windowID)
+                }
+            }
         }
     }
 
@@ -548,8 +598,13 @@ class SimpleBorderManager {
 
     /// Handle display disconnected (clean up display-specific state)
     func handleDisplayDisconnected(displayUUID: String) {
-        DispatchQueue.main.async { [weak self] in
-            self?.handleDisplayDisconnectedImpl(displayUUID: displayUUID)
+        let span = CurrentSpan.current
+        DispatchQueue.main.async { [weak self, span] in
+            Task {
+                await CurrentSpan.$current.withValue(span) {
+                    self?.handleDisplayDisconnectedImpl(displayUUID: displayUUID)
+                }
+            }
         }
     }
 
@@ -645,8 +700,13 @@ class SimpleBorderManager {
 
     /// Clean up all resources
     func cleanup() {
-        DispatchQueue.main.async { [weak self] in
-            self?.cleanupImpl()
+        let span = CurrentSpan.current
+        DispatchQueue.main.async { [weak self, span] in
+            Task {
+                await CurrentSpan.$current.withValue(span) {
+                    self?.cleanupImpl()
+                }
+            }
         }
     }
 

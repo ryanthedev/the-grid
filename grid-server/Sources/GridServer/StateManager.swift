@@ -55,22 +55,27 @@ class StateManager {
     // MARK: - Public Interface
 
     func start() {
-        queue.async {
-            // Build initial state
-            self.refreshCompleteState()
+        let span = CurrentSpan.current
+        queue.async { [span] in
+            Task {
+                await CurrentSpan.$current.withValue(span) {
+                    // Build initial state
+                    self.refreshCompleteState()
 
-            // Set up workspace observer (must be on main thread)
-            DispatchQueue.main.async {
-                let workspace = WorkspaceObserver()
-                workspace.observe(stateManager: self)
-                self.workspaceObserver = workspace
+                    // Set up workspace observer (must be on main thread)
+                    DispatchQueue.main.async {
+                        let workspace = WorkspaceObserver()
+                        workspace.observe(stateManager: self)
+                        self.workspaceObserver = workspace
+                    }
+
+                    // Create AX observers for existing applications
+                    self.observeExistingApplications()
+
+                    // Start periodic polling to catch windows that events miss
+                    self.startPolling(interval: 3.0)
+                }
             }
-
-            // Create AX observers for existing applications
-            self.observeExistingApplications()
-
-            // Start periodic polling to catch windows that events miss
-            self.startPolling(interval: 3.0)
         }
     }
 
@@ -412,8 +417,13 @@ class StateManager {
 
     /// Public method to update window spaces (for WindowManipulator)
     func updateWindowSpacesPublic(_ windowID: UInt32) {
-        queue.async {
-            self.updateWindowSpaces(windowID)
+        let span = CurrentSpan.current
+        queue.async { [span] in
+            Task {
+                await CurrentSpan.$current.withValue(span) {
+                    self.updateWindowSpaces(windowID)
+                }
+            }
         }
     }
 
@@ -800,319 +810,348 @@ class StateManager {
     // MARK: - AX Event Handlers (Per-Window Events)
 
     func handleWindowCreated(_ windowID: UInt32, pid: pid_t) {
-        queue.async {
-            // Create new window state
-            var window = WindowState(id: windowID)
-            window.pid = pid
-            window.appName = getAppNameForPID(pid)
-            window.isOrderedIn = true
-
-            // Query window properties from CGWindowList
-            let options: CGWindowListOption = [.optionIncludingWindow]
-            if let windowList = CGWindowListCopyWindowInfo(options, windowID) as? [[String: Any]],
-               let windowInfo = windowList.first {
-                // Get frame
-                if let boundsDict = windowInfo[kCGWindowBounds as String] as? [String: CGFloat] {
-                    window.frame = CGRect(
-                        x: boundsDict["X"] ?? 0,
-                        y: boundsDict["Y"] ?? 0,
-                        width: boundsDict["Width"] ?? 0,
-                        height: boundsDict["Height"] ?? 0
-                    )
-                }
-                // Get title
-                if let name = windowInfo[kCGWindowName as String] as? String {
-                    window.title = name
-                } else if let ownerName = windowInfo[kCGWindowOwnerName as String] as? String {
-                    window.title = ownerName
-                }
-            }
-
-            // Get AX properties
-            let axProps = self.getAXProperties(pid: pid, windowID: windowID)
-            window.role = axProps.role
-            window.subrole = axProps.subrole
-            window.parent = axProps.parent
-            window.hasCloseButton = axProps.hasCloseButton
-            window.hasFullscreenButton = axProps.hasFullscreenButton
-            window.hasMinimizeButton = axProps.hasMinimizeButton
-            window.hasZoomButton = axProps.hasZoomButton
-            window.isModal = axProps.isModal
-
-            self.state.windows[String(windowID)] = window
-
-            // Query space assignment
-            self.updateWindowSpaces(windowID)
-
-            // Add window to app's window list
-            let pidKey = String(pid)
-            if self.state.applications[pidKey] != nil {
-                if !self.state.applications[pidKey]!.windows.contains(windowID) {
-                    self.state.applications[pidKey]!.windows.append(windowID)
-                }
-            }
-
-            self.state.metadata.update()
-
-            // Log window created event
-            let appName = window.appName ?? "unknown"
-            let frame = window.frame
+        let span = CurrentSpan.current
+        queue.async { [span] in
             Task {
-                await EventLog.shared.log("win.create", [
-                    "wid": windowID,
-                    "pid": pid,
-                    "app": appName,
-                    "frame": [frame.origin.x, frame.origin.y, frame.size.width, frame.size.height]
-                ])
-            }
+                await CurrentSpan.$current.withValue(span) {
+                    // Create new window state
+                    var window = WindowState(id: windowID)
+                    window.pid = pid
+                    window.appName = getAppNameForPID(pid)
+                    window.isOrderedIn = true
 
-            // Notify border system with bundleID to avoid re-entrant queue access
-            let bundleID = self.state.applications[pidKey]?.bundleIdentifier
-            self.borderEvents?.handleWindowCreated(windowID, bundleID: bundleID)
+                    // Query window properties from CGWindowList
+                    let options: CGWindowListOption = [.optionIncludingWindow]
+                    if let windowList = CGWindowListCopyWindowInfo(options, windowID) as? [[String: Any]],
+                       let windowInfo = windowList.first {
+                        // Get frame
+                        if let boundsDict = windowInfo[kCGWindowBounds as String] as? [String: CGFloat] {
+                            window.frame = CGRect(
+                                x: boundsDict["X"] ?? 0,
+                                y: boundsDict["Y"] ?? 0,
+                                width: boundsDict["Width"] ?? 0,
+                                height: boundsDict["Height"] ?? 0
+                            )
+                        }
+                        // Get title
+                        if let name = windowInfo[kCGWindowName as String] as? String {
+                            window.title = name
+                        } else if let ownerName = windowInfo[kCGWindowOwnerName as String] as? String {
+                            window.title = ownerName
+                        }
+                    }
+
+                    // Get AX properties
+                    let axProps = self.getAXProperties(pid: pid, windowID: windowID)
+                    window.role = axProps.role
+                    window.subrole = axProps.subrole
+                    window.parent = axProps.parent
+                    window.hasCloseButton = axProps.hasCloseButton
+                    window.hasFullscreenButton = axProps.hasFullscreenButton
+                    window.hasMinimizeButton = axProps.hasMinimizeButton
+                    window.hasZoomButton = axProps.hasZoomButton
+                    window.isModal = axProps.isModal
+
+                    self.state.windows[String(windowID)] = window
+
+                    // Query space assignment
+                    self.updateWindowSpaces(windowID)
+
+                    // Add window to app's window list
+                    let pidKey = String(pid)
+                    if self.state.applications[pidKey] != nil {
+                        if !self.state.applications[pidKey]!.windows.contains(windowID) {
+                            self.state.applications[pidKey]!.windows.append(windowID)
+                        }
+                    }
+
+                    self.state.metadata.update()
+
+                    // Log window created event
+                    let appName = window.appName ?? "unknown"
+                    let frame = window.frame
+                    await EventLog.shared.log("win.create", [
+                        "wid": windowID,
+                        "pid": pid,
+                        "app": appName,
+                        "frame": [frame.origin.x, frame.origin.y, frame.size.width, frame.size.height]
+                    ])
+
+                    // Notify border system with bundleID to avoid re-entrant queue access
+                    let bundleID = self.state.applications[pidKey]?.bundleIdentifier
+                    self.borderEvents?.handleWindowCreated(windowID, bundleID: bundleID)
+                }
+            }
         }
     }
 
     func handleWindowDestroyed(_ windowID: UInt32) {
-        queue.async {
-            // Log window destroyed event
+        let span = CurrentSpan.current
+        queue.async { [span] in
             Task {
-                await EventLog.shared.log("win.destroy", ["wid": windowID])
+                await CurrentSpan.$current.withValue(span) {
+                    // Log window destroyed event
+                    await EventLog.shared.log("win.destroy", ["wid": windowID])
+
+                    // Get PID before removing window
+                    let pid = self.state.windows[String(windowID)]?.pid
+
+                    // Clear focus if destroyed window was focused
+                    if self.state.metadata.focusedWindowID == windowID {
+                        self.state.metadata.focusedWindowID = nil
+                        self.state.metadata.activeDisplayUUID = nil
+                        // Try to recover activeDisplayUUID from current active space
+                        self.updateActiveDisplayFromSpaces()
+                    }
+
+                    // Remove from state
+                    self.state.windows.removeValue(forKey: String(windowID))
+
+                    // Remove from app's window list
+                    if let pid = pid {
+                        let pidKey = String(pid)
+                        self.state.applications[pidKey]?.windows.removeAll { $0 == windowID }
+                    }
+
+                    // Remove from space window lists
+                    for spaceKey in self.state.spaces.keys {
+                        self.state.spaces[spaceKey]?.windows.removeAll { $0 == windowID }
+                    }
+
+                    self.state.metadata.update()
+
+                    // Notify border system
+                    self.borderEvents?.handleWindowDestroyed(windowID)
+                }
             }
-
-            // Get PID before removing window
-            let pid = self.state.windows[String(windowID)]?.pid
-
-            // Clear focus if destroyed window was focused
-            if self.state.metadata.focusedWindowID == windowID {
-                self.state.metadata.focusedWindowID = nil
-                self.state.metadata.activeDisplayUUID = nil
-                // Try to recover activeDisplayUUID from current active space
-                self.updateActiveDisplayFromSpaces()
-            }
-
-            // Remove from state
-            self.state.windows.removeValue(forKey: String(windowID))
-
-            // Remove from app's window list
-            if let pid = pid {
-                let pidKey = String(pid)
-                self.state.applications[pidKey]?.windows.removeAll { $0 == windowID }
-            }
-
-            // Remove from space window lists
-            for spaceKey in self.state.spaces.keys {
-                self.state.spaces[spaceKey]?.windows.removeAll { $0 == windowID }
-            }
-
-            self.state.metadata.update()
-
-            // Notify border system
-            self.borderEvents?.handleWindowDestroyed(windowID)
         }
     }
 
     func handleWindowMoved(_ windowID: UInt32, frame: CGRect) {
-        queue.async {
-            guard var window = self.state.windows[String(windowID)] else { return }
-            window.frame = frame
-            window.lastUpdated = Date()
-            self.state.windows[String(windowID)] = window
-
-            // Re-query space assignment after move
-            self.updateWindowSpaces(windowID)
-
-            self.state.metadata.update()
-
-            // Log window moved event
+        let span = CurrentSpan.current
+        queue.async { [span] in
             Task {
-                await EventLog.shared.log("win.move", [
-                    "wid": windowID,
-                    "frame": [frame.origin.x, frame.origin.y, frame.size.width, frame.size.height]
-                ])
-            }
+                await CurrentSpan.$current.withValue(span) {
+                    guard var window = self.state.windows[String(windowID)] else { return }
+                    window.frame = frame
+                    window.lastUpdated = Date()
+                    self.state.windows[String(windowID)] = window
 
-            // Notify border system
-            self.borderEvents?.handleWindowMoved(windowID, frame: frame)
+                    // Re-query space assignment after move
+                    self.updateWindowSpaces(windowID)
+
+                    self.state.metadata.update()
+
+                    // Log window moved event
+                    await EventLog.shared.log("win.move", [
+                        "wid": windowID,
+                        "frame": [frame.origin.x, frame.origin.y, frame.size.width, frame.size.height]
+                    ])
+
+                    // Notify border system
+                    self.borderEvents?.handleWindowMoved(windowID, frame: frame)
+                }
+            }
         }
     }
 
     func handleWindowResized(_ windowID: UInt32, frame: CGRect) {
-        queue.async {
-            guard var window = self.state.windows[String(windowID)] else { return }
-            window.frame = frame
-            window.lastUpdated = Date()
-            self.state.windows[String(windowID)] = window
-            self.state.metadata.update()
+        let span = CurrentSpan.current
+        queue.async { [span] in
+            Task {
+                await CurrentSpan.$current.withValue(span) {
+                    guard var window = self.state.windows[String(windowID)] else { return }
+                    window.frame = frame
+                    window.lastUpdated = Date()
+                    self.state.windows[String(windowID)] = window
+                    self.state.metadata.update()
 
-            // Notify border system
-            self.borderEvents?.handleWindowResized(windowID, frame: frame)
+                    // Notify border system
+                    self.borderEvents?.handleWindowResized(windowID, frame: frame)
+                }
+            }
         }
     }
 
     func handleWindowFocused(_ windowID: UInt32) {
-        queue.async {
-            // Store previous focused window for event logging
-            let previousWindowID = self.state.metadata.focusedWindowID
-
-            // Store focused window ID
-            self.state.metadata.focusedWindowID = windowID
-
-            // Determine active display from focused window
-            if let displayUUID = SLSCopyManagedDisplayForWindow(self.connectionID, windowID) {
-                let displayStr = displayUUID as String
-
-                // Log if display changed
-                if self.state.metadata.activeDisplayUUID != displayStr {
-                    Task {
-                        await EventLog.shared.log("dsp.change", [
-                            "display": displayStr,
-                            "wid": windowID
-                        ])
-                    }
-                }
-
-                self.state.metadata.activeDisplayUUID = displayStr
-
-                // Also update activeSpaceID from this display's current space
-                let spaceID = SLSManagedDisplayGetCurrentSpace(self.connectionID, displayUUID)
-                if spaceID != 0 {
-                    self.state.metadata.activeSpaceID = spaceID
-
-                    // Track this as the last focused window for this space
-                    let spaceKey = String(spaceID)
-                    if self.state.spaces[spaceKey] != nil {
-                        self.state.spaces[spaceKey]?.lastFocusedWindowID = windowID
-                    }
-                }
-            }
-
-            self.state.metadata.update()
-
-            // Log focus event
-            let appName = self.state.windows[String(windowID)]?.appName ?? "unknown"
+        let span = CurrentSpan.current
+        queue.async { [span] in
             Task {
-                await EventLog.shared.log("win.focus", [
-                    "wid": windowID,
-                    "app": appName,
-                    "prev": previousWindowID ?? 0
-                ])
-            }
+                await CurrentSpan.$current.withValue(span) {
+                    // Store previous focused window for event logging
+                    let previousWindowID = self.state.metadata.focusedWindowID
 
-            // Notify border system
-            self.borderEvents?.handleWindowFocused(windowID)
+                    // Store focused window ID
+                    self.state.metadata.focusedWindowID = windowID
+
+                    // Determine active display from focused window
+                    if let displayUUID = SLSCopyManagedDisplayForWindow(self.connectionID, windowID) {
+                        let displayStr = displayUUID as String
+
+                        // Log if display changed
+                        if self.state.metadata.activeDisplayUUID != displayStr {
+                            await EventLog.shared.log("dsp.change", [
+                                "display": displayStr,
+                                "wid": windowID
+                            ])
+                        }
+
+                        self.state.metadata.activeDisplayUUID = displayStr
+
+                        // Also update activeSpaceID from this display's current space
+                        let spaceID = SLSManagedDisplayGetCurrentSpace(self.connectionID, displayUUID)
+                        if spaceID != 0 {
+                            self.state.metadata.activeSpaceID = spaceID
+
+                            // Track this as the last focused window for this space
+                            let spaceKey = String(spaceID)
+                            if self.state.spaces[spaceKey] != nil {
+                                self.state.spaces[spaceKey]?.lastFocusedWindowID = windowID
+                            }
+                        }
+                    }
+
+                    self.state.metadata.update()
+
+                    // Log focus event
+                    let appName = self.state.windows[String(windowID)]?.appName ?? "unknown"
+                    await EventLog.shared.log("win.focus", [
+                        "wid": windowID,
+                        "app": appName,
+                        "prev": previousWindowID ?? 0
+                    ])
+
+                    // Notify border system
+                    self.borderEvents?.handleWindowFocused(windowID)
+                }
+            }
         }
     }
 
     func handleWindowMinimized(_ windowID: UInt32) {
-        queue.async {
+        let span = CurrentSpan.current
+        queue.async { [span] in
             Task {
-                await EventLog.shared.log("win.min", ["wid": windowID])
+                await CurrentSpan.$current.withValue(span) {
+                    await EventLog.shared.log("win.min", ["wid": windowID])
+
+                    guard var window = self.state.windows[String(windowID)] else { return }
+                    window.isMinimized = true
+                    window.isOrderedIn = false
+                    window.lastUpdated = Date()
+                    self.state.windows[String(windowID)] = window
+                    self.state.metadata.update()
+
+                    // Notify border system
+                    self.borderEvents?.handleWindowMinimized(windowID)
+                }
             }
-
-            guard var window = self.state.windows[String(windowID)] else { return }
-            window.isMinimized = true
-            window.isOrderedIn = false
-            window.lastUpdated = Date()
-            self.state.windows[String(windowID)] = window
-            self.state.metadata.update()
-
-            // Notify border system
-            self.borderEvents?.handleWindowMinimized(windowID)
         }
     }
 
     func handleWindowDeminimized(_ windowID: UInt32) {
-        queue.async {
+        let span = CurrentSpan.current
+        queue.async { [span] in
             Task {
-                await EventLog.shared.log("win.unmin", ["wid": windowID])
+                await CurrentSpan.$current.withValue(span) {
+                    await EventLog.shared.log("win.unmin", ["wid": windowID])
+
+                    guard var window = self.state.windows[String(windowID)] else { return }
+                    window.isMinimized = false
+                    window.isOrderedIn = true
+                    window.lastUpdated = Date()
+                    self.state.windows[String(windowID)] = window
+                    self.state.metadata.update()
+
+                    // Notify border system
+                    self.borderEvents?.handleWindowDeminimized(windowID)
+                }
             }
-
-            guard var window = self.state.windows[String(windowID)] else { return }
-            window.isMinimized = false
-            window.isOrderedIn = true
-            window.lastUpdated = Date()
-            self.state.windows[String(windowID)] = window
-            self.state.metadata.update()
-
-            // Notify border system
-            self.borderEvents?.handleWindowDeminimized(windowID)
         }
     }
 
     func handleWindowTitleChanged(_ windowID: UInt32, title: String) {
-        queue.async {
-            guard var window = self.state.windows[String(windowID)] else { return }
-            window.title = title
-            window.lastUpdated = Date()
-            self.state.windows[String(windowID)] = window
-            self.state.metadata.update()
+        let span = CurrentSpan.current
+        queue.async { [span] in
+            Task {
+                await CurrentSpan.$current.withValue(span) {
+                    guard var window = self.state.windows[String(windowID)] else { return }
+                    window.title = title
+                    window.lastUpdated = Date()
+                    self.state.windows[String(windowID)] = window
+                    self.state.metadata.update()
+                }
+            }
         }
     }
 
     // MARK: - NSWorkspace Event Handlers (System Events)
 
     func handleSpaceChanged() {
-        queue.async {
-            // 1. Store OLD currentSpaceID for each display BEFORE refreshing
-            var oldSpaceIDs: [String: UInt64] = [:]
-            for display in self.state.displays {
-                oldSpaceIDs[display.uuid] = display.currentSpaceID
-            }
-
-            // 2. Refresh spaces and update currentSpaceID for each display
-            self.refreshSpaces()
-            self.refreshDisplayCurrentSpaces()
-
-            // 3. Find which display's space changed - that's the active one
-            var foundChangedDisplay = false
-            var newSpaceID: UInt64? = nil
-            for display in self.state.displays {
-                if let oldSpaceID = oldSpaceIDs[display.uuid],
-                   display.currentSpaceID != oldSpaceID {
-                    // This display's space changed!
-                    self.state.metadata.activeDisplayUUID = display.uuid
-                    self.state.metadata.activeSpaceID = display.currentSpaceID
-                    newSpaceID = display.currentSpaceID
-                    foundChangedDisplay = true
-
-                    // Log space change event
-                    Task {
-                        await EventLog.shared.log("spc.change", [
-                            "sid": display.currentSpaceID,
-                            "from": oldSpaceID
-                        ])
+        let span = CurrentSpan.current
+        queue.async { [span] in
+            Task {
+                await CurrentSpan.$current.withValue(span) {
+                    // 1. Store OLD currentSpaceID for each display BEFORE refreshing
+                    var oldSpaceIDs: [String: UInt64] = [:]
+                    for display in self.state.displays {
+                        oldSpaceIDs[display.uuid] = display.currentSpaceID
                     }
-                    break
+
+                    // 2. Refresh spaces and update currentSpaceID for each display
+                    self.refreshSpaces()
+                    self.refreshDisplayCurrentSpaces()
+
+                    // 3. Find which display's space changed - that's the active one
+                    var foundChangedDisplay = false
+                    var newSpaceID: UInt64? = nil
+                    for display in self.state.displays {
+                        if let oldSpaceID = oldSpaceIDs[display.uuid],
+                           display.currentSpaceID != oldSpaceID {
+                            // This display's space changed!
+                            self.state.metadata.activeDisplayUUID = display.uuid
+                            self.state.metadata.activeSpaceID = display.currentSpaceID
+                            newSpaceID = display.currentSpaceID
+                            foundChangedDisplay = true
+
+                            // Log space change event
+                            await EventLog.shared.log("spc.change", [
+                                "sid": display.currentSpaceID,
+                                "from": oldSpaceID
+                            ])
+                            break
+                        }
+                    }
+
+                    // Fallback: if no change detected, use the old method
+                    if !foundChangedDisplay {
+                        self.updateActiveDisplayFromSpaces()
+                    }
+
+                    // Re-query space assignments for all visible windows
+                    for windowKey in self.state.windows.keys {
+                        if let windowID = UInt32(windowKey),
+                           let window = self.state.windows[windowKey],
+                           window.isOrderedIn && !window.isMinimized {
+                            self.updateWindowSpaces(windowID)
+                        }
+                    }
+
+                    // Re-query AX properties for windows on the new active space
+                    // This populates role/subrole for windows that weren't accessible before
+                    self.refreshAXPropertiesForActiveSpace()
+
+                    // Auto-focus the new space's last focused window
+                    if let spaceID = newSpaceID {
+                        self.restoreFocusForSpace(spaceID)
+                    }
+
+                    // Notify border system of space change (must clear space-specific state)
+                    self.borderEvents?.handleSpaceChanged()
+
+                    self.state.metadata.update()
                 }
             }
-
-            // Fallback: if no change detected, use the old method
-            if !foundChangedDisplay {
-                self.updateActiveDisplayFromSpaces()
-            }
-
-            // Re-query space assignments for all visible windows
-            for windowKey in self.state.windows.keys {
-                if let windowID = UInt32(windowKey),
-                   let window = self.state.windows[windowKey],
-                   window.isOrderedIn && !window.isMinimized {
-                    self.updateWindowSpaces(windowID)
-                }
-            }
-
-            // Re-query AX properties for windows on the new active space
-            // This populates role/subrole for windows that weren't accessible before
-            self.refreshAXPropertiesForActiveSpace()
-
-            // Auto-focus the new space's last focused window
-            if let spaceID = newSpaceID {
-                self.restoreFocusForSpace(spaceID)
-            }
-
-            // Notify border system of space change (must clear space-specific state)
-            self.borderEvents?.handleSpaceChanged()
-
-            self.state.metadata.update()
         }
     }
 
@@ -1186,101 +1225,115 @@ class StateManager {
     }
 
     func handleDisplayConfigurationChanged() {
-        queue.async {
-            // Capture old display UUIDs before refresh
-            let oldDisplayUUIDs = Set(self.state.displays.map { $0.uuid })
-
-            self.refreshDisplays()
-            self.refreshSpaces()
-
-            // Detect disconnected displays
-            let newDisplayUUIDs = Set(self.state.displays.map { $0.uuid })
-            let disconnectedDisplays = oldDisplayUUIDs.subtracting(newDisplayUUIDs)
-
-            // Notify border system of disconnects
-            for displayUUID in disconnectedDisplays {
-                self.borderEvents?.handleDisplayDisconnected(displayUUID: displayUUID)
-            }
-
-            self.state.metadata.update()
-
+        let span = CurrentSpan.current
+        queue.async { [span] in
             Task {
-                await EventLog.shared.log("dsp.config", [
-                    "removed": disconnectedDisplays.count,
-                    "total": newDisplayUUIDs.count
-                ])
+                await CurrentSpan.$current.withValue(span) {
+                    // Capture old display UUIDs before refresh
+                    let oldDisplayUUIDs = Set(self.state.displays.map { $0.uuid })
+
+                    self.refreshDisplays()
+                    self.refreshSpaces()
+
+                    // Detect disconnected displays
+                    let newDisplayUUIDs = Set(self.state.displays.map { $0.uuid })
+                    let disconnectedDisplays = oldDisplayUUIDs.subtracting(newDisplayUUIDs)
+
+                    // Notify border system of disconnects
+                    for displayUUID in disconnectedDisplays {
+                        self.borderEvents?.handleDisplayDisconnected(displayUUID: displayUUID)
+                    }
+
+                    self.state.metadata.update()
+
+                    await EventLog.shared.log("dsp.config", [
+                        "removed": disconnectedDisplays.count,
+                        "total": newDisplayUUIDs.count
+                    ])
+                }
             }
         }
     }
 
     func handleApplicationLaunched(_ app: NSRunningApplication) {
-        queue.async {
-            guard app.activationPolicy == .regular else { return }
-
-            // Create ApplicationState
-            let appState = ApplicationState(from: app)
-            let pidKey = String(app.processIdentifier)
-            self.state.applications[pidKey] = appState
-
+        let span = CurrentSpan.current
+        queue.async { [span] in
             Task {
-                await EventLog.shared.log("app.launch", [
-                    "pid": app.processIdentifier,
-                    "app": app.localizedName ?? "unknown",
-                    "bundle": app.bundleIdentifier ?? "unknown"
-                ])
+                await CurrentSpan.$current.withValue(span) {
+                    guard app.activationPolicy == .regular else { return }
+
+                    // Create ApplicationState
+                    let appState = ApplicationState(from: app)
+                    let pidKey = String(app.processIdentifier)
+                    self.state.applications[pidKey] = appState
+
+                    await EventLog.shared.log("app.launch", [
+                        "pid": app.processIdentifier,
+                        "app": app.localizedName ?? "unknown",
+                        "bundle": app.bundleIdentifier ?? "unknown"
+                    ])
+
+                    // Create AX observer
+                    self.createObserver(for: app)
+
+                    self.state.metadata.update()
+                }
             }
-
-            // Create AX observer
-            self.createObserver(for: app)
-
-            self.state.metadata.update()
         }
     }
 
     func handleApplicationTerminated(_ app: NSRunningApplication) {
-        queue.async {
-            let pid = app.processIdentifier
-            let pidKey = String(pid)
+        let span = CurrentSpan.current
+        queue.async { [span] in
+            Task {
+                await CurrentSpan.$current.withValue(span) {
+                    let pid = app.processIdentifier
+                    let pidKey = String(pid)
 
-            // Clear focus if any window from terminated app was focused
-            if let focusedID = self.state.metadata.focusedWindowID,
-               let focusedWindow = self.state.windows[String(focusedID)],
-               focusedWindow.pid == pid {
-                Task {
-                    await EventLog.shared.log("dbg.focus", ["pid": pid, "msg": "clearing focus (app terminated)"])
+                    // Clear focus if any window from terminated app was focused
+                    if let focusedID = self.state.metadata.focusedWindowID,
+                       let focusedWindow = self.state.windows[String(focusedID)],
+                       focusedWindow.pid == pid {
+                        await EventLog.shared.log("dbg.focus", ["pid": pid, "msg": "clearing focus (app terminated)"])
+                        self.state.metadata.focusedWindowID = nil
+                    }
+
+                    // Remove application state
+                    self.state.applications.removeValue(forKey: pidKey)
+
+                    // Remove observer
+                    self.removeObserver(for: pid)
+
+                    // Remove all windows for this PID
+                    self.state.windows = self.state.windows.filter { $0.value.pid != pid }
+
+                    self.state.metadata.update()
                 }
-                self.state.metadata.focusedWindowID = nil
             }
-
-            // Remove application state
-            self.state.applications.removeValue(forKey: pidKey)
-
-            // Remove observer
-            self.removeObserver(for: pid)
-
-            // Remove all windows for this PID
-            self.state.windows = self.state.windows.filter { $0.value.pid != pid }
-
-            self.state.metadata.update()
         }
     }
 
     func handleApplicationActivated(_ app: NSRunningApplication) {
-        queue.async {
-            let pid = app.processIdentifier
-            let pidKey = String(pid)
+        let span = CurrentSpan.current
+        queue.async { [span] in
+            Task {
+                await CurrentSpan.$current.withValue(span) {
+                    let pid = app.processIdentifier
+                    let pidKey = String(pid)
 
-            // Update all apps to mark which one is active
-            for (key, var appState) in self.state.applications {
-                appState.isActive = (key == pidKey)
-                self.state.applications[key] = appState
+                    // Update all apps to mark which one is active
+                    for (key, var appState) in self.state.applications {
+                        appState.isActive = (key == pidKey)
+                        self.state.applications[key] = appState
+                    }
+
+                    // Query the app's focused window and update focusedWindowID
+                    // This is needed because not all apps send kAXFocusedWindowChangedNotification reliably
+                    self.updateFocusedWindowForApp(pid: pid)
+
+                    self.state.metadata.update()
+                }
             }
-
-            // Query the app's focused window and update focusedWindowID
-            // This is needed because not all apps send kAXFocusedWindowChangedNotification reliably
-            self.updateFocusedWindowForApp(pid: pid)
-
-            self.state.metadata.update()
         }
     }
 
@@ -1343,54 +1396,67 @@ class StateManager {
     }
 
     func handleApplicationHidden(_ app: NSRunningApplication) {
-        queue.async {
-            let pid = app.processIdentifier
-            let pidKey = String(pid)
+        let span = CurrentSpan.current
+        queue.async { [span] in
+            Task {
+                await CurrentSpan.$current.withValue(span) {
+                    let pid = app.processIdentifier
+                    let pidKey = String(pid)
 
-            // Update app state
-            if self.state.applications[pidKey] != nil {
-                self.state.applications[pidKey]!.isHidden = true
+                    // Update app state
+                    if self.state.applications[pidKey] != nil {
+                        self.state.applications[pidKey]!.isHidden = true
+                    }
+
+                    // Mark all windows for this app as not ordered in
+                    for (key, var window) in self.state.windows where window.pid == pid {
+                        window.isOrderedIn = false
+                        self.state.windows[key] = window
+                    }
+
+                    self.state.metadata.update()
+                }
             }
-
-            // Mark all windows for this app as not ordered in
-            for (key, var window) in self.state.windows where window.pid == pid {
-                window.isOrderedIn = false
-                self.state.windows[key] = window
-            }
-
-            self.state.metadata.update()
         }
     }
 
     func handleApplicationUnhidden(_ app: NSRunningApplication) {
-        queue.async {
-            let pid = app.processIdentifier
-            let pidKey = String(pid)
+        let span = CurrentSpan.current
+        queue.async { [span] in
+            Task {
+                await CurrentSpan.$current.withValue(span) {
+                    let pid = app.processIdentifier
+                    let pidKey = String(pid)
 
-            // Update app state
-            if self.state.applications[pidKey] != nil {
-                self.state.applications[pidKey]!.isHidden = false
+                    // Update app state
+                    if self.state.applications[pidKey] != nil {
+                        self.state.applications[pidKey]!.isHidden = false
+                    }
+
+                    // Mark all windows for this app as ordered in and re-query their spaces
+                    for (key, var window) in self.state.windows where window.pid == pid {
+                        window.isOrderedIn = true
+                        self.state.windows[key] = window
+
+                        // Re-query space assignment (may have changed while hidden)
+                        self.updateWindowSpaces(window.id)
+                    }
+
+                    self.state.metadata.update()
+                }
             }
-
-            // Mark all windows for this app as ordered in and re-query their spaces
-            for (key, var window) in self.state.windows where window.pid == pid {
-                window.isOrderedIn = true
-                self.state.windows[key] = window
-
-                // Re-query space assignment (may have changed while hidden)
-                self.updateWindowSpaces(window.id)
-            }
-
-            self.state.metadata.update()
         }
     }
 
     func handleSystemWoke() {
-        queue.async {
+        let span = CurrentSpan.current
+        queue.async { [span] in
             Task {
-                await EventLog.shared.log("state.wake", [:])
+                await CurrentSpan.$current.withValue(span) {
+                    await EventLog.shared.log("state.wake", [:])
+                    self.refreshCompleteState()
+                }
             }
-            self.refreshCompleteState()
         }
     }
 
