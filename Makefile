@@ -51,15 +51,6 @@ test: server-test cli-test
 clean: server-clean cli-clean
 	@echo "✓ Cleaned all components"
 
-# Development targets
-run-server: server
-	@echo "Starting grid-server..."
-	@./grid-server/.build/debug/grid-server
-
-run-server-release: server-release
-	@echo "Starting grid-server (release)..."
-	@./grid-server/.build/release/grid-server
-
 # Quick verification
 verify: build test
 	@echo "✓ Build and test verification complete"
@@ -159,12 +150,17 @@ help:
 	@echo "  dist             - Create distribution tarball (current arch)"
 	@echo "  dist-universal   - Create universal binary tarball (arm64+x86_64)"
 	@echo ""
+	@echo "Development targets:"
+	@echo "  dev              - Build app bundle, clear logs, run server (interactive)"
+	@echo "  dev-app          - Build debug GridServer.app bundle"
+	@echo "  reload           - Rebuild, restart server in background, apply layout"
+	@echo "  install-dev      - Install dev CLI to ~/.local/state/thegrid/bin"
+	@echo ""
 	@echo "Server targets:"
 	@echo "  server           - Build grid-server (debug)"
 	@echo "  server-release   - Build grid-server (release)"
 	@echo "  server-test      - Run grid-server tests"
 	@echo "  server-clean     - Clean grid-server build"
-	@echo "  run-server       - Build and run grid-server (debug)"
 	@echo ""
 	@echo "CLI targets:"
 	@echo "  cli              - Build thegrid CLI"
@@ -173,16 +169,25 @@ help:
 	@echo "  cli-install      - Install thegrid to \$$GOPATH/bin"
 	@echo ""
 	@echo "Usage examples:"
-	@echo "  make              # Build everything"
-	@echo "  make server       # Build just the server"
-	@echo "  make cli          # Build just the CLI"
+	@echo "  make dev          # Build app bundle, clear logs, run server"
+	@echo "  make reload       # Quick rebuild and restart with layout"
 	@echo "  make test         # Run all tests"
-	@echo "  make run-server   # Build and run the server"
-	@echo "  make dev          # Build, clear logs, restart server (interactive)"
 	@echo "  make dist         # Create distribution tarball"
 
-# Development: build, clear logs, restart server with output visible
-dev: build
+# Debug app bundle (for development - required for Accessibility permissions)
+APP_BUNDLE := grid-server/.build/debug/GridServer.app
+dev-app: server
+	@echo "Creating debug GridServer.app bundle..."
+	@mkdir -p $(APP_BUNDLE)/Contents/MacOS
+	@mkdir -p $(APP_BUNDLE)/Contents/Resources
+	@cp grid-server/.build/debug/grid-server $(APP_BUNDLE)/Contents/MacOS/
+	@cp grid-server/Info.plist $(APP_BUNDLE)/Contents/
+	@codesign -fs - $(APP_BUNDLE)/Contents/MacOS/grid-server
+	@codesign -fs - $(APP_BUNDLE)
+	@echo "✓ Debug GridServer.app created"
+
+# Development: build app bundle, clear logs, restart server with output visible
+dev: dev-app cli
 	@echo "Stopping existing server..."
 	@-pkill -f "grid-server" 2>/dev/null || true
 	@sleep 0.5
@@ -190,7 +195,8 @@ dev: build
 	@rm -f ~/.local/state/thegrid/thegrid-cli.json
 	@rm -f ~/.local/state/thegrid/thegrid-server.json
 	@echo "Starting server (Ctrl+C to stop)..."
-	@./grid-server/.build/debug/grid-server
+	@echo "App bundle: $(APP_BUNDLE)"
+	@$(APP_BUNDLE)/Contents/MacOS/grid-server
 
 # Install dev build to ~/.local/state/thegrid/bin for wrapper resolution
 install-dev: cli
@@ -201,11 +207,11 @@ install-dev: cli
 # Quick reload: build, restart server in background, apply layout
 # Usage: make reload LAYOUT=two-column  (default: two-column)
 LAYOUT ?= two-column
-reload: build
+reload: dev-app cli
 	@echo "Restarting server..."
 	@-pkill -f "grid-server" 2>/dev/null || true
 	@sleep 0.5
-	@./grid-server/.build/debug/grid-server &>/dev/null &
+	@$(APP_BUNDLE)/Contents/MacOS/grid-server &>/dev/null &
 	@sleep 1
 	@echo "Applying layout: $(LAYOUT)"
 	@./grid-cli/bin/thegrid layout apply $(LAYOUT)
