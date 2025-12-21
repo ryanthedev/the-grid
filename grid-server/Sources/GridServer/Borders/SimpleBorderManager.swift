@@ -231,42 +231,53 @@ class SimpleBorderManager {
     }
 
     private func updateFocusImpl(newFocusedWindow: UInt32) {
-        // Ignore focus on our own overlay windows
-        if isOurOverlayWindow(newFocusedWindow) {
-            return
-        }
+        Task {
+            let span = await CurrentSpan.current?.startChild("border", data: ["wid": Int(newFocusedWindow)])
 
-        // Update focus state
-        focusedWindowID = newFocusedWindow
+            // Ignore focus on our own overlay windows
+            if isOurOverlayWindow(newFocusedWindow) {
+                if let span = span {
+                    await span.end()
+                }
+                return
+            }
 
-        // Get the window's display UUID
-        let windowDisplayUUID = SLSCopyManagedDisplayForWindow(connectionID, newFocusedWindow) as String?
+            // Update focus state
+            focusedWindowID = newFocusedWindow
 
-        // Look up cell assignment from the window's display cache
-        var foundCellID: String? = nil
-        var foundDisplay: String? = windowDisplayUUID
+            // Get the window's display UUID
+            let windowDisplayUUID = SLSCopyManagedDisplayForWindow(connectionID, newFocusedWindow) as String?
 
-        if let displayUUID = windowDisplayUUID,
-           let assignments = cellAssignmentsPerDisplay[displayUUID] {
-            foundCellID = assignments[newFocusedWindow]
-            foundDisplay = displayUUID
-        }
+            // Look up cell assignment from the window's display cache
+            var foundCellID: String? = nil
+            var foundDisplay: String? = windowDisplayUUID
 
-        // Fallback: search all displays if not found in primary
-        if foundCellID == nil {
-            let (fallbackDisplay, fallbackCellID) = findAssignment(for: newFocusedWindow)
-            if fallbackCellID != nil {
-                foundCellID = fallbackCellID
-                foundDisplay = fallbackDisplay
+            if let displayUUID = windowDisplayUUID,
+               let assignments = cellAssignmentsPerDisplay[displayUUID] {
+                foundCellID = assignments[newFocusedWindow]
+                foundDisplay = displayUUID
+            }
+
+            // Fallback: search all displays if not found in primary
+            if foundCellID == nil {
+                let (fallbackDisplay, fallbackCellID) = findAssignment(for: newFocusedWindow)
+                if fallbackCellID != nil {
+                    foundCellID = fallbackCellID
+                    foundDisplay = fallbackDisplay
+                }
+            }
+
+            activeCellID = foundCellID
+            currentDisplayUUID = foundDisplay
+
+            // Update borders immediately - no debounce needed
+            // The pending state mechanism handles rapid focus changes
+            updateAllBorders()
+
+            if let span = span {
+                await span.end()
             }
         }
-
-        activeCellID = foundCellID
-        currentDisplayUUID = foundDisplay
-
-        // Update borders immediately - no debounce needed
-        // The pending state mechanism handles rapid focus changes
-        updateAllBorders()
     }
 
     /// Update visibility and style for all borders

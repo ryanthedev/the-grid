@@ -956,6 +956,8 @@ class StateManager {
         queue.async { [span] in
             Task {
                 await CurrentSpan.$current.withValue(span) {
+                    let stateSpan = await CurrentSpan.current?.startChild("state", data: ["wid": Int(windowID)])
+
                     // Store previous focused window for event logging
                     let previousWindowID = self.state.metadata.focusedWindowID
 
@@ -1001,6 +1003,10 @@ class StateManager {
 
                     // Notify border system
                     self.borderEvents?.handleWindowFocused(windowID)
+
+                    if let stateSpan = stateSpan {
+                        await stateSpan.end()
+                    }
                 }
             }
         }
