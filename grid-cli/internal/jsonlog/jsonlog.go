@@ -2,7 +2,9 @@
 package jsonlog
 
 import (
+	"crypto/rand"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -45,9 +47,11 @@ type Span struct {
 func generateID() string {
 	const chars = "abcdefghijklmnopqrstuvwxyz0123456789"
 	b := make([]byte, 4)
+	if _, err := rand.Read(b); err != nil {
+		return fmt.Sprintf("%x", time.Now().UnixNano())[:4]
+	}
 	for i := range b {
-		b[i] = chars[time.Now().UnixNano()%int64(len(chars))]
-		time.Sleep(time.Nanosecond)
+		b[i] = chars[b[i]%byte(len(chars))]
 	}
 	return string(b)
 }
@@ -106,6 +110,9 @@ func ensureInit() error {
 
 // StartSpan creates a new root span and logs the start event
 func StartSpan(name string, opts ...Option) *Span {
+	if name == "" {
+		name = "span"
+	}
 	id := generateID()
 	span := &Span{
 		tid:   id,
@@ -123,7 +130,9 @@ func StartSpan(name string, opts ...Option) *Span {
 	for _, opt := range opts {
 		opt(&entry)
 	}
-	writeEntry(entry)
+	if err := writeEntry(entry); err != nil {
+		fmt.Fprintf(os.Stderr, "jsonlog: failed to write span start: %v\n", err)
+	}
 
 	return span
 }
@@ -152,7 +161,9 @@ func (s *Span) StartChild(name string, opts ...Option) *Span {
 	for _, opt := range opts {
 		opt(&entry)
 	}
-	writeEntry(entry)
+	if err := writeEntry(entry); err != nil {
+		fmt.Fprintf(os.Stderr, "jsonlog: failed to write child span start: %v\n", err)
+	}
 
 	return child
 }
@@ -167,7 +178,9 @@ func (s *Span) End() {
 		Dur: dur,
 		Ts:  time.Now().Unix(),
 	}
-	writeEntry(entry)
+	if err := writeEntry(entry); err != nil {
+		fmt.Fprintf(os.Stderr, "jsonlog: failed to write span end: %v\n", err)
+	}
 }
 
 // EndWithError logs the span end event with error
@@ -181,7 +194,9 @@ func (s *Span) EndWithError(err string) {
 		Err: err,
 		Ts:  time.Now().Unix(),
 	}
-	writeEntry(entry)
+	if err := writeEntry(entry); err != nil {
+		fmt.Fprintf(os.Stderr, "jsonlog: failed to write span end with error: %v\n", err)
+	}
 }
 
 // writeEntry writes a log entry to the file
