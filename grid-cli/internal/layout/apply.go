@@ -131,6 +131,12 @@ func ApplyLayout(
 		focusedIndices[cellID] = cellState.LastFocusedIdx
 	}
 
+	// 7b. Resolve tab indicator inset
+	tabIndicatorInset := opts.BaseSpacing
+	if insetVal := cfg.GetTabIndicatorInset(); insetVal != nil {
+		tabIndicatorInset = insetVal.Resolve(opts.BaseSpacing)
+	}
+
 	// 8. Calculate window placements
 	placements := CalculateAllWindowPlacements(
 		calculatedLayout,
@@ -143,6 +149,7 @@ func ApplyLayout(
 		opts.SettingsPadding,
 		opts.SettingsWindowSpacing,
 		focusedIndices,
+		tabIndicatorInset,
 	)
 
 	// 9. Apply placements via server

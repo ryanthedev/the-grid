@@ -185,6 +185,13 @@ func moveWindowToCell(
 		}
 	}
 
+	// Resolve tab indicator inset
+	baseSpacing := cfg.GetBaseSpacing()
+	tabIndicatorInset := baseSpacing
+	if insetVal := cfg.GetTabIndicatorInset(); insetVal != nil {
+		tabIndicatorInset = insetVal.Resolve(baseSpacing)
+	}
+
 	// Calculate and apply placements for affected cells only
 	settingsPadding, _ := cfg.GetSettingsPadding()
 	settingsWindowSpacing, _ := cfg.GetSettingsWindowSpacing()
@@ -195,10 +202,11 @@ func moveWindowToCell(
 		cellModes,
 		cellRatios,
 		cfg.Settings.DefaultStackMode,
-		cfg.GetBaseSpacing(),
+		baseSpacing,
 		settingsPadding,
 		settingsWindowSpacing,
 		focusedIndices,
+		tabIndicatorInset,
 	)
 
 	if err := layout.ApplyPlacements(ctx, c, placements); err != nil {
@@ -370,6 +378,13 @@ func moveWindowCrossDisplay(
 			focusedIndices[targetCell] = cellState.LastFocusedIdx
 		}
 
+		// Resolve tab indicator inset
+		baseSpacing := cfg.GetBaseSpacing()
+		tabIndicatorInset := baseSpacing
+		if insetVal := cfg.GetTabIndicatorInset(); insetVal != nil {
+			tabIndicatorInset = insetVal.Resolve(baseSpacing)
+		}
+
 		// Calculate and apply placements for target cell only
 		settingsPadding, _ := cfg.GetSettingsPadding()
 		settingsWindowSpacing, _ := cfg.GetSettingsWindowSpacing()
@@ -380,10 +395,11 @@ func moveWindowCrossDisplay(
 			cellModes,
 			cellRatios,
 			cfg.Settings.DefaultStackMode,
-			cfg.GetBaseSpacing(),
+			baseSpacing,
 			settingsPadding,
 			settingsWindowSpacing,
 			focusedIndices,
+			tabIndicatorInset,
 		)
 
 		if err := layout.ApplyPlacements(ctx, c, placements); err != nil {
@@ -433,6 +449,13 @@ func moveWindowCrossDisplay(
 				sourceFocusedIndices[currentCell] = cellState.LastFocusedIdx
 			}
 
+			// Resolve tab indicator inset
+			srcBaseSpacing := cfg.GetBaseSpacing()
+			srcTabIndicatorInset := srcBaseSpacing
+			if insetVal := cfg.GetTabIndicatorInset(); insetVal != nil {
+				srcTabIndicatorInset = insetVal.Resolve(srcBaseSpacing)
+			}
+
 			srcSettingsPadding, _ := cfg.GetSettingsPadding()
 			srcSettingsWindowSpacing, _ := cfg.GetSettingsWindowSpacing()
 			sourcePlacements := layout.CalculateAllWindowPlacements(
@@ -442,10 +465,11 @@ func moveWindowCrossDisplay(
 				sourceCellModes,
 				sourceCellRatios,
 				cfg.Settings.DefaultStackMode,
-				cfg.GetBaseSpacing(),
+				srcBaseSpacing,
 				srcSettingsPadding,
 				srcSettingsWindowSpacing,
 				sourceFocusedIndices,
+				srcTabIndicatorInset,
 			)
 
 			if err := layout.ApplyPlacements(ctx, c, sourcePlacements); err != nil {

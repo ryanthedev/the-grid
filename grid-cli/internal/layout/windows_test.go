@@ -267,6 +267,7 @@ func TestCalculateAllWindowPlacements(t *testing.T) {
 		nil, // settingsPadding
 		nil, // settingsWindowSpacing
 		nil, // focusedIndices
+		0,   // tabIndicatorInset (use baseSpacing fallback)
 	)
 
 	if len(placements) != 3 {
@@ -322,6 +323,7 @@ func TestCalculateAllWindowPlacements_WithCellModes(t *testing.T) {
 		nil, // settingsPadding
 		nil, // settingsWindowSpacing
 		nil, // focusedIndices
+		0,   // tabIndicatorInset (use baseSpacing fallback)
 	)
 
 	if len(placements) != 2 {
@@ -350,7 +352,7 @@ func TestCalculateAllWindowPlacements_WithCellModes(t *testing.T) {
 }
 
 func TestCalculateAllWindowPlacements_Nil(t *testing.T) {
-	placements := CalculateAllWindowPlacements(nil, nil, nil, nil, nil, types.StackVertical, 8, nil, nil, nil)
+	placements := CalculateAllWindowPlacements(nil, nil, nil, nil, nil, types.StackVertical, 8, nil, nil, nil, 0)
 	if placements != nil {
 		t.Errorf("expected nil for nil layout, got %v", placements)
 	}
@@ -379,6 +381,7 @@ func TestCalculateAllWindowPlacements_UnknownCell(t *testing.T) {
 		nil, // settingsPadding
 		nil, // settingsWindowSpacing
 		nil, // focusedIndices
+		0,   // tabIndicatorInset (use baseSpacing fallback)
 	)
 
 	// Should skip unknown cells
@@ -527,7 +530,7 @@ func TestCalculateAllWindowPlacements_TabStackInsets_HasPrev(t *testing.T) {
 
 	placements := CalculateAllWindowPlacements(
 		calculatedLayout, nil, assignments, cellModes, nil,
-		types.StackVertical, 8, nil, nil, focusedIndices,
+		types.StackVertical, 8, nil, nil, focusedIndices, 0,
 	)
 
 	if len(placements) != 3 {
@@ -580,7 +583,7 @@ func TestCalculateAllWindowPlacements_TabStackInsets_HasNext(t *testing.T) {
 
 	placements := CalculateAllWindowPlacements(
 		calculatedLayout, nil, assignments, cellModes, nil,
-		types.StackVertical, 8, nil, nil, focusedIndices,
+		types.StackVertical, 8, nil, nil, focusedIndices, 0,
 	)
 
 	if len(placements) != 3 {
@@ -633,7 +636,7 @@ func TestCalculateAllWindowPlacements_TabStackInsets_Both(t *testing.T) {
 
 	placements := CalculateAllWindowPlacements(
 		calculatedLayout, nil, assignments, cellModes, nil,
-		types.StackVertical, 8, nil, nil, focusedIndices,
+		types.StackVertical, 8, nil, nil, focusedIndices, 0,
 	)
 
 	if len(placements) != 3 {
@@ -686,7 +689,7 @@ func TestCalculateAllWindowPlacements_TabStackInsets_SingleWindow(t *testing.T) 
 
 	placements := CalculateAllWindowPlacements(
 		calculatedLayout, nil, assignments, cellModes, nil,
-		types.StackVertical, 8, nil, nil, focusedIndices,
+		types.StackVertical, 8, nil, nil, focusedIndices, 0,
 	)
 
 	if len(placements) != 1 {
@@ -721,7 +724,7 @@ func TestCalculateAllWindowPlacements_TabStackInsets_SmallCell(t *testing.T) {
 
 	placements := CalculateAllWindowPlacements(
 		calculatedLayout, nil, assignments, cellModes, nil,
-		types.StackVertical, 8, nil, nil, focusedIndices,
+		types.StackVertical, 8, nil, nil, focusedIndices, 0,
 	)
 
 	if len(placements) != 3 {
