@@ -226,6 +226,8 @@ func CalculateAllWindowPlacements(
 					bounds := &windowBounds[focusedIdx]
 					originalBounds := *bounds
 
+					// When both hasPrev AND hasNext are true, insets combine to create
+					// uniform margins on all 4 sides (8px each for baseSpacing=8)
 					if hasPrev {
 						bounds.X += baseSpacing
 						bounds.Y += baseSpacing
@@ -237,7 +239,8 @@ func CalculateAllWindowPlacements(
 						bounds.Height -= baseSpacing
 					}
 
-					// Validate minimum size (avoid zero/negative windows)
+					// Minimum size prevents unusable windows when baseSpacing is large
+					// relative to cell size. 50px is a reasonable minimum for any content.
 					const minSize = 50.0
 					if bounds.Width < minSize || bounds.Height < minSize {
 						*bounds = originalBounds
