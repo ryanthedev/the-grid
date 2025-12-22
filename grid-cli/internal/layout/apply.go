@@ -125,7 +125,13 @@ func ApplyLayout(
 		}
 	}
 
-	// 7. Calculate window placements
+	// 7. Build focused indices for tab stack position indicators
+	focusedIndices := make(map[string]int)
+	for cellID, cellState := range spaceState.Cells {
+		focusedIndices[cellID] = cellState.LastFocusedIdx
+	}
+
+	// 8. Calculate window placements
 	placements := CalculateAllWindowPlacements(
 		calculatedLayout,
 		layout,
@@ -136,9 +142,10 @@ func ApplyLayout(
 		opts.BaseSpacing,
 		opts.SettingsPadding,
 		opts.SettingsWindowSpacing,
+		focusedIndices,
 	)
 
-	// 8. Apply placements via server
+	// 9. Apply placements via server
 	if err := ApplyPlacements(ctx, c, placements); err != nil {
 		return fmt.Errorf("failed to apply placements: %w", err)
 	}
@@ -153,7 +160,7 @@ func ApplyLayout(
 		"cells": cellIDs,
 	}))
 
-	// 8b. Send border config and cell assignments to server
+	// 9b. Send border config and cell assignments to server
 	if opts.SendBorders {
 		if err := sendBorderConfig(ctx, c, cfg); err != nil {
 			// Log but don't fail - borders are optional
@@ -169,7 +176,7 @@ func ApplyLayout(
 		}
 	}
 
-	// 9. Update local state
+	// 10. Update local state
 	// Only call SetCurrentLayout (which clears ratios) if switching to a different layout
 	if existingState == nil || existingState.CurrentLayoutID != layoutID {
 		spaceState.SetCurrentLayout(layoutID, findLayoutIndex(cfg, layoutID))
@@ -181,7 +188,7 @@ func ApplyLayout(
 	rs.SetWindowAssignments(snap.SpaceID, assignment.Assignments)
 	rs.MarkUpdated()
 
-	// 10. Save state
+	// 11. Save state
 	if err := rs.Save(); err != nil {
 		return fmt.Errorf("failed to save state: %w", err)
 	}
