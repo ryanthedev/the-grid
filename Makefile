@@ -1,7 +1,19 @@
-.PHONY: help build server cli test clean server-test cli-test server-clean cli-clean run-server install dist dev
+.PHONY: help build server cli test clean server-test cli-test server-clean cli-clean run-server install dist dev reset-accessibility setup-signing
 
 # Version from VERSION file
 VERSION := $(shell cat VERSION)
+
+# Code signing identity for development builds
+# Create this certificate once in Keychain Access:
+#   1. Open Keychain Access
+#   2. Menu: Keychain Access → Certificate Assistant → Create a Certificate
+#   3. Name: thegrid-dev
+#   4. Identity Type: Self-Signed Root
+#   5. Certificate Type: Code Signing
+#   6. Click Create
+# This gives stable signatures so TCC remembers accessibility permissions.
+CODESIGN_IDENTITY ?= thegrid-dev
+ENTITLEMENTS := grid-server/thegrid.entitlements
 
 # Default target - build everything
 all: build
@@ -108,9 +120,9 @@ app-bundle: server-universal
 	@cp grid-server/Info.plist dist/GridServer.app/Contents/
 	@sed -i '' "s/VERSION_PLACEHOLDER/$(VERSION)/g" dist/GridServer.app/Contents/Info.plist
 	@grep -q "$(VERSION)" dist/GridServer.app/Contents/Info.plist || (echo "ERROR: Version substitution failed" && exit 1)
-	@echo "Signing app bundle (inside-out)..."
-	@codesign -fs - dist/GridServer.app/Contents/MacOS/grid-server
-	@codesign -fs - dist/GridServer.app
+	@echo "Signing app bundle with identity '$(CODESIGN_IDENTITY)'..."
+	@codesign -fs "$(CODESIGN_IDENTITY)" --entitlements $(ENTITLEMENTS) dist/GridServer.app/Contents/MacOS/grid-server
+	@codesign -fs "$(CODESIGN_IDENTITY)" --entitlements $(ENTITLEMENTS) dist/GridServer.app
 	@echo "Verifying app bundle..."
 	@codesign --verify --verbose dist/GridServer.app
 	@codesign -dv dist/GridServer.app 2>&1 | head -5
@@ -154,6 +166,8 @@ help:
 	@echo "  dev              - Build debug GridServer.app bundle"
 	@echo "  run              - Build and restart thegrid-dev service"
 	@echo "  install-dev      - Install dev CLI to ~/.local/state/thegrid/bin"
+	@echo "  setup-signing    - Create code signing certificate (one-time)"
+	@echo "  reset-accessibility - Reset TCC accessibility permissions"
 	@echo ""
 	@echo "Server targets:"
 	@echo "  server           - Build grid-server (debug)"
@@ -183,12 +197,13 @@ dev: server cli
 	@mkdir -p $(APP_BUNDLE)/Contents/Resources
 	@cp grid-server/.build/debug/grid-server $(APP_BUNDLE)/Contents/MacOS/
 	@cp grid-server/Info.plist $(APP_BUNDLE)/Contents/
-	@codesign -fs - $(APP_BUNDLE)/Contents/MacOS/grid-server
-	@codesign -fs - $(APP_BUNDLE)
+	@echo "Signing with identity '$(CODESIGN_IDENTITY)'..."
+	@codesign -fs "$(CODESIGN_IDENTITY)" --entitlements $(ENTITLEMENTS) $(APP_BUNDLE)/Contents/MacOS/grid-server
+	@codesign -fs "$(CODESIGN_IDENTITY)" --entitlements $(ENTITLEMENTS) $(APP_BUNDLE)
 	@echo "✓ Debug GridServer.app created at $(APP_BUNDLE)"
 
 # Build and restart thegrid service
-run: dev
+run: dev install-dev
 	@echo "Restarting thegrid-dev service..."
 	@services restart thegrid-dev
 	@echo "✓ Service restarted"
@@ -198,3 +213,11 @@ install-dev: cli
 	@mkdir -p ~/.local/state/thegrid/bin
 	@cp grid-cli/bin/thegrid ~/.local/state/thegrid/bin/thegrid
 	@echo "✓ Installed dev CLI to ~/.local/state/thegrid/bin/thegrid"
+
+# Reset accessibility permissions (use when TCC gets confused)
+reset-accessibility:
+	@./scripts/reset-accessibility.sh
+
+# Setup code signing certificate (one-time)
+setup-signing:
+	@./scripts/create-dev-certificate.sh

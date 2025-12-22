@@ -125,6 +125,5 @@ grep -E '"ev":"srv\.start"|"ev":"state\.init"' ~/.local/state/thegrid/thegrid-se
 
 ### Full rebuild and restart
 ```bash
-make build && pkill -f grid-server && sleep 1 && \
-  nohup ./grid-server/.build/debug/grid-server > /dev/null 2>&1 &
+make run
 ```
