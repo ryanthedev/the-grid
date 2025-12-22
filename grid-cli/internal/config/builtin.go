@@ -1,6 +1,6 @@
 package config
 
-import "github.com/yourusername/grid-cli/internal/types"
+import "github.com/ryanthedev/grid-cli/internal/types"
 
 var builtinLayouts = map[string]LayoutConfig{
 	"two-column-tabs": {
