@@ -5,7 +5,7 @@ import Foundation
 /// - Arrays: override replaces base
 /// - NSNull/nil: removes key from result
 /// - Scalars: override wins
-func deepMerge(_ base: [String: Any], _ override: [String: Any]) -> [String: Any] {
+public func deepMerge(_ base: [String: Any], _ override: [String: Any]) -> [String: Any] {
     var result = base
 
     for (key, overrideValue) in override {
