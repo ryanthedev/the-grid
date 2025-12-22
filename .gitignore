@@ -38,3 +38,8 @@ dist/
 
 # Git worktrees
 .worktrees/
+
+# Machine-specific config overrides
+*.local.yaml
+config.local.yaml
+bfd.local.yaml
