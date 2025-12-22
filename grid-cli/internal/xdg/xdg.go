@@ -6,7 +6,7 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/yourusername/grid-cli/internal/jsonlog"
+	"github.com/ryanthedev/grid-cli/internal/jsonlog"
 )
 
 // ConfigHome returns $XDG_CONFIG_HOME or ~/.config
