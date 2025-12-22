@@ -43,8 +43,11 @@ jsonlog.Log("err.focus", jsonlog.WithMsg("window not found"), jsonlog.WithData(m
 
 Server (Swift):
 ```swift
+// Sync context (convenience wrapper)
 jlog("srv.init")
-jlog("win.focus", data: ["wid": 123])
+
+// Async context (most server code)
+await JSONLogger.shared.log("win.focus", data: ["wid": 123])
 await JSONLogger.shared.log("err.bounds", msg: "failed to get bounds", data: ["wid": 456])
 ```
 
@@ -89,7 +92,47 @@ Output format:
   - `thegrid-server.json` - Server logs (JSONL)
   - `state.json` - Runtime state
 - **Config**: `~/.config/thegrid/config.yaml`
-- **Server socket**: `/tmp/grid-server.sock`
+- **Server socket**: `/tmp/grid-server.sock` (configurable via `--socket` CLI flag)
+
+## Config Layering
+
+Both CLI and BFD configs support machine-specific overrides via `.local.yaml` files:
+
+- `~/.config/thegrid/config.yaml` - Base CLI config (committed)
+- `~/.config/thegrid/config.local.yaml` - Local overrides (gitignored)
+- `~/.config/thegrid/bfd.yaml` - Base BFD hotkey config (committed)
+- `~/.config/thegrid/bfd.local.yaml` - Local overrides (gitignored)
+
+Local files are deep-merged over base config. Only include fields you want to override:
+
+```yaml
+# config.local.yaml - override just the spacing for this machine
+settings:
+  baseSpacing: 12
+```
+
+## BFD Hotkey Configuration
+
+BFD (Binary Focused Dispatcher) handles keyboard shortcuts. Config at `~/.config/thegrid/bfd.yaml`:
+
+```yaml
+shell: /bin/zsh  # Shell for command execution
+vars:
+  grid: ~/.local/bin/thegrid
+defaults:
+  repeat: false
+  rate_limit: 50  # ms between repeats
+blacklist:
+  - com.apple.finder  # Apps where hotkeys are disabled
+hotkeys:
+  ctrl-h: ${grid} focus left
+  ctrl-j: ${grid} focus down
+apps:
+  com.example.app:
+    ctrl-h: ~  # Passthrough (let app handle it)
+```
+
+Supports `.local.yaml` overrides like CLI config.
 
 ## Documentation Research
 - ALWAYS search online for API docs, library usage examples
@@ -125,6 +168,5 @@ grep -E '"ev":"srv\.start"|"ev":"state\.init"' ~/.local/state/thegrid/thegrid-se
 
 ### Full rebuild and restart
 ```bash
-make build && pkill -f grid-server && sleep 1 && \
-  nohup ./grid-server/.build/debug/grid-server > /dev/null 2>&1 &
+make run
 ```

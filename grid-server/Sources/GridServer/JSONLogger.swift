@@ -1,12 +1,19 @@
 import Foundation
 
-/// Thread-safe JSON logger that writes to ~/.local/state/thegrid/thegrid-server.json
-actor JSONLogger {
-    static let shared = JSONLogger()
+// MARK: - JSONLogWriter (Queue-based batch writer)
 
+/// Singleton writer that buffers log lines and writes in batches.
+/// Opens file fresh for each batch - handles external file deletion gracefully.
+final class JSONLogWriter {
+    static let shared = JSONLogWriter()
+
+    private let queue = DispatchQueue(label: "thegrid.logwriter")
+    private var buffer: [String] = []
+    private var flushWorkItem: DispatchWorkItem?
     private let filePath: String
-    private var fileHandle: FileHandle?
-    private var isInitialized = false
+
+    private let batchSize = 50
+    private let flushInterval: TimeInterval = 0.1
 
     private init() {
         let homeDir = FileManager.default.homeDirectoryForCurrentUser.path
@@ -17,157 +24,169 @@ actor JSONLogger {
         try? FileManager.default.createDirectory(atPath: logDir, withIntermediateDirectories: true)
     }
 
-    /// Get the log file path (for startup message)
-    nonisolated func getLogPath() -> String {
-        let homeDir = FileManager.default.homeDirectoryForCurrentUser.path
-        return "\(homeDir)/.local/state/thegrid/thegrid-server.json"
+    /// Enqueue a log line (thread-safe, non-blocking)
+    func enqueue(_ line: String) {
+        queue.async { [weak self] in
+            guard let self = self else { return }
+            self.buffer.append(line)
+            self.scheduleFlush()
+        }
     }
 
-    /// Log an event
-    func log(_ ev: String, msg: String? = nil, data: [String: Any]? = nil, tid: String? = nil, sid: String? = nil) {
-        var event: [String: Any] = [:]
-        event["ev"] = ev
-        if let sid = sid { event["sid"] = sid }
-        if let tid = tid { event["tid"] = tid }
-        if let msg = msg { event["msg"] = msg }
-        if let data = data { event["data"] = data }
-        event["ts"] = Int64(Date().timeIntervalSince1970)
+    private func scheduleFlush() {
+        // Cancel existing timer
+        flushWorkItem?.cancel()
 
-        writeEvent(event)
+        // Flush immediately if buffer is large
+        if buffer.count >= batchSize {
+            flush()
+            return
+        }
+
+        // Otherwise schedule flush after interval
+        let work = DispatchWorkItem { [weak self] in
+            self?.flush()
+        }
+        flushWorkItem = work
+        queue.asyncAfter(deadline: .now() + flushInterval, execute: work)
+    }
+
+    private func flush() {
+        guard !buffer.isEmpty else { return }
+
+        let lines = buffer
+        buffer.removeAll(keepingCapacity: true)
+        flushWorkItem = nil
+
+        writeBatch(lines)
+    }
+
+    private func writeBatch(_ lines: [String]) {
+        // Ensure file exists
+        if !FileManager.default.fileExists(atPath: filePath) {
+            FileManager.default.createFile(atPath: filePath, contents: nil)
+        }
+
+        // Open fresh handle
+        guard let file = FileHandle(forWritingAtPath: filePath) else { return }
+        defer { try? file.close() }
+
+        // Seek to end and write
+        do {
+            try file.seekToEnd()
+            let data = lines.joined(separator: "\n") + "\n"
+            if let bytes = data.data(using: .utf8) {
+                try file.write(contentsOf: bytes)
+            }
+        } catch {
+            // Silent fail - logging shouldn't crash the app
+        }
+    }
+
+    /// Get the log file path (for startup message)
+    var logPath: String { filePath }
+}
+
+// MARK: - JSONLogger (Formatting + Span management)
+
+/// Thread-safe JSON logger that formats events and enqueues to writer.
+/// Maintains span/trace context support.
+enum JSONLogger {
+    static let shared = JSONLoggerImpl()
+}
+
+final class JSONLoggerImpl: @unchecked Sendable {
+
+    /// Get the log file path (for startup message)
+    func getLogPath() -> String {
+        JSONLogWriter.shared.logPath
+    }
+
+    /// Log an event with explicit trace context
+    func log(_ ev: String, msg: String? = nil, data: [String: Any]? = nil, tid: String? = nil, sid: String? = nil) {
+        let line = formatLine(ev: ev, msg: msg, data: data, tid: tid, sid: sid)
+        JSONLogWriter.shared.enqueue(line)
     }
 
     /// Log with trace context from CurrentSpan
     func log(_ ev: String, msg: String? = nil, data: [String: Any]? = nil) async {
         let tid = CurrentSpan.traceId
         let sid = CurrentSpan.spanId
-        await self.log(ev, msg: msg, data: data, tid: tid, sid: sid)
+        log(ev, msg: msg, data: data, tid: tid, sid: sid)
     }
 
-    /// Start a new span (called from MessageHandler with parent context)
-    nonisolated func startSpan(_ name: String, tid: String, parentSid: String?, data: [String: Any]? = nil) -> Span {
+    /// Start a new span
+    func startSpan(_ name: String, tid: String, parentSid: String?, data: [String: Any]? = nil) -> Span {
         let sid = parentSid.map { "\($0).\(name)" } ?? tid
         let span = Span(tid: tid, sid: sid, name: name, start: Date())
 
-        // Build start event
-        var event: [String: Any] = [:]
-        event["ev"] = "\(span.name).start"
-        event["sid"] = span.sid
-        event["tid"] = span.tid
-        if let data = data {
-            event["data"] = data
-        }
-        event["ts"] = Int64(Date().timeIntervalSince1970)
-
-        // Log synchronously through actor to prevent race condition
-        Task {
-            await JSONLogger.shared.writeEventFromNonisolated(event)
-        }
+        // Log start event
+        let line = formatLine(ev: "\(name).start", data: data, tid: tid, sid: sid)
+        JSONLogWriter.shared.enqueue(line)
 
         return span
     }
 
-    /// Write event from nonisolated context (internal actor method)
-    func writeEventFromNonisolated(_ event: [String: Any]) {
-        writeEvent(event)
-    }
-
     /// Log span start event
     func logSpanStart(_ span: Span, data: [String: Any]? = nil) {
-        var event: [String: Any] = [:]
-        // Field order: ev, sid, tid, data, ts
-        event["ev"] = "\(span.name).start"
-        event["sid"] = span.sid
-        event["tid"] = span.tid
-        if let data = data {
-            event["data"] = data
-        }
-        event["ts"] = Int64(Date().timeIntervalSince1970)
-
-        writeEvent(event)
+        let line = formatLine(ev: "\(span.name).start", data: data, tid: span.tid, sid: span.sid)
+        JSONLogWriter.shared.enqueue(line)
     }
 
     /// Log span end event with duration
     func logSpanEnd(_ span: Span, dur: Int64, err: String? = nil) {
-        var event: [String: Any] = [:]
-        // Field order: ev, sid, tid, dur, err, ts
-        event["ev"] = "\(span.name).end"
-        event["sid"] = span.sid
-        event["tid"] = span.tid
-        event["dur"] = dur
-        if let err = err {
-            event["err"] = err
-        }
-        event["ts"] = Int64(Date().timeIntervalSince1970)
-
-        writeEvent(event)
+        let line = formatLineWithDur(ev: "\(span.name).end", dur: dur, err: err, tid: span.tid, sid: span.sid)
+        JSONLogWriter.shared.enqueue(line)
     }
 
-    /// Write event with correct field ordering
-    private func writeEvent(_ event: [String: Any]) {
-        // Escape special characters in strings to produce valid JSON
-        func escapeString(_ str: String) -> String {
-            return str
-                .replacingOccurrences(of: "\\", with: "\\\\")
-                .replacingOccurrences(of: "\"", with: "\\\"")
-                .replacingOccurrences(of: "\n", with: "\\n")
-                .replacingOccurrences(of: "\r", with: "\\r")
-                .replacingOccurrences(of: "\t", with: "\\t")
+    // MARK: - Formatting
+
+    private func formatLine(ev: String, msg: String? = nil, data: [String: Any]? = nil, tid: String? = nil, sid: String? = nil) -> String {
+        var parts: [String] = []
+
+        parts.append("\"ev\":\"\(escapeString(ev))\"")
+        if let sid = sid { parts.append("\"sid\":\"\(escapeString(sid))\"") }
+        if let tid = tid { parts.append("\"tid\":\"\(escapeString(tid))\"") }
+        if let msg = msg { parts.append("\"msg\":\"\(escapeString(msg))\"") }
+        if let data = data, let jsonStr = encodeData(data) {
+            parts.append("\"data\":\(jsonStr)")
         }
+        parts.append("\"ts\":\(Int64(Date().timeIntervalSince1970))")
 
-        if !isInitialized {
-            openFileHandle()
-            isInitialized = true
-        }
-
-        // Create ordered key array for field ordering
-        let orderedKeys = ["ev", "sid", "tid", "dur", "err", "msg", "data", "ts"]
-        var orderedPairs: [(String, Any)] = []
-
-        for key in orderedKeys {
-            if let value = event[key] {
-                orderedPairs.append((key, value))
-            }
-        }
-
-        // Build JSON string manually for field ordering
-        var jsonParts: [String] = []
-        for (key, value) in orderedPairs {
-            if let strVal = value as? String {
-                jsonParts.append("\"\(key)\":\"\(escapeString(strVal))\"")
-            } else if let intVal = value as? Int64 {
-                jsonParts.append("\"\(key)\":\(intVal)")
-            } else if let intVal = value as? Int {
-                jsonParts.append("\"\(key)\":\(intVal)")
-            } else if let dictVal = value as? [String: Any],
-                      let jsonData = try? JSONSerialization.data(withJSONObject: dictVal, options: [.sortedKeys]),
-                      let jsonStr = String(data: jsonData, encoding: .utf8) {
-                jsonParts.append("\"\(key)\":\(jsonStr)")
-            }
-        }
-
-        let line = "{" + jsonParts.joined(separator: ",") + "}\n"
-        guard let lineData = line.data(using: .utf8) else { return }
-
-        if fileHandle == nil {
-            openFileHandle()
-        }
-
-        fileHandle?.write(lineData)
-        fileHandle?.synchronizeFile()
+        return "{" + parts.joined(separator: ",") + "}"
     }
 
-    private func openFileHandle() {
-        if !FileManager.default.fileExists(atPath: filePath) {
-            FileManager.default.createFile(atPath: filePath, contents: nil, attributes: nil)
-        }
-        fileHandle = FileHandle(forUpdatingAtPath: filePath)
-        fileHandle?.seekToEndOfFile()
+    private func formatLineWithDur(ev: String, dur: Int64, err: String? = nil, tid: String, sid: String) -> String {
+        var parts: [String] = []
+
+        parts.append("\"ev\":\"\(escapeString(ev))\"")
+        parts.append("\"sid\":\"\(escapeString(sid))\"")
+        parts.append("\"tid\":\"\(escapeString(tid))\"")
+        parts.append("\"dur\":\(dur)")
+        if let err = err { parts.append("\"err\":\"\(escapeString(err))\"") }
+        parts.append("\"ts\":\(Int64(Date().timeIntervalSince1970))")
+
+        return "{" + parts.joined(separator: ",") + "}"
     }
 
-    deinit {
-        try? fileHandle?.close()
+    private func escapeString(_ str: String) -> String {
+        str.replacingOccurrences(of: "\\", with: "\\\\")
+           .replacingOccurrences(of: "\"", with: "\\\"")
+           .replacingOccurrences(of: "\n", with: "\\n")
+           .replacingOccurrences(of: "\r", with: "\\r")
+           .replacingOccurrences(of: "\t", with: "\\t")
+    }
+
+    private func encodeData(_ data: [String: Any]) -> String? {
+        guard let jsonData = try? JSONSerialization.data(withJSONObject: data, options: [.sortedKeys]),
+              let jsonStr = String(data: jsonData, encoding: .utf8) else {
+            return nil
+        }
+        return jsonStr
     }
 }
+
+// MARK: - Span
 
 /// Represents a timed span with start/end events
 struct Span {
@@ -184,20 +203,22 @@ struct Span {
             name: name,
             start: Date()
         )
-        await JSONLogger.shared.logSpanStart(child, data: data)
+        JSONLogger.shared.logSpanStart(child, data: data)
         return child
     }
 
     /// End the span and log duration
     func end(err: String? = nil) async {
         let dur = Int64(Date().timeIntervalSince(start) * 1000)
-        await JSONLogger.shared.logSpanEnd(self, dur: dur, err: err)
+        JSONLogger.shared.logSpanEnd(self, dur: dur, err: err)
     }
 }
+
+// MARK: - Convenience
 
 /// Convenience function for non-async contexts
 func jlog(_ ev: String, msg: String? = nil, data: [String: Any]? = nil) {
     let tid = CurrentSpan.traceId
     let sid = CurrentSpan.spanId
-    Task { await JSONLogger.shared.log(ev, msg: msg, data: data, tid: tid, sid: sid) }
+    JSONLogger.shared.log(ev, msg: msg, data: data, tid: tid, sid: sid)
 }

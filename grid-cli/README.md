@@ -44,7 +44,14 @@ thegrid window find <pattern>                        # Find windows by title/app
 thegrid window update <id> --x X --y Y --w W --h H   # Move/resize window
 thegrid window to-space <id> <space-id>              # Move to space
 thegrid window to-display <id> <uuid>                # Move to display
+thegrid window move <direction>                      # Move window to adjacent cell
+thegrid window swap <direction>                      # Swap window with adjacent cell
 ```
+
+**Window Move/Swap Flags:**
+- `--extend` - Extend to adjacent monitors when no cell exists
+- `--mouse, -m` - Move mouse cursor to moved window
+- `--wrap` (default: true) - Wrap around to opposite edge
 
 ### Window Properties (requires MSS)
 ```bash
@@ -79,25 +86,40 @@ thegrid layout reapply                # Reapply current layout
 
 ### Focus Navigation
 ```bash
-thegrid focus left [--wrap]           # Focus cell to the left
-thegrid focus right [--wrap]          # Focus cell to the right
-thegrid focus up [--wrap]             # Focus cell above
-thegrid focus down [--wrap]           # Focus cell below
+thegrid focus left                    # Focus cell to the left
+thegrid focus right                   # Focus cell to the right
+thegrid focus up                      # Focus cell above
+thegrid focus down                    # Focus cell below
 thegrid focus next                    # Next window in cell
 thegrid focus prev                    # Previous window in cell
-thegrid focus cell <id>               # Focus specific cell by ID
+thegrid focus cell <id>               # Jump focus to specific cell ID
 ```
+
+**Focus Command Flags:**
+- `--extend` - Extend focus to adjacent monitors when no cell exists
+- `--mouse, -m` - Move mouse cursor to focused window
+- `--wrap` (default: true) - Wrap around to opposite edge
 
 ### Resize
 ```bash
 thegrid resize grow [amount]          # Grow focused window (default 10%)
 thegrid resize shrink [amount]        # Shrink focused window
-thegrid resize reset [--all]          # Reset splits in cell (--all for all)
+thegrid resize reset                  # Reset splits in focused cell
 ```
+
+**Resize Reset Flags:**
+- `--all` - Reset all window splits, not just focused cell
+- `--cells` - Reset cell/track ratios to layout defaults
 
 ### Cell Management
 ```bash
 thegrid cell send <direction>         # Send window to adjacent cell
+```
+
+### Mouse Control
+```bash
+thegrid mouse center                  # Move mouse to focused window center
+thegrid mouse warp <window-id>        # Move mouse to specific window
 ```
 
 ### Configuration

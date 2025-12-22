@@ -132,6 +132,75 @@ func Fetch(ctx context.Context, c *client.Client) (*Snapshot, error) {
 	return parseSnapshot(raw)
 }
 
+// FetchForSpace fetches server state and parses a Snapshot for a specific space.
+// Use this when applying layouts to non-active spaces.
+func FetchForSpace(ctx context.Context, c *client.Client, spaceID string) (*Snapshot, error) {
+	raw, err := c.Dump(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("dump failed: %w", err)
+	}
+	return parseSnapshotForSpace(raw, spaceID)
+}
+
+// parseSnapshotForSpace creates a snapshot targeting a specific space.
+// It finds the display containing that space and uses its bounds.
+func parseSnapshotForSpace(raw map[string]interface{}, targetSpaceID string) (*Snapshot, error) {
+	snap := &Snapshot{
+		WindowIDs: make(map[uint32]bool),
+		SpaceID:   targetSpaceID,
+	}
+
+	// 1. Parse all displays first
+	snap.AllDisplays = parseAllDisplays(raw)
+
+	// 2. Find the display that contains the target space
+	var targetDisplayUUID string
+	for _, display := range snap.AllDisplays {
+		spaceIDStr := fmt.Sprintf("%v", interfaceToInt(display.CurrentSpaceID))
+		if spaceIDStr == targetSpaceID {
+			targetDisplayUUID = display.UUID
+			break
+		}
+	}
+
+	// If target space is not currently active on any display, we can't get its display bounds
+	// Fall back to the main display's bounds as a reasonable default
+	if targetDisplayUUID == "" {
+		for _, display := range snap.AllDisplays {
+			if display.IsMain {
+				targetDisplayUUID = display.UUID
+				break
+			}
+		}
+		if targetDisplayUUID == "" && len(snap.AllDisplays) > 0 {
+			targetDisplayUUID = snap.AllDisplays[0].UUID
+		}
+	}
+
+	// 3. Get display bounds for the target display
+	if targetDisplayUUID != "" {
+		bounds, err := findDisplayBounds(raw, targetDisplayUUID)
+		if err == nil {
+			snap.DisplayBounds = bounds
+		}
+	}
+
+	// 4. Parse windows for the TARGET space (not active space)
+	snap.Windows = parseWindows(raw, targetSpaceID)
+
+	// 5. Build window ID lookup map
+	for _, w := range snap.Windows {
+		if w.IsTileable() {
+			snap.WindowIDs[w.ID] = true
+		}
+	}
+
+	// 6. Get focused window ID from metadata
+	snap.FocusedWindowID = parseFocusedWindowID(raw)
+
+	return snap, nil
+}
+
 func parseSnapshot(raw map[string]interface{}) (*Snapshot, error) {
 	snap := &Snapshot{
 		WindowIDs: make(map[uint32]bool),

@@ -98,8 +98,8 @@ class BorderWindow {
     /// Our overlay window ID
     private(set) var windowID: UInt32 = 0
 
-    /// Target window we're drawing around (set once at init, never changes)
-    let targetWindowID: UInt32
+    /// Target window we're drawing around (can be changed via retarget)
+    private(set) var targetWindowID: UInt32
 
     /// Drawing context
     private var context: CGContext?
@@ -429,6 +429,51 @@ class BorderWindow {
         guard let frame = pendingFrame else { return }
         pendingFrame = nil
         performUpdate(frame)
+    }
+
+    /// Re-target this border to track a different window
+    /// Used for tabbed cells where we keep one border and switch targets on focus change
+    func retarget(to newTargetID: UInt32) {
+        // Capture windowID upfront to avoid race with concurrent destroy()
+        let currentWindowID = windowID
+        guard currentWindowID != 0 else { return }
+        guard newTargetID != targetWindowID else { return }
+
+        let oldTarget = targetWindowID
+        targetWindowID = newTargetID
+
+        // Get new target's frame and update position
+        var frame = CGRect.zero
+        guard SLSGetWindowBounds(connectionID, newTargetID, &frame) == .success else {
+            Task {
+                await JSONLogger.shared.log("err.bdr.retarget", data: [
+                    "wid": currentWindowID,
+                    "oldTarget": oldTarget,
+                    "newTarget": newTargetID,
+                    "reason": "no_bounds"
+                ])
+            }
+            return
+        }
+
+        // Update position to new target
+        update(targetFrame: frame)
+
+        // Move to new target's space if needed
+        moveToTargetSpace()
+
+        // Re-order below new target
+        if isVisible {
+            _ = SLSOrderWindow(connectionID, currentWindowID, -1, newTargetID)
+        }
+
+        Task {
+            await JSONLogger.shared.log("bdr.retarget", data: [
+                "wid": currentWindowID,
+                "oldTarget": oldTarget,
+                "newTarget": newTargetID
+            ])
+        }
     }
 
     /// Update the border's style and visibility

@@ -39,9 +39,7 @@ class BFDKeyHandler {
                 let key = try parseBFDHotkey(spec)
                 globalHotkeys[key] = (spec, def)
             } catch {
-                Task {
-                    await BFDLogger.shared.logError("Failed to parse hotkey '\(spec)': \(error)")
-                }
+                BFDLogger.logError("Failed to parse hotkey '\(spec)': \(error)")
             }
         }
 
@@ -54,9 +52,7 @@ class BFDKeyHandler {
                     let key = try parseBFDHotkey(spec)
                     appMap[key] = appHk
                 } catch {
-                    Task {
-                        await BFDLogger.shared.logError("Failed to parse app hotkey '\(spec)' for \(app): \(error)")
-                    }
+                    BFDLogger.logError("Failed to parse app hotkey '\(spec)' for \(app): \(error)")
                 }
             }
             appHotkeys[app] = appMap

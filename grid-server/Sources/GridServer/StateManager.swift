@@ -327,7 +327,6 @@ class StateManager {
     /// Get AX properties for a window (role, subrole, buttons, modal status)
     /// Used for client-side floating/popup detection
     private func getAXProperties(pid: pid_t, windowID: UInt32) -> AXWindowProperties {
-        var props = AXWindowProperties()
         let appElement = AXUIElementCreateApplication(pid)
 
         // Get windows for this application
@@ -340,64 +339,80 @@ class StateManager {
 
         guard windowsResult == .success,
               let windows = windowsValue as? [AXUIElement] else {
-            return props
+            return AXWindowProperties()
         }
 
-        // Find the matching window element
+        // Find the matching window element by direct ID match
         for windowElement in windows {
             var cgWindowID: UInt32 = 0
             let result = _AXUIElementGetWindow(windowElement, &cgWindowID)
 
             if result == .success && cgWindowID == windowID {
-                // Get role
-                var roleValue: CFTypeRef?
-                AXUIElementCopyAttributeValue(windowElement, kAXRoleAttribute as CFString, &roleValue)
-                props.role = roleValue as? String
-
-                // Get subrole
-                var subroleValue: CFTypeRef?
-                AXUIElementCopyAttributeValue(windowElement, kAXSubroleAttribute as CFString, &subroleValue)
-                props.subrole = subroleValue as? String
-
-                // Get parent window (if any)
-                var parentValue: CFTypeRef?
-                AXUIElementCopyAttributeValue(windowElement, kAXParentAttribute as CFString, &parentValue)
-                if let parentElement = parentValue {
-                    var parentCGID: UInt32 = 0
-                    if _AXUIElementGetWindow(parentElement as! AXUIElement, &parentCGID) == .success {
-                        props.parent = parentCGID
-                    }
-                }
-
-                // Get button presence (for floating/popup detection)
-                var closeBtn: CFTypeRef?
-                if AXUIElementCopyAttributeValue(windowElement, kAXCloseButtonAttribute as CFString, &closeBtn) == .success {
-                    props.hasCloseButton = closeBtn != nil
-                }
-
-                var fullscreenBtn: CFTypeRef?
-                if AXUIElementCopyAttributeValue(windowElement, kAXFullScreenButtonAttribute as CFString, &fullscreenBtn) == .success {
-                    props.hasFullscreenButton = fullscreenBtn != nil
-                }
-
-                var minimizeBtn: CFTypeRef?
-                if AXUIElementCopyAttributeValue(windowElement, kAXMinimizeButtonAttribute as CFString, &minimizeBtn) == .success {
-                    props.hasMinimizeButton = minimizeBtn != nil
-                }
-
-                var zoomBtn: CFTypeRef?
-                if AXUIElementCopyAttributeValue(windowElement, kAXZoomButtonAttribute as CFString, &zoomBtn) == .success {
-                    props.hasZoomButton = zoomBtn != nil
-                }
-
-                // Get modal status
-                var modalValue: CFTypeRef?
-                if AXUIElementCopyAttributeValue(windowElement, kAXModalAttribute as CFString, &modalValue) == .success {
-                    props.isModal = (modalValue as? Bool) ?? false
-                }
-
-                return props
+                return extractAXProperties(from: windowElement)
             }
+        }
+
+        // Fallback: If only one AX window exists, use it (handles apps like Ghostty
+        // where SkyLight reports multiple phantom window IDs but AX only sees one real window)
+        if windows.count == 1 {
+            Task {
+                await JSONLogger.shared.log("ax.single", data: ["wid": windowID, "pid": pid])
+            }
+            return extractAXProperties(from: windows[0])
+        }
+
+        return AXWindowProperties()
+    }
+
+    /// Extract AX properties from a window element
+    private func extractAXProperties(from windowElement: AXUIElement) -> AXWindowProperties {
+        var props = AXWindowProperties()
+
+        // Get role
+        var roleValue: CFTypeRef?
+        AXUIElementCopyAttributeValue(windowElement, kAXRoleAttribute as CFString, &roleValue)
+        props.role = roleValue as? String
+
+        // Get subrole
+        var subroleValue: CFTypeRef?
+        AXUIElementCopyAttributeValue(windowElement, kAXSubroleAttribute as CFString, &subroleValue)
+        props.subrole = subroleValue as? String
+
+        // Get parent window (if any)
+        var parentValue: CFTypeRef?
+        AXUIElementCopyAttributeValue(windowElement, kAXParentAttribute as CFString, &parentValue)
+        if let parentElement = parentValue {
+            var parentCGID: UInt32 = 0
+            if _AXUIElementGetWindow(parentElement as! AXUIElement, &parentCGID) == .success {
+                props.parent = parentCGID
+            }
+        }
+
+        // Get button presence (for floating/popup detection)
+        var closeBtn: CFTypeRef?
+        if AXUIElementCopyAttributeValue(windowElement, kAXCloseButtonAttribute as CFString, &closeBtn) == .success {
+            props.hasCloseButton = closeBtn != nil
+        }
+
+        var fullscreenBtn: CFTypeRef?
+        if AXUIElementCopyAttributeValue(windowElement, kAXFullScreenButtonAttribute as CFString, &fullscreenBtn) == .success {
+            props.hasFullscreenButton = fullscreenBtn != nil
+        }
+
+        var minimizeBtn: CFTypeRef?
+        if AXUIElementCopyAttributeValue(windowElement, kAXMinimizeButtonAttribute as CFString, &minimizeBtn) == .success {
+            props.hasMinimizeButton = minimizeBtn != nil
+        }
+
+        var zoomBtn: CFTypeRef?
+        if AXUIElementCopyAttributeValue(windowElement, kAXZoomButtonAttribute as CFString, &zoomBtn) == .success {
+            props.hasZoomButton = zoomBtn != nil
+        }
+
+        // Get modal status
+        var modalValue: CFTypeRef?
+        if AXUIElementCopyAttributeValue(windowElement, kAXModalAttribute as CFString, &modalValue) == .success {
+            props.isModal = (modalValue as? Bool) ?? false
         }
 
         return props
@@ -1025,9 +1040,7 @@ class StateManager {
                     window.lastUpdated = Date()
                     self.state.windows[String(windowID)] = window
                     self.state.metadata.update()
-
-                    // Notify border system
-                    self.borderEvents?.handleWindowMinimized(windowID)
+                    // Note: Border system handles this via focus change events
                 }
             }
         }
@@ -1046,9 +1059,7 @@ class StateManager {
                     window.lastUpdated = Date()
                     self.state.windows[String(windowID)] = window
                     self.state.metadata.update()
-
-                    // Notify border system
-                    self.borderEvents?.handleWindowDeminimized(windowID)
+                    // Note: Border system handles this via focus change events
                 }
             }
         }
@@ -1130,18 +1141,7 @@ class StateManager {
                         self.restoreFocusForSpace(spaceID)
                     }
 
-                    // Auto-apply layout if space has none
-                    if let spaceID = newSpaceID,
-                       let spaceState = self.state.spaces[String(spaceID)],
-                       spaceState.type == "user" {
-                        AutoLayoutManager.shared.handleSpaceChange(
-                            spaceID: spaceID,
-                            spaceType: spaceState.type
-                        )
-                    }
-
-                    // Notify border system of space change (must clear space-specific state)
-                    self.borderEvents?.handleSpaceChanged()
+                    // Note: Border system handles space changes via cell assignments from CLI
 
                     self.state.metadata.update()
                 }

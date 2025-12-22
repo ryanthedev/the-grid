@@ -1,7 +1,19 @@
-.PHONY: help build server cli test clean server-test cli-test server-clean cli-clean run-server install dist dev
+.PHONY: help build server cli test clean server-test cli-test server-clean cli-clean run-server install dist dev reset-accessibility setup-signing install-scripts
 
 # Version from VERSION file
 VERSION := $(shell cat VERSION)
+
+# Code signing identity for development builds
+# Create this certificate once in Keychain Access:
+#   1. Open Keychain Access
+#   2. Menu: Keychain Access → Certificate Assistant → Create a Certificate
+#   3. Name: thegrid-dev
+#   4. Identity Type: Self-Signed Root
+#   5. Certificate Type: Code Signing
+#   6. Click Create
+# This gives stable signatures so TCC remembers accessibility permissions.
+CODESIGN_IDENTITY ?= thegrid-dev
+ENTITLEMENTS := grid-server/thegrid.entitlements
 
 # Default target - build everything
 all: build
@@ -50,15 +62,6 @@ test: server-test cli-test
 
 clean: server-clean cli-clean
 	@echo "✓ Cleaned all components"
-
-# Development targets
-run-server: server
-	@echo "Starting grid-server..."
-	@./grid-server/.build/debug/grid-server
-
-run-server-release: server-release
-	@echo "Starting grid-server (release)..."
-	@./grid-server/.build/release/grid-server
 
 # Quick verification
 verify: build test
@@ -117,9 +120,9 @@ app-bundle: server-universal
 	@cp grid-server/Info.plist dist/GridServer.app/Contents/
 	@sed -i '' "s/VERSION_PLACEHOLDER/$(VERSION)/g" dist/GridServer.app/Contents/Info.plist
 	@grep -q "$(VERSION)" dist/GridServer.app/Contents/Info.plist || (echo "ERROR: Version substitution failed" && exit 1)
-	@echo "Signing app bundle (inside-out)..."
-	@codesign -fs - dist/GridServer.app/Contents/MacOS/grid-server
-	@codesign -fs - dist/GridServer.app
+	@echo "Signing app bundle with identity '$(CODESIGN_IDENTITY)'..."
+	@codesign -fs "$(CODESIGN_IDENTITY)" --entitlements $(ENTITLEMENTS) dist/GridServer.app/Contents/MacOS/grid-server
+	@codesign -fs "$(CODESIGN_IDENTITY)" --entitlements $(ENTITLEMENTS) dist/GridServer.app
 	@echo "Verifying app bundle..."
 	@codesign --verify --verbose dist/GridServer.app
 	@codesign -dv dist/GridServer.app 2>&1 | head -5
@@ -159,12 +162,18 @@ help:
 	@echo "  dist             - Create distribution tarball (current arch)"
 	@echo "  dist-universal   - Create universal binary tarball (arm64+x86_64)"
 	@echo ""
+	@echo "Development targets:"
+	@echo "  dev              - Build debug GridServer.app bundle"
+	@echo "  run              - Build and restart thegrid-dev service"
+	@echo "  install-dev      - Install dev CLI to ~/.local/state/thegrid/bin"
+	@echo "  setup-signing    - Create code signing certificate (one-time)"
+	@echo "  reset-accessibility - Reset TCC accessibility permissions"
+	@echo ""
 	@echo "Server targets:"
 	@echo "  server           - Build grid-server (debug)"
 	@echo "  server-release   - Build grid-server (release)"
 	@echo "  server-test      - Run grid-server tests"
 	@echo "  server-clean     - Clean grid-server build"
-	@echo "  run-server       - Build and run grid-server (debug)"
 	@echo ""
 	@echo "CLI targets:"
 	@echo "  cli              - Build thegrid CLI"
@@ -173,24 +182,31 @@ help:
 	@echo "  cli-install      - Install thegrid to \$$GOPATH/bin"
 	@echo ""
 	@echo "Usage examples:"
-	@echo "  make              # Build everything"
-	@echo "  make server       # Build just the server"
-	@echo "  make cli          # Build just the CLI"
+	@echo "  make dev          # Build debug app bundle"
+	@echo "  make run          # Build and restart thegrid service"
 	@echo "  make test         # Run all tests"
-	@echo "  make run-server   # Build and run the server"
-	@echo "  make dev          # Build, clear logs, restart server (interactive)"
 	@echo "  make dist         # Create distribution tarball"
 
-# Development: build, clear logs, restart server with output visible
-dev: build
-	@echo "Stopping existing server..."
-	@-pkill -f "grid-server" 2>/dev/null || true
-	@sleep 0.5
-	@echo "Clearing logs..."
-	@rm -f ~/.local/state/thegrid/thegrid-cli.json
-	@rm -f ~/.local/state/thegrid/thegrid-server.json
-	@echo "Starting server (Ctrl+C to stop)..."
-	@./grid-server/.build/debug/grid-server
+# Debug app bundle (for development - required for Accessibility permissions)
+APP_BUNDLE := grid-server/.build/debug/GridServer.app
+
+# Build debug app bundle
+dev: server cli
+	@echo "Creating debug GridServer.app bundle..."
+	@mkdir -p $(APP_BUNDLE)/Contents/MacOS
+	@mkdir -p $(APP_BUNDLE)/Contents/Resources
+	@cp grid-server/.build/debug/grid-server $(APP_BUNDLE)/Contents/MacOS/
+	@cp grid-server/Info.plist $(APP_BUNDLE)/Contents/
+	@echo "Signing with identity '$(CODESIGN_IDENTITY)'..."
+	@codesign -fs "$(CODESIGN_IDENTITY)" --entitlements $(ENTITLEMENTS) $(APP_BUNDLE)/Contents/MacOS/grid-server
+	@codesign -fs "$(CODESIGN_IDENTITY)" --entitlements $(ENTITLEMENTS) $(APP_BUNDLE)
+	@echo "✓ Debug GridServer.app created at $(APP_BUNDLE)"
+
+# Build and restart thegrid service
+run: dev install-dev
+	@echo "Restarting thegrid-dev service..."
+	@services restart thegrid-dev
+	@echo "✓ Service restarted"
 
 # Install dev build to ~/.local/state/thegrid/bin for wrapper resolution
 install-dev: cli
@@ -198,15 +214,29 @@ install-dev: cli
 	@cp grid-cli/bin/thegrid ~/.local/state/thegrid/bin/thegrid
 	@echo "✓ Installed dev CLI to ~/.local/state/thegrid/bin/thegrid"
 
-# Quick reload: build, restart server in background, apply layout
-# Usage: make reload LAYOUT=two-column  (default: two-column)
-LAYOUT ?= two-column
-reload: build
-	@echo "Restarting server..."
-	@-pkill -f "grid-server" 2>/dev/null || true
-	@sleep 0.5
-	@./grid-server/.build/debug/grid-server &>/dev/null &
-	@sleep 1
-	@echo "Applying layout: $(LAYOUT)"
-	@./grid-cli/bin/thegrid layout apply $(LAYOUT)
-	@echo "✓ Server reloaded and layout applied"
+# Install utility scripts to ~/.local/bin
+install-scripts:
+	@mkdir -p ~/.local/bin
+	@ln -sf $(CURDIR)/scripts/reapply-layouts.sh ~/.local/bin/thegrid-reapply-layouts
+	@ln -sf $(CURDIR)/scripts/reset-accessibility.sh ~/.local/bin/thegrid-reset-accessibility
+	@echo "✓ Installed scripts to ~/.local/bin"
+
+# Tail server logs (real-time streaming)
+tail-server:
+	@tail -f ~/.local/state/thegrid/thegrid-server.json | jq --unbuffered -c '{ev: .ev, data: .data}'
+
+# Tail CLI logs (real-time streaming)
+tail-cli:
+	@tail -f ~/.local/state/thegrid/thegrid-cli.json | jq --unbuffered -c '{ev: .ev, data: .data}'
+
+# Tail both logs
+tail:
+	@tail -f ~/.local/state/thegrid/*.json | jq --unbuffered -c '{ev: .ev, data: .data}'
+
+# Reset accessibility permissions (use when TCC gets confused)
+reset-accessibility:
+	@./scripts/reset-accessibility.sh
+
+# Setup code signing certificate (one-time)
+setup-signing:
+	@./scripts/create-dev-certificate.sh
