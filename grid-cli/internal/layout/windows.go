@@ -153,6 +153,7 @@ func NormalizeRatios(ratios []float64) []float64 {
 //   - baseSpacing: Base spacing unit for resolving "Nx" padding/spacing values
 //   - settingsPadding: Global default padding from settings (nil = no default)
 //   - settingsWindowSpacing: Global default window spacing from settings (nil = no default)
+//   - focusedIndices: Map of cellID -> focused window index (nil = no insets)
 //
 // Returns: Array of WindowPlacement for all windows
 func CalculateAllWindowPlacements(
@@ -165,6 +166,7 @@ func CalculateAllWindowPlacements(
 	baseSpacing float64,
 	settingsPadding *types.Padding,
 	settingsWindowSpacing *types.PaddingValue,
+	focusedIndices map[string]int,
 ) []types.WindowPlacement {
 	if calculatedLayout == nil {
 		return nil
@@ -210,6 +212,39 @@ func CalculateAllWindowPlacements(
 
 		// Calculate window bounds within the (possibly padded) cell
 		windowBounds := CalculateWindowBounds(cellBounds, len(windowIDs), mode, ratios, windowSpacing)
+
+		// Apply tab stack position insets (creates L-shaped reveals at corners)
+		// hasPrev: inset top-left (shift X,Y; reduce W,H to maintain right/bottom edges)
+		// hasNext: inset bottom-right (reduce W,H only)
+		if mode == types.StackTabs && len(windowIDs) > 1 && focusedIndices != nil {
+			focusedIdx, hasFocusInfo := focusedIndices[cellID]
+			if hasFocusInfo && focusedIdx >= 0 && focusedIdx < len(windowBounds) {
+				hasPrev := focusedIdx > 0
+				hasNext := focusedIdx < len(windowIDs)-1
+
+				if hasPrev || hasNext {
+					bounds := &windowBounds[focusedIdx]
+					originalBounds := *bounds
+
+					if hasPrev {
+						bounds.X += baseSpacing
+						bounds.Y += baseSpacing
+						bounds.Width -= baseSpacing
+						bounds.Height -= baseSpacing
+					}
+					if hasNext {
+						bounds.Width -= baseSpacing
+						bounds.Height -= baseSpacing
+					}
+
+					// Validate minimum size (avoid zero/negative windows)
+					const minSize = 50.0
+					if bounds.Width < minSize || bounds.Height < minSize {
+						*bounds = originalBounds
+					}
+				}
+			}
+		}
 
 		// Create placements
 		for i, windowID := range windowIDs {
