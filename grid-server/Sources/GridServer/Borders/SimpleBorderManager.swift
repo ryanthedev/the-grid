@@ -98,10 +98,8 @@ class SimpleBorderManager {
     func setCellBounds(_ bounds: [String: CGRect], forDisplay displayUUID: String) {
         let span = CurrentSpan.current
         DispatchQueue.main.async { [weak self, span] in
-            Task {
-                await CurrentSpan.$current.withValue(span) {
-                    self?.setCellBoundsImpl(bounds, forDisplay: displayUUID)
-                }
+            CurrentSpan.$current.withValue(span) {
+                self?.setCellBoundsImpl(bounds, forDisplay: displayUUID)
             }
         }
     }
@@ -117,10 +115,8 @@ class SimpleBorderManager {
     func setCellAssignments(_ assignments: [UInt32: String], forDisplay displayUUID: String) {
         let span = CurrentSpan.current
         DispatchQueue.main.async { [weak self, span] in
-            Task {
-                await CurrentSpan.$current.withValue(span) {
-                    self?.setCellAssignmentsImpl(assignments, forDisplay: displayUUID)
-                }
+            CurrentSpan.$current.withValue(span) {
+                self?.setCellAssignmentsImpl(assignments, forDisplay: displayUUID)
             }
         }
     }
@@ -202,10 +198,8 @@ class SimpleBorderManager {
     func updateFocus(newFocusedWindow: UInt32) {
         let span = CurrentSpan.current
         DispatchQueue.main.async { [weak self, span] in
-            Task {
-                await CurrentSpan.$current.withValue(span) {
-                    self?.updateFocusImpl(newFocusedWindow: newFocusedWindow)
-                }
+            CurrentSpan.$current.withValue(span) {
+                self?.updateFocusImpl(newFocusedWindow: newFocusedWindow)
             }
         }
     }
@@ -288,10 +282,8 @@ class SimpleBorderManager {
     func handleWindowMoved(windowID: UInt32, newFrame: CGRect) {
         let span = CurrentSpan.current
         DispatchQueue.main.async { [weak self, span] in
-            Task {
-                await CurrentSpan.$current.withValue(span) {
-                    self?.handleWindowMovedImpl(windowID: windowID, newFrame: newFrame)
-                }
+            CurrentSpan.$current.withValue(span) {
+                self?.handleWindowMovedImpl(windowID: windowID, newFrame: newFrame)
             }
         }
     }
@@ -310,10 +302,8 @@ class SimpleBorderManager {
     func handleWindowDestroyed(windowID: UInt32) {
         let span = CurrentSpan.current
         DispatchQueue.main.async { [weak self, span] in
-            Task {
-                await CurrentSpan.$current.withValue(span) {
-                    self?.handleWindowDestroyedImpl(windowID: windowID)
-                }
+            CurrentSpan.$current.withValue(span) {
+                self?.handleWindowDestroyedImpl(windowID: windowID)
             }
         }
     }
@@ -354,10 +344,8 @@ class SimpleBorderManager {
     func handleDisplayDisconnected(displayUUID: String) {
         let span = CurrentSpan.current
         DispatchQueue.main.async { [weak self, span] in
-            Task {
-                await CurrentSpan.$current.withValue(span) {
-                    self?.handleDisplayDisconnectedImpl(displayUUID: displayUUID)
-                }
+            CurrentSpan.$current.withValue(span) {
+                self?.handleDisplayDisconnectedImpl(displayUUID: displayUUID)
             }
         }
     }
@@ -456,10 +444,8 @@ class SimpleBorderManager {
     func cleanup() {
         let span = CurrentSpan.current
         DispatchQueue.main.async { [weak self, span] in
-            Task {
-                await CurrentSpan.$current.withValue(span) {
-                    self?.cleanupImpl()
-                }
+            CurrentSpan.$current.withValue(span) {
+                self?.cleanupImpl()
             }
         }
     }
@@ -716,10 +702,12 @@ class SimpleBorderManager {
             return nil
         }
 
-        guard let axElement = ref as? AXUIElement else {
+        // Verify this is actually an AXUIElement by comparing CFTypeIDs
+        guard CFGetTypeID(ref as CFTypeRef) == AXUIElementGetTypeID() else {
             Task { await JSONLogger.shared.log("err.ax.cast", data: ["pid": pid]) }
             return nil
         }
+        let axElement = ref as! AXUIElement
 
         var windowID: UInt32 = 0
         let axResult = _AXUIElementGetWindow(axElement, &windowID)
