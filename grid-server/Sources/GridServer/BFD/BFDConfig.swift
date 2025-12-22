@@ -91,6 +91,22 @@ struct BFDConfig: Codable {
     var hotkeys: [String: BFDHotkeyDef] = [:]
     var apps: [String: [String: BFDAppHotkey]] = [:]
 
+    enum CodingKeys: String, CodingKey {
+        case shell, vars, defaults, blacklist, hotkeys, apps
+    }
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        shell = try container.decodeIfPresent(String.self, forKey: .shell) ?? "/bin/zsh"
+        vars = try container.decodeIfPresent([String: String].self, forKey: .vars) ?? [:]
+        defaults = try container.decodeIfPresent(BFDDefaults.self, forKey: .defaults) ?? BFDDefaults()
+        blacklist = try container.decodeIfPresent([String].self, forKey: .blacklist) ?? []
+        hotkeys = try container.decodeIfPresent([String: BFDHotkeyDef].self, forKey: .hotkeys) ?? [:]
+        apps = try container.decodeIfPresent([String: [String: BFDAppHotkey]].self, forKey: .apps) ?? [:]
+    }
+
     /// Load config from file path
     static func load(from path: String) throws -> BFDConfig {
         let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)

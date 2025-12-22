@@ -596,11 +596,8 @@ class MessageHandler {
             let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
 
             if manipulator.focusWindow(pid: windowState.pid, windowID: wid) {
-                // Update border focus state (processed asynchronously on main queue)
-                self.simpleBorderManager?.updateFocus(newFocusedWindow: wid)
-
-                // Also update StateManager (async via its internal queue)
-                StateManager.shared.handleWindowFocused(wid)
+                // Border and state updates happen automatically via OS focus event:
+                // AX observer → StateManager → BorderEvents → SimpleBorderManager
                 completion(Response(id: request.id, result: AnyCodable(["success": true, "windowId": wid])))
             } else {
                 // Log error event

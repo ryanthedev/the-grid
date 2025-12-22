@@ -41,8 +41,15 @@ class WindowManipulator {
             }
         }
 
+        // Fallback: If only one AX window exists, use it (handles apps like Ghostty
+        // where SkyLight reports multiple phantom window IDs but AX only sees one real window)
+        if windows.count == 1 {
+            Task { await JSONLogger.shared.log("ax.single", data: ["wid": windowID, "pid": pid]) }
+            return windows[0]
+        }
+
         Task { await JSONLogger.shared.log("ax.fail", data: ["pid": pid, "wid": windowID, "reason": "not_in_list"]) }
-        StateManager.shared.handleWindowDestroyed(windowID)
+        // Note: Don't call handleWindowDestroyed - window still exists, just can't be found by AX ID
         return nil
     }
 

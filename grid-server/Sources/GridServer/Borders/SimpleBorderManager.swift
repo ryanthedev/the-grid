@@ -124,19 +124,41 @@ class SimpleBorderManager {
 
     private func setCellAssignmentsImpl(_ assignments: [UInt32: String], forDisplay displayUUID: String) {
         // Reentrancy guard
-        guard !isUpdating else { return }
+        guard !isUpdating else {
+            Task { await JSONLogger.shared.log("dbg.bdr.skip", data: ["reason": "reentrancy", "source": "setCellAssignments"]) }
+            return
+        }
         isUpdating = true
         defer { isUpdating = false }
 
+        let oldAssignments = cellAssignmentsPerDisplay[displayUUID]
         cellAssignmentsPerDisplay[displayUUID] = assignments
 
         // If this affects the current display, rebuild pool
         if displayUUID == currentDisplayUUID {
             // Re-derive active cell from focused window
+            let oldCellID = activeCellID
             if let focused = focusedWindowID, let cellID = assignments[focused] {
                 activeCellID = cellID
             }
-            rebuildBorderPool()
+
+            // Only rebuild if assignments actually changed
+            let assignmentsChanged = oldAssignments != assignments
+            let cellChanged = oldCellID != activeCellID
+
+            Task {
+                await JSONLogger.shared.log("dbg.bdr.assign_check", data: [
+                    "assignmentsChanged": assignmentsChanged,
+                    "cellChanged": cellChanged,
+                    "oldCell": oldCellID ?? "nil",
+                    "newCell": activeCellID ?? "nil",
+                    "focused": focusedWindowID ?? 0
+                ])
+            }
+
+            if assignmentsChanged || cellChanged {
+                rebuildBorderPool(source: "setCellAssignments")
+            }
         } else if currentDisplayUUID == nil {
             // Edge case: new window appeared and focused before any assignments
             // Now assignments arrived - check if focused window is now assigned
@@ -145,7 +167,7 @@ class SimpleBorderManager {
                 focusedWindowID = focused
                 activeCellID = cellID
                 currentDisplayUUID = displayUUID
-                rebuildBorderPool()
+                rebuildBorderPool(source: "setCellAssignments-init")
             }
         }
 
@@ -184,12 +206,16 @@ class SimpleBorderManager {
 
     private func updateFocusImpl(newFocusedWindow: UInt32) {
         // Reentrancy guard
-        guard !isUpdating else { return }
+        guard !isUpdating else {
+            Task { await JSONLogger.shared.log("dbg.bdr.skip", data: ["reason": "reentrancy", "source": "updateFocus", "wid": newFocusedWindow]) }
+            return
+        }
         isUpdating = true
         defer { isUpdating = false }
 
         // Ignore focus on our own overlay windows
         if isOurOverlayWindow(newFocusedWindow) {
+            Task { await JSONLogger.shared.log("dbg.bdr.skip", data: ["reason": "overlay", "wid": newFocusedWindow]) }
             return
         }
 
@@ -197,16 +223,31 @@ class SimpleBorderManager {
         let (newDisplayUUID, newCellID) = findAssignment(for: newFocusedWindow)
 
         guard let cellID = newCellID, let displayUUID = newDisplayUUID else {
-            // Window not assigned to any cell - clear all borders
-            destroyAllBorders()
-            focusedWindowID = nil
-            activeCellID = nil
-            currentDisplayUUID = nil
+            // Window not assigned to any cell - IGNORE this focus event
+            // Don't destroy borders just because an untracked window got focus
+            // (e.g., transient focus during app switch, or window from another space)
+            Task {
+                await JSONLogger.shared.log("dbg.bdr.skip", data: [
+                    "reason": "unassigned",
+                    "wid": newFocusedWindow
+                ])
+            }
             return
         }
 
         let previousCellID = activeCellID
         let previousFocusedWindow = focusedWindowID
+
+        Task {
+            await JSONLogger.shared.log("dbg.bdr.focus_eval", data: [
+                "newWid": newFocusedWindow,
+                "prevWid": previousFocusedWindow ?? 0,
+                "newCell": cellID,
+                "prevCell": previousCellID ?? "nil",
+                "cellChanged": cellID != previousCellID,
+                "windowChanged": newFocusedWindow != previousFocusedWindow
+            ])
+        }
 
         // Update state
         focusedWindowID = newFocusedWindow
@@ -215,7 +256,7 @@ class SimpleBorderManager {
 
         if cellID != previousCellID {
             // DIFFERENT CELL: rebuild entire pool
-            rebuildBorderPool()
+            rebuildBorderPool(source: "updateFocus-cellChange")
             Task {
                 await JSONLogger.shared.log("bdr.cell_change", data: [
                     "cell": cellID,
@@ -231,8 +272,10 @@ class SimpleBorderManager {
                     "wid": newFocusedWindow
                 ])
             }
+        } else {
+            // Same window refocused, no action needed
+            Task { await JSONLogger.shared.log("dbg.bdr.skip", data: ["reason": "sameWindow", "wid": newFocusedWindow]) }
         }
-        // else: same window refocused, no action needed
     }
 
     /// Handle window moved (update window border position)
@@ -475,7 +518,21 @@ class SimpleBorderManager {
     }
 
     /// Rebuild the entire border pool (called on cell change or layout apply)
-    private func rebuildBorderPool() {
+    private func rebuildBorderPool(source: String = "unknown") {
+        // Log existing border state before destroy
+        let existingActive = activeBorder?.targetWindowID
+        let existingInactive = Array(inactiveBorders.keys)
+
+        Task {
+            await JSONLogger.shared.log("dbg.bdr.rebuild_start", data: [
+                "source": source,
+                "existingActive": existingActive ?? 0,
+                "existingInactive": existingInactive.map { Int($0) },
+                "activeCellID": activeCellID ?? "nil",
+                "focusedWid": focusedWindowID ?? 0
+            ])
+        }
+
         // Destroy all existing borders
         destroyAllBorders()
 
@@ -483,6 +540,7 @@ class SimpleBorderManager {
         guard let cellID = activeCellID,
               let displayUUID = currentDisplayUUID,
               let assignments = cellAssignmentsPerDisplay[displayUUID] else {
+            Task { await JSONLogger.shared.log("dbg.bdr.rebuild_abort", data: ["reason": "no_cell_or_display"]) }
             return
         }
 
@@ -513,6 +571,7 @@ class SimpleBorderManager {
 
         Task {
             await JSONLogger.shared.log("bdr.rebuild", data: [
+                "source": source,
                 "cell": cellID,
                 "count": windowsInCell.count,
                 "focused": focusedWindowID ?? 0
