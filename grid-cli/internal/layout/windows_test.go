@@ -505,4 +505,240 @@ func TestAdjustRatiosForWindowCount_RatioPreservation(t *testing.T) {
 	}
 }
 
+func TestCalculateAllWindowPlacements_TabStackInsets_HasPrev(t *testing.T) {
+	calculatedLayout := &types.CalculatedLayout{
+		LayoutID: "test",
+		CellBounds: map[string]types.Rect{
+			"main": {X: 0, Y: 0, Width: 100, Height: 100},
+		},
+	}
+
+	assignments := map[string][]uint32{
+		"main": {1, 2, 3},
+	}
+
+	cellModes := map[string]types.StackMode{
+		"main": types.StackTabs,
+	}
+
+	focusedIndices := map[string]int{
+		"main": 2,
+	}
+
+	placements := CalculateAllWindowPlacements(
+		calculatedLayout, nil, assignments, cellModes, nil,
+		types.StackVertical, 8, nil, nil, focusedIndices,
+	)
+
+	if len(placements) != 3 {
+		t.Fatalf("expected 3 placements, got %d", len(placements))
+	}
+
+	placementMap := make(map[uint32]types.WindowPlacement)
+	for _, p := range placements {
+		placementMap[p.WindowID] = p
+	}
+
+	fullBounds := types.Rect{X: 0, Y: 0, Width: 100, Height: 100}
+
+	p1 := placementMap[1]
+	if p1.Bounds != fullBounds {
+		t.Errorf("window 1 bounds = %v, want %v (full cell)", p1.Bounds, fullBounds)
+	}
+
+	p2 := placementMap[2]
+	if p2.Bounds != fullBounds {
+		t.Errorf("window 2 bounds = %v, want %v (full cell)", p2.Bounds, fullBounds)
+	}
+
+	p3 := placementMap[3]
+	expectedBounds := types.Rect{X: 8, Y: 8, Width: 92, Height: 92}
+	if p3.Bounds != expectedBounds {
+		t.Errorf("window 3 (focused, hasPrev only) bounds = %v, want %v (top+left inset)", p3.Bounds, expectedBounds)
+	}
+}
+
+func TestCalculateAllWindowPlacements_TabStackInsets_HasNext(t *testing.T) {
+	calculatedLayout := &types.CalculatedLayout{
+		LayoutID: "test",
+		CellBounds: map[string]types.Rect{
+			"main": {X: 0, Y: 0, Width: 100, Height: 100},
+		},
+	}
+
+	assignments := map[string][]uint32{
+		"main": {1, 2, 3},
+	}
+
+	cellModes := map[string]types.StackMode{
+		"main": types.StackTabs,
+	}
+
+	focusedIndices := map[string]int{
+		"main": 0,
+	}
+
+	placements := CalculateAllWindowPlacements(
+		calculatedLayout, nil, assignments, cellModes, nil,
+		types.StackVertical, 8, nil, nil, focusedIndices,
+	)
+
+	if len(placements) != 3 {
+		t.Fatalf("expected 3 placements, got %d", len(placements))
+	}
+
+	placementMap := make(map[uint32]types.WindowPlacement)
+	for _, p := range placements {
+		placementMap[p.WindowID] = p
+	}
+
+	fullBounds := types.Rect{X: 0, Y: 0, Width: 100, Height: 100}
+
+	p1 := placementMap[1]
+	expectedBounds := types.Rect{X: 0, Y: 0, Width: 92, Height: 92}
+	if p1.Bounds != expectedBounds {
+		t.Errorf("window 1 (focused, hasNext only) bounds = %v, want %v (bottom+right inset)", p1.Bounds, expectedBounds)
+	}
+
+	p2 := placementMap[2]
+	if p2.Bounds != fullBounds {
+		t.Errorf("window 2 bounds = %v, want %v (full cell)", p2.Bounds, fullBounds)
+	}
+
+	p3 := placementMap[3]
+	if p3.Bounds != fullBounds {
+		t.Errorf("window 3 bounds = %v, want %v (full cell)", p3.Bounds, fullBounds)
+	}
+}
+
+func TestCalculateAllWindowPlacements_TabStackInsets_Both(t *testing.T) {
+	calculatedLayout := &types.CalculatedLayout{
+		LayoutID: "test",
+		CellBounds: map[string]types.Rect{
+			"main": {X: 0, Y: 0, Width: 100, Height: 100},
+		},
+	}
+
+	assignments := map[string][]uint32{
+		"main": {1, 2, 3},
+	}
+
+	cellModes := map[string]types.StackMode{
+		"main": types.StackTabs,
+	}
+
+	focusedIndices := map[string]int{
+		"main": 1,
+	}
+
+	placements := CalculateAllWindowPlacements(
+		calculatedLayout, nil, assignments, cellModes, nil,
+		types.StackVertical, 8, nil, nil, focusedIndices,
+	)
+
+	if len(placements) != 3 {
+		t.Fatalf("expected 3 placements, got %d", len(placements))
+	}
+
+	placementMap := make(map[uint32]types.WindowPlacement)
+	for _, p := range placements {
+		placementMap[p.WindowID] = p
+	}
+
+	fullBounds := types.Rect{X: 0, Y: 0, Width: 100, Height: 100}
+
+	p1 := placementMap[1]
+	if p1.Bounds != fullBounds {
+		t.Errorf("window 1 bounds = %v, want %v (full cell)", p1.Bounds, fullBounds)
+	}
+
+	p2 := placementMap[2]
+	expectedBounds := types.Rect{X: 8, Y: 8, Width: 84, Height: 84}
+	if p2.Bounds != expectedBounds {
+		t.Errorf("window 2 (focused, hasPrev and hasNext) bounds = %v, want %v (uniform 8px margin)", p2.Bounds, expectedBounds)
+	}
+
+	p3 := placementMap[3]
+	if p3.Bounds != fullBounds {
+		t.Errorf("window 3 bounds = %v, want %v (full cell)", p3.Bounds, fullBounds)
+	}
+}
+
+func TestCalculateAllWindowPlacements_TabStackInsets_SingleWindow(t *testing.T) {
+	calculatedLayout := &types.CalculatedLayout{
+		LayoutID: "test",
+		CellBounds: map[string]types.Rect{
+			"main": {X: 0, Y: 0, Width: 100, Height: 100},
+		},
+	}
+
+	assignments := map[string][]uint32{
+		"main": {1},
+	}
+
+	cellModes := map[string]types.StackMode{
+		"main": types.StackTabs,
+	}
+
+	focusedIndices := map[string]int{
+		"main": 0,
+	}
+
+	placements := CalculateAllWindowPlacements(
+		calculatedLayout, nil, assignments, cellModes, nil,
+		types.StackVertical, 8, nil, nil, focusedIndices,
+	)
+
+	if len(placements) != 1 {
+		t.Fatalf("expected 1 placement, got %d", len(placements))
+	}
+
+	fullBounds := types.Rect{X: 0, Y: 0, Width: 100, Height: 100}
+	if placements[0].Bounds != fullBounds {
+		t.Errorf("single window bounds = %v, want %v (no insets for single window)", placements[0].Bounds, fullBounds)
+	}
+}
+
+func TestCalculateAllWindowPlacements_TabStackInsets_SmallCell(t *testing.T) {
+	calculatedLayout := &types.CalculatedLayout{
+		LayoutID: "test",
+		CellBounds: map[string]types.Rect{
+			"main": {X: 0, Y: 0, Width: 40, Height: 40},
+		},
+	}
+
+	assignments := map[string][]uint32{
+		"main": {1, 2, 3},
+	}
+
+	cellModes := map[string]types.StackMode{
+		"main": types.StackTabs,
+	}
+
+	focusedIndices := map[string]int{
+		"main": 1,
+	}
+
+	placements := CalculateAllWindowPlacements(
+		calculatedLayout, nil, assignments, cellModes, nil,
+		types.StackVertical, 8, nil, nil, focusedIndices,
+	)
+
+	if len(placements) != 3 {
+		t.Fatalf("expected 3 placements, got %d", len(placements))
+	}
+
+	placementMap := make(map[uint32]types.WindowPlacement)
+	for _, p := range placements {
+		placementMap[p.WindowID] = p
+	}
+
+	fullBounds := types.Rect{X: 0, Y: 0, Width: 40, Height: 40}
+
+	p2 := placementMap[2]
+	if p2.Bounds != fullBounds {
+		t.Errorf("focused window in small cell bounds = %v, want %v (insets skipped due to small cell)", p2.Bounds, fullBounds)
+	}
+}
+
 // floatEquals is defined in grid_test.go
