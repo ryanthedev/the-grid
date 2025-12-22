@@ -95,8 +95,12 @@ struct GridServerCommand: ParsableCommand {
             _ = NSApplication.shared
             NSApplication.shared.setActivationPolicy(.prohibited)
 
-            // Initialize StateManager
-            StateManager.shared.start()
+            // Initialize StateManager with completion callback for autolayout
+            StateManager.shared.start {
+                // State is now populated - safe to apply layouts
+                AutoLayoutManager.shared.applyStartupLayoutsAsync()
+                jlog("autolayout.init")
+            }
             jlog("state.init")
 
             // Initialize border system
@@ -122,10 +126,6 @@ struct GridServerCommand: ParsableCommand {
             }
 
             jlog("srv.ready")
-
-            // Start auto-layout in background (don't block startup)
-            AutoLayoutManager.shared.applyStartupLayoutsAsync()
-            jlog("autolayout.init")
 
             // Keep the server running
             while !shouldShutdown {

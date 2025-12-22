@@ -54,7 +54,7 @@ class StateManager {
 
     // MARK: - Public Interface
 
-    func start() {
+    func start(completion: (() -> Void)? = nil) {
         let span = CurrentSpan.current
         queue.async { [span] in
             Task {
@@ -74,6 +74,11 @@ class StateManager {
 
                     // Start periodic polling to catch windows that events miss
                     self.startPolling(interval: 3.0)
+
+                    // Signal that initial state is ready
+                    DispatchQueue.main.async {
+                        completion?()
+                    }
                 }
             }
         }
