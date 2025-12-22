@@ -217,7 +217,6 @@ install-dev: cli
 # Install utility scripts to ~/.local/bin
 install-scripts:
 	@mkdir -p ~/.local/bin
-	@ln -sf $(CURDIR)/scripts/bfd-shell ~/.local/bin/bfd-shell
 	@ln -sf $(CURDIR)/scripts/reapply-layouts.sh ~/.local/bin/thegrid-reapply-layouts
 	@ln -sf $(CURDIR)/scripts/reset-accessibility.sh ~/.local/bin/thegrid-reset-accessibility
 	@echo "✓ Installed scripts to ~/.local/bin"
