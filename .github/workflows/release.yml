@@ -119,7 +119,55 @@ jobs:
         with:
           go-version: '1.21'
 
+      - name: Import code signing certificate
+        env:
+          CODESIGN_CERT_BASE64: ${{ secrets.CODESIGN_CERT_BASE64 }}
+          CODESIGN_CERT_PASSWORD: ${{ secrets.CODESIGN_CERT_PASSWORD }}
+        run: |
+          # Skip if secrets not configured
+          if [ -z "$CODESIGN_CERT_BASE64" ]; then
+            echo "::warning::CODESIGN_CERT_BASE64 secret not set, skipping code signing"
+            exit 0
+          fi
+
+          # Create variables
+          CERTIFICATE_PATH=$RUNNER_TEMP/certificate.p12
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 24)
+
+          # Decode certificate
+          echo -n "$CODESIGN_CERT_BASE64" | base64 --decode -o $CERTIFICATE_PATH
+
+          # Create temporary keychain
+          security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+
+          # Import certificate
+          security import $CERTIFICATE_PATH \
+            -P "$CODESIGN_CERT_PASSWORD" \
+            -A \
+            -t cert \
+            -f pkcs12 \
+            -k $KEYCHAIN_PATH
+
+          # Set partition list to allow codesign access without prompts
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+
+          # Add keychain to search list (prepend to ensure it's found first)
+          security list-keychains -d user -s $KEYCHAIN_PATH $(security list-keychains -d user | tr -d '"')
+
+          # Verify certificate is available
+          echo "Available signing identities:"
+          security find-identity -v -p codesigning $KEYCHAIN_PATH
+
+          # Store keychain path for cleanup
+          echo "SIGNING_KEYCHAIN_PATH=$KEYCHAIN_PATH" >> $GITHUB_ENV
+
       - name: Build universal binary tarball
+        env:
+          CODESIGN_IDENTITY: thegrid-ci
         run: |
           make dist-universal
           NEW_VERSION="${{ steps.new_version.outputs.version }}"
@@ -214,3 +262,10 @@ jobs:
           echo "  3. Test installation: brew tap ryanthedev/thegrid && brew install thegrid"
           echo ""
           echo "ℹ️  Users no longer need Xcode - binaries are pre-built!"
+
+      - name: Cleanup signing keychain
+        if: always()
+        run: |
+          if [ -n "$SIGNING_KEYCHAIN_PATH" ] && [ -f "$SIGNING_KEYCHAIN_PATH" ]; then
+            security delete-keychain "$SIGNING_KEYCHAIN_PATH" || true
+          fi
