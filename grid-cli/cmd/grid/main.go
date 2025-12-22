@@ -38,6 +38,7 @@ var (
 	// Color functions
 	successColor = color.New(color.FgGreen, color.Bold)
 	errorColor   = color.New(color.FgRed, color.Bold)
+	warnColor    = color.New(color.FgYellow, color.Bold)
 	infoColor    = color.New(color.FgCyan)
 	keyColor     = color.New(color.FgYellow)
 
@@ -1181,16 +1182,16 @@ var layoutApplyCmd = &cobra.Command{
 		c := client.NewClient(socketPath, timeout)
 		defer c.Close()
 
-
-		// 1. Fetch server state ONCE
-		snap, err := gridServer.Fetch(ctx, c)
+		// 1. Fetch server state for the target space
+		var snap *gridServer.Snapshot
+		if spaceID != "" {
+			// Fetch snapshot specifically for the target space (gets correct windows)
+			snap, err = gridServer.FetchForSpace(ctx, c, spaceID)
+		} else {
+			snap, err = gridServer.Fetch(ctx, c)
+		}
 		if err != nil {
 			return fmt.Errorf("failed to fetch server state: %w", err)
-		}
-
-		// Override space ID if --space flag is provided
-		if spaceID != "" {
-			snap.SpaceID = spaceID
 		}
 
 		// 2. Reconcile local state with server (includes border sync)
@@ -1601,12 +1602,18 @@ func focusDirectionHelper(direction gridTypes.Direction, wrapAround bool, extend
 		WrapAround: wrapAround,
 		Extend:     extend,
 	}
+	previousFocusedID := snap.FocusedWindowID
 	windowID, err := gridFocus.MoveFocus(ctx, c, snap, cfg, runtimeState, direction, opts)
 	if err != nil {
 		return fmt.Errorf("failed to move focus: %w", err)
 	}
 
 	successColor.Printf("✓ Focused window: %d\n", windowID)
+
+	// Warn if focus didn't actually change (likely stale state)
+	if windowID == previousFocusedID && previousFocusedID != 0 {
+		warnColor.Printf("⚠ Focus unchanged - runtime state may be stale. Try: thegrid layout reapply\n")
+	}
 
 	// 4. Optionally warp mouse to focused window
 	if mouse && windowID != 0 {
