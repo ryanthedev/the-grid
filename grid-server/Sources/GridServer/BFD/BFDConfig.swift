@@ -107,12 +107,54 @@ struct BFDConfig: Codable {
         apps = try container.decodeIfPresent([String: [String: BFDAppHotkey]].self, forKey: .apps) ?? [:]
     }
 
-    /// Load config from file path
+    /// Load config from file path, with optional .local.yaml overlay
     static func load(from path: String) throws -> BFDConfig {
-        let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
-        let data = try Data(contentsOf: url)
+        let expandedPath = (path as NSString).expandingTildeInPath
+        let url = URL(fileURLWithPath: expandedPath)
+        let baseData = try Data(contentsOf: url)
+
+        // Parse base config as dictionary
+        guard var baseDict = try Yams.load(yaml: String(data: baseData, encoding: .utf8) ?? "") as? [String: Any] else {
+            // If it's not a dictionary, just decode directly
+            let decoder = YAMLDecoder()
+            return try decoder.decode(BFDConfig.self, from: baseData)
+        }
+
+        // Check for local override file
+        let pathNS = expandedPath as NSString
+        let dir = pathNS.deletingLastPathComponent
+        let filename = pathNS.lastPathComponent as NSString
+        let ext = filename.pathExtension
+        let name = filename.deletingPathExtension
+        let localPath = "\(dir)/\(name).local.\(ext)"
+
+        if FileManager.default.fileExists(atPath: localPath) {
+            let localData = try Data(contentsOf: URL(fileURLWithPath: localPath))
+            if let localDict = try Yams.load(yaml: String(data: localData, encoding: .utf8) ?? "") as? [String: Any] {
+                baseDict = deepMerge(baseDict, localDict)
+            }
+        }
+
+        // Re-encode merged dict and decode as BFDConfig
+        let mergedYaml = try Yams.dump(object: baseDict)
         let decoder = YAMLDecoder()
-        return try decoder.decode(BFDConfig.self, from: data)
+        return try decoder.decode(BFDConfig.self, from: mergedYaml)
+    }
+
+    /// Deep merge two dictionaries (override wins for conflicts)
+    private static func deepMerge(_ base: [String: Any], _ override: [String: Any]) -> [String: Any] {
+        var result = base
+        for (key, overrideValue) in override {
+            if let baseDict = result[key] as? [String: Any],
+               let overrideDict = overrideValue as? [String: Any] {
+                // Recursively merge nested dictionaries
+                result[key] = deepMerge(baseDict, overrideDict)
+            } else {
+                // Override wins for non-dict values
+                result[key] = overrideValue
+            }
+        }
+        return result
     }
 
     /// Default config file path
