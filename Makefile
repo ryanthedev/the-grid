@@ -1,4 +1,4 @@
-.PHONY: help build server cli test clean server-test cli-test server-clean cli-clean run-server install dist dev reset-accessibility setup-signing
+.PHONY: help build server cli test clean server-test cli-test server-clean cli-clean run-server install dist dev reset-accessibility setup-signing install-scripts
 
 # Version from VERSION file
 VERSION := $(shell cat VERSION)
@@ -213,6 +213,26 @@ install-dev: cli
 	@mkdir -p ~/.local/state/thegrid/bin
 	@cp grid-cli/bin/thegrid ~/.local/state/thegrid/bin/thegrid
 	@echo "✓ Installed dev CLI to ~/.local/state/thegrid/bin/thegrid"
+
+# Install utility scripts to ~/.local/bin
+install-scripts:
+	@mkdir -p ~/.local/bin
+	@ln -sf $(CURDIR)/scripts/bfd-shell ~/.local/bin/bfd-shell
+	@ln -sf $(CURDIR)/scripts/reapply-layouts.sh ~/.local/bin/thegrid-reapply-layouts
+	@ln -sf $(CURDIR)/scripts/reset-accessibility.sh ~/.local/bin/thegrid-reset-accessibility
+	@echo "✓ Installed scripts to ~/.local/bin"
+
+# Tail server logs (real-time streaming)
+tail-server:
+	@tail -f ~/.local/state/thegrid/thegrid-server.json | jq --unbuffered -c '{ev: .ev, data: .data}'
+
+# Tail CLI logs (real-time streaming)
+tail-cli:
+	@tail -f ~/.local/state/thegrid/thegrid-cli.json | jq --unbuffered -c '{ev: .ev, data: .data}'
+
+# Tail both logs
+tail:
+	@tail -f ~/.local/state/thegrid/*.json | jq --unbuffered -c '{ev: .ev, data: .data}'
 
 # Reset accessibility permissions (use when TCC gets confused)
 reset-accessibility:
