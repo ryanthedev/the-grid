@@ -266,6 +266,7 @@ func TestCalculateAllWindowPlacements(t *testing.T) {
 		8,   // baseSpacing
 		nil, // settingsPadding
 		nil, // settingsWindowSpacing
+		nil, // focusedIndices
 	)
 
 	if len(placements) != 3 {
@@ -320,6 +321,7 @@ func TestCalculateAllWindowPlacements_WithCellModes(t *testing.T) {
 		8,   // baseSpacing
 		nil, // settingsPadding
 		nil, // settingsWindowSpacing
+		nil, // focusedIndices
 	)
 
 	if len(placements) != 2 {
@@ -348,7 +350,7 @@ func TestCalculateAllWindowPlacements_WithCellModes(t *testing.T) {
 }
 
 func TestCalculateAllWindowPlacements_Nil(t *testing.T) {
-	placements := CalculateAllWindowPlacements(nil, nil, nil, nil, nil, types.StackVertical, 8, nil, nil)
+	placements := CalculateAllWindowPlacements(nil, nil, nil, nil, nil, types.StackVertical, 8, nil, nil, nil)
 	if placements != nil {
 		t.Errorf("expected nil for nil layout, got %v", placements)
 	}
@@ -376,6 +378,7 @@ func TestCalculateAllWindowPlacements_UnknownCell(t *testing.T) {
 		8,   // baseSpacing
 		nil, // settingsPadding
 		nil, // settingsWindowSpacing
+		nil, // focusedIndices
 	)
 
 	// Should skip unknown cells
