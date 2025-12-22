@@ -35,12 +35,10 @@ class BFDExecutor {
             let timeout = DispatchWorkItem {
                 if process.isRunning {
                     process.terminate()
-                    Task {
-                        await BFDLogger.shared.logError(
-                            "Command timed out after \(Int(timeoutSeconds))s",
-                            hotkey: hotkey
-                        )
-                    }
+                    BFDLogger.logError(
+                        "Command timed out after \(Int(timeoutSeconds))s",
+                        hotkey: hotkey
+                    )
                 }
             }
             DispatchQueue.global().asyncAfter(deadline: .now() + timeoutSeconds, execute: timeout)
@@ -55,24 +53,20 @@ class BFDExecutor {
 
             let durationMs = Int(Date().timeIntervalSince(startTime) * 1000)
 
-            Task {
-                await BFDLogger.shared.log(
-                    hotkey: hotkey,
-                    command: command,
-                    expanded: expanded,
-                    stdout: stdout.trimmingCharacters(in: .whitespacesAndNewlines),
-                    stderr: stderr.trimmingCharacters(in: .whitespacesAndNewlines),
-                    exitCode: process.terminationStatus,
-                    durationMs: durationMs
-                )
-            }
+            BFDLogger.log(
+                hotkey: hotkey,
+                command: command,
+                expanded: expanded,
+                stdout: stdout.trimmingCharacters(in: .whitespacesAndNewlines),
+                stderr: stderr.trimmingCharacters(in: .whitespacesAndNewlines),
+                exitCode: process.terminationStatus,
+                durationMs: durationMs
+            )
         } catch {
-            Task {
-                await BFDLogger.shared.logError(
-                    "Failed to execute: \(error.localizedDescription)",
-                    hotkey: hotkey
-                )
-            }
+            BFDLogger.logError(
+                "Failed to execute: \(error.localizedDescription)",
+                hotkey: hotkey
+            )
         }
     }
 
