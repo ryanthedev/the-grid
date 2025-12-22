@@ -47,6 +47,9 @@ class SimpleBorderManager {
     /// Currently active cell ID (cell containing focused window)
     private var activeCellID: String?
 
+    /// Whether active cell has multiple windows (tabbed mode - single border, retarget on focus change)
+    private var isActiveCellTabbed: Bool = false
+
     // MARK: - Border Management (Role-Based)
 
     /// Reentrancy guard - prevents concurrent border operations
@@ -140,6 +143,9 @@ class SimpleBorderManager {
             let oldCellID = activeCellID
             if let focused = focusedWindowID, let cellID = assignments[focused] {
                 activeCellID = cellID
+                // Update tabbed flag based on new assignments
+                let windowsInCell = assignments.filter { $0.value == cellID }.map { $0.key }
+                isActiveCellTabbed = windowsInCell.count > 1
             }
 
             // Only rebuild if assignments actually changed
@@ -486,6 +492,40 @@ class SimpleBorderManager {
         guard let newFocused = focusedWindowID else { return }
         let config = BorderConfigManager.shared
 
+        // For tabbed cells: retarget the existing active border (no demote/promote)
+        if isActiveCellTabbed {
+            if let border = activeBorder {
+                border.retarget(to: newFocused)
+                Task {
+                    await JSONLogger.shared.log("bdr.retarget_focus", data: [
+                        "prev": previousFocused ?? 0,
+                        "new": newFocused
+                    ])
+                }
+            } else {
+                // Edge case: no active border exists, create one
+                // First verify window is still in active cell
+                guard let cellID = activeCellID,
+                      let displayUUID = currentDisplayUUID,
+                      let assignments = cellAssignmentsPerDisplay[displayUUID],
+                      assignments[newFocused] == cellID else {
+                    Task {
+                        await JSONLogger.shared.log("err.bdr.invalid_tabbed", data: ["wid": newFocused])
+                    }
+                    return
+                }
+                if let border = createBorder(for: newFocused) {
+                    updateBorderStyle(border, style: config.activeStyle, isActive: true)
+                    activeBorder = border
+                    Task {
+                        await JSONLogger.shared.log("warn.bdr.missing_tabbed", data: ["wid": newFocused])
+                    }
+                }
+            }
+            return
+        }
+
+        // For non-tabbed cells: demote/promote as before
         // Step 1: Demote previous active border to inactive
         if let prevWindow = previousFocused, let border = activeBorder {
             updateBorderStyle(border, style: config.inactiveStyle)
@@ -547,11 +587,22 @@ class SimpleBorderManager {
         let windowsInCell = assignments.filter { $0.value == cellID }.map { $0.key }
         let config = BorderConfigManager.shared
 
-        // Create borders for each window
+        // Track if cell is tabbed (multiple windows stacked)
+        isActiveCellTabbed = windowsInCell.count > 1
+
+        // Create borders for windows in cell
+        // For tabbed cells: only create border for focused window (retarget on focus change)
+        // For non-tabbed cells: create borders for all windows (active + inactive)
         for windowID in windowsInCell {
+            let isFocused = (windowID == focusedWindowID)
+
+            // Skip inactive borders for tabbed cells
+            if isActiveCellTabbed && !isFocused {
+                continue
+            }
+
             guard let border = createBorder(for: windowID) else { continue }
 
-            let isFocused = (windowID == focusedWindowID)
             let style = isFocused ? config.activeStyle : config.inactiveStyle
             updateBorderStyle(border, style: style, isActive: isFocused)
 
@@ -574,7 +625,8 @@ class SimpleBorderManager {
                 "source": source,
                 "cell": cellID,
                 "count": windowsInCell.count,
-                "focused": focusedWindowID ?? 0
+                "focused": focusedWindowID ?? 0,
+                "tabbed": isActiveCellTabbed
             ])
         }
     }
