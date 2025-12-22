@@ -5,48 +5,64 @@ import (
 	"testing"
 )
 
-func TestInit(t *testing.T) {
-	Init()
-	if tracer == nil {
-		t.Fatal("tracer should not be nil after Init()")
-	}
+// mockSpan implements the Span interface for testing
+type mockSpan struct {
+	tid string
+	sid string
 }
 
-func TestTracer(t *testing.T) {
-	Init()
-	tr := Tracer()
-	if tr == nil {
-		t.Fatal("Tracer() should not return nil")
-	}
-}
+func (m *mockSpan) Tid() string { return m.tid }
+func (m *mockSpan) Sid() string { return m.sid }
 
-func TestGetTraceInfo(t *testing.T) {
-	Init()
+func TestGetTraceInfo_NoSpan(t *testing.T) {
+	// Clear any existing span
+	SetCurrentSpan(nil)
 	ctx := context.Background()
 
-	// Without span, should return empty strings
 	tid, sid := GetTraceInfo(ctx)
 	if tid != "" || sid != "" {
 		t.Errorf("Expected empty trace info without span, got tid=%s, sid=%s", tid, sid)
 	}
+}
 
-	// With span, should return valid IDs
-	ctx, span := Tracer().Start(ctx, "test-span")
-	defer span.End()
+func TestGetTraceInfo_WithSpan(t *testing.T) {
+	ctx := context.Background()
 
-	tid, sid = GetTraceInfo(ctx)
-	if tid == "" {
-		t.Error("Expected non-empty trace ID")
+	span := &mockSpan{
+		tid: "test-trace-id-1234567890abcdef",
+		sid: "test-span-12345",
 	}
-	if sid == "" {
-		t.Error("Expected non-empty span ID")
+	SetCurrentSpan(span)
+	defer SetCurrentSpan(nil)
+
+	tid, sid := GetTraceInfo(ctx)
+	if tid != "test-trace-id-1234567890abcdef" {
+		t.Errorf("Expected tid='test-trace-id-1234567890abcdef', got %s", tid)
+	}
+	if sid != "test-span-12345" {
+		t.Errorf("Expected sid='test-span-12345', got %s", sid)
+	}
+}
+
+func TestSetCurrentSpan(t *testing.T) {
+	span1 := &mockSpan{tid: "tid1", sid: "sid1"}
+	span2 := &mockSpan{tid: "tid2", sid: "sid2"}
+
+	SetCurrentSpan(span1)
+	tid, sid := GetTraceInfo(context.Background())
+	if tid != "tid1" || sid != "sid1" {
+		t.Errorf("Expected tid1/sid1, got %s/%s", tid, sid)
 	}
 
-	// Verify IDs are hex strings of correct length
-	if len(tid) != 32 {
-		t.Errorf("Expected trace ID length 32, got %d", len(tid))
+	SetCurrentSpan(span2)
+	tid, sid = GetTraceInfo(context.Background())
+	if tid != "tid2" || sid != "sid2" {
+		t.Errorf("Expected tid2/sid2, got %s/%s", tid, sid)
 	}
-	if len(sid) != 16 {
-		t.Errorf("Expected span ID length 16, got %d", len(sid))
+
+	SetCurrentSpan(nil)
+	tid, sid = GetTraceInfo(context.Background())
+	if tid != "" || sid != "" {
+		t.Errorf("Expected empty after nil, got %s/%s", tid, sid)
 	}
 }

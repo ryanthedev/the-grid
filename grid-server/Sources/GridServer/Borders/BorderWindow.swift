@@ -434,7 +434,9 @@ class BorderWindow {
     /// Re-target this border to track a different window
     /// Used for tabbed cells where we keep one border and switch targets on focus change
     func retarget(to newTargetID: UInt32) {
-        guard windowID != 0 else { return }
+        // Capture windowID upfront to avoid race with concurrent destroy()
+        let currentWindowID = windowID
+        guard currentWindowID != 0 else { return }
         guard newTargetID != targetWindowID else { return }
 
         let oldTarget = targetWindowID
@@ -445,7 +447,7 @@ class BorderWindow {
         guard SLSGetWindowBounds(connectionID, newTargetID, &frame) == .success else {
             Task {
                 await JSONLogger.shared.log("err.bdr.retarget", data: [
-                    "wid": windowID,
+                    "wid": currentWindowID,
                     "oldTarget": oldTarget,
                     "newTarget": newTargetID,
                     "reason": "no_bounds"
@@ -462,18 +464,14 @@ class BorderWindow {
 
         // Re-order below new target
         if isVisible {
-            _ = SLSOrderWindow(connectionID, windowID, -1, newTargetID)
+            _ = SLSOrderWindow(connectionID, currentWindowID, -1, newTargetID)
         }
 
-        // Capture values before async task to avoid race conditions
-        let logWid = windowID
-        let logOldTarget = oldTarget
-        let logNewTarget = newTargetID
         Task {
             await JSONLogger.shared.log("bdr.retarget", data: [
-                "wid": logWid,
-                "oldTarget": logOldTarget,
-                "newTarget": logNewTarget
+                "wid": currentWindowID,
+                "oldTarget": oldTarget,
+                "newTarget": newTargetID
             ])
         }
     }

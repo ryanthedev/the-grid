@@ -716,9 +716,10 @@ class SimpleBorderManager {
             return nil
         }
 
-        // SAFETY: AXUIElementCopyAttributeValue returns AXUIElement for kAXFocusedWindowAttribute
-        // Force cast is safe after success check; AXUIElement is a CF type so as? always succeeds
-        let axElement = ref as! AXUIElement
+        guard let axElement = ref as? AXUIElement else {
+            Task { await JSONLogger.shared.log("err.ax.cast", data: ["pid": pid]) }
+            return nil
+        }
 
         var windowID: UInt32 = 0
         let axResult = _AXUIElementGetWindow(axElement, &windowID)

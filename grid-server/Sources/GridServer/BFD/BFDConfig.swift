@@ -116,6 +116,7 @@ struct BFDConfig: Codable {
         // Parse base config as dictionary
         guard var baseDict = try Yams.load(yaml: String(data: baseData, encoding: .utf8) ?? "") as? [String: Any] else {
             // If it's not a dictionary, just decode directly
+            Task { await JSONLogger.shared.log("warn.bfd.config", msg: "base config not dict, local overrides ignored") }
             let decoder = YAMLDecoder()
             return try decoder.decode(BFDConfig.self, from: baseData)
         }
