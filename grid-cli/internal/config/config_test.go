@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/yourusername/grid-cli/internal/types"
@@ -521,5 +523,95 @@ layouts:
 	// Should have sensible defaults
 	if !containsString(exclusions.Roles, "AXHelpTag") {
 		t.Error("expected default roles to include AXHelpTag")
+	}
+}
+
+func TestLoadLayeredConfig(t *testing.T) {
+	// Create temp directory
+	tmpDir := t.TempDir()
+
+	// Create base config
+	baseConfig := `
+settings:
+  baseSpacing: 8
+  defaultStackMode: vertical
+layouts:
+  - id: main
+    name: Main Layout
+    grid:
+      columns: ["1fr", "1fr"]
+      rows: ["1fr"]
+    cells:
+      - id: left
+        column: "1/2"
+        row: "1/2"
+      - id: right
+        column: "2/3"
+        row: "1/2"
+`
+	basePath := filepath.Join(tmpDir, "config.yaml")
+	if err := os.WriteFile(basePath, []byte(baseConfig), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create local override
+	localConfig := `
+settings:
+  baseSpacing: 16
+`
+	localPath := filepath.Join(tmpDir, "config.local.yaml")
+	if err := os.WriteFile(localPath, []byte(localConfig), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Load config
+	cfg, err := LoadConfig(basePath)
+	if err != nil {
+		t.Fatalf("LoadConfig failed: %v", err)
+	}
+
+	// Verify override was applied
+	if cfg.Settings.BaseSpacing != 16 {
+		t.Errorf("Expected BaseSpacing=16, got %v", cfg.Settings.BaseSpacing)
+	}
+
+	// Verify base values preserved
+	if len(cfg.Layouts) != 1 {
+		t.Errorf("Expected 1 layout, got %d", len(cfg.Layouts))
+	}
+}
+
+func TestLoadConfigWithoutLocal(t *testing.T) {
+	// Create temp directory
+	tmpDir := t.TempDir()
+
+	// Create base config only (no local)
+	baseConfig := `
+settings:
+  baseSpacing: 8
+layouts:
+  - id: main
+    name: Main Layout
+    grid:
+      columns: ["1fr"]
+      rows: ["1fr"]
+    cells:
+      - id: full
+        column: "1/2"
+        row: "1/2"
+`
+	basePath := filepath.Join(tmpDir, "config.yaml")
+	if err := os.WriteFile(basePath, []byte(baseConfig), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Load config - should work without local file
+	cfg, err := LoadConfig(basePath)
+	if err != nil {
+		t.Fatalf("LoadConfig failed: %v", err)
+	}
+
+	if cfg.Settings.BaseSpacing != 8 {
+		t.Errorf("Expected BaseSpacing=8, got %v", cfg.Settings.BaseSpacing)
 	}
 }
