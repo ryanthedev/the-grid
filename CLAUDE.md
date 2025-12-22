@@ -91,6 +91,23 @@ Output format:
 - **Config**: `~/.config/thegrid/config.yaml`
 - **Server socket**: `/tmp/grid-server.sock`
 
+## Config Layering
+
+Both CLI and BFD configs support machine-specific overrides via `.local.yaml` files:
+
+- `~/.config/thegrid/config.yaml` - Base CLI config (committed)
+- `~/.config/thegrid/config.local.yaml` - Local overrides (gitignored)
+- `~/.config/thegrid/bfd.yaml` - Base BFD hotkey config (committed)
+- `~/.config/thegrid/bfd.local.yaml` - Local overrides (gitignored)
+
+Local files are deep-merged over base config. Only include fields you want to override:
+
+```yaml
+# config.local.yaml - override just the spacing for this machine
+settings:
+  baseSpacing: 12
+```
+
 ## Documentation Research
 - ALWAYS search online for API docs, library usage examples
 - Run `--help`, `man`, or equivalent for CLI tools before using
