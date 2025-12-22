@@ -2415,6 +2415,64 @@ var cellSendCmd = &cobra.Command{
 	},
 }
 
+// cellModeCmd sets or cycles the stack mode for the focused cell
+var cellModeCmd = &cobra.Command{
+	Use:   "mode [mode]",
+	Short: "Set or cycle the stack mode for focused cell",
+	Long: `Set or cycle the stack mode for the currently focused cell.
+
+Without arguments, cycles through: vertical → horizontal → tabs → vertical
+With an argument, sets the mode directly.
+
+Valid modes: vertical, horizontal, tabs`,
+	Args: cobra.MaximumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx := context.Background()
+
+		var targetMode gridTypes.StackMode
+		if len(args) > 0 {
+			mode, err := gridCell.ParseStackMode(args[0])
+			if err != nil {
+				return err
+			}
+			targetMode = mode
+		}
+
+		cfg, err := gridConfig.LoadConfig("")
+		if err != nil {
+			return fmt.Errorf("failed to load config: %w", err)
+		}
+
+		runtimeState, err := gridState.LoadState()
+		if err != nil {
+			return fmt.Errorf("failed to load state: %w", err)
+		}
+
+		c := client.NewClient(socketPath, timeout)
+		defer c.Close()
+
+		// 1. Fetch server state
+		snap, err := gridServer.Fetch(ctx, c)
+		if err != nil {
+			return fmt.Errorf("failed to fetch server state: %w", err)
+		}
+
+		// 2. Reconcile local state with server
+		if err := gridReconcile.Sync(ctx, c, snap, runtimeState, cfg); err != nil {
+			return fmt.Errorf("failed to reconcile state: %w", err)
+		}
+
+		// 3. Set mode
+		cellID, newMode, err := gridCell.SetMode(ctx, c, snap, cfg, runtimeState, targetMode)
+		if err != nil {
+			return fmt.Errorf("failed to set mode: %w", err)
+		}
+
+		successColor.Printf("✓ Cell %q mode: %s\n", cellID, newMode)
+		return nil
+	},
+}
+
 // Helper function for formatting track sizes
 func formatTrackSizes(tracks []gridTypes.TrackSize) string {
 	var parts []string
@@ -2683,6 +2741,7 @@ func init() {
 	// Add the-grid cell commands
 	rootCmd.AddCommand(cellCmd)
 	cellCmd.AddCommand(cellSendCmd)
+	cellCmd.AddCommand(cellModeCmd)
 
 	// Add show subcommands
 	showCmd.AddCommand(showLayoutCmd)
