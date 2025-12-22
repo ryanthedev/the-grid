@@ -54,7 +54,7 @@ class StateManager {
 
     // MARK: - Public Interface
 
-    func start(completion: (() -> Void)? = nil) {
+    func start() {
         let span = CurrentSpan.current
         queue.async { [span] in
             Task {
@@ -74,11 +74,6 @@ class StateManager {
 
                     // Start periodic polling to catch windows that events miss
                     self.startPolling(interval: 3.0)
-
-                    // Signal that initial state is ready
-                    DispatchQueue.main.async {
-                        completion?()
-                    }
                 }
             }
         }
@@ -1129,16 +1124,6 @@ class StateManager {
                     // Auto-focus the new space's last focused window
                     if let spaceID = newSpaceID {
                         self.restoreFocusForSpace(spaceID)
-                    }
-
-                    // Auto-apply layout if space has none
-                    if let spaceID = newSpaceID,
-                       let spaceState = self.state.spaces[String(spaceID)],
-                       spaceState.type == "user" {
-                        AutoLayoutManager.shared.handleSpaceChange(
-                            spaceID: spaceID,
-                            spaceType: spaceState.type
-                        )
                     }
 
                     // Note: Border system handles space changes via cell assignments from CLI
