@@ -20,7 +20,7 @@ struct GridServerCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "grid-server",
         abstract: "Unix domain socket server for macOS window management",
-        version: "0.1.0"
+        version: "\(GridServerVersion) (\(String(GridServerCommit.prefix(7))))"
     )
 
     @Option(name: .shortAndLong, help: "Path to the Unix domain socket")
@@ -43,7 +43,7 @@ struct GridServerCommand: ParsableCommand {
         Tracing.initialize()
 
         // Log server start
-        jlog("srv.start", data: ["ver": "0.1.0", "socket": socketPath])
+        jlog("srv.start", data: ["ver": GridServerVersion, "commit": GridServerCommit, "socket": socketPath])
 
         // Check for Accessibility permission
         if !PermissionChecker.checkAccessibilityPermission() {

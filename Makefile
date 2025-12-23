@@ -2,6 +2,7 @@
 
 # Version from VERSION file
 VERSION := $(shell cat VERSION)
+COMMIT  := $(shell git rev-parse HEAD 2>/dev/null || echo "unknown")
 
 # Code signing identity for development builds
 # Create this certificate once in Keychain Access:
@@ -22,12 +23,18 @@ all: build
 build: server cli
 	@echo "✓ Built all components"
 
+# Generate Version.swift with build-time version info
+generate-version:
+	@echo "// Auto-generated - do not edit" > grid-server/Sources/GridServer/Version.swift
+	@echo "let GridServerVersion = \"$(VERSION)\"" >> grid-server/Sources/GridServer/Version.swift
+	@echo "let GridServerCommit = \"$(COMMIT)\"" >> grid-server/Sources/GridServer/Version.swift
+
 # Server targets
-server:
+server: generate-version
 	@echo "Building grid-server..."
 	@cd grid-server && swift build
 
-server-release:
+server-release: generate-version
 	@echo "Building grid-server (release)..."
 	@cd grid-server && swift build -c release
 
@@ -42,7 +49,7 @@ server-clean:
 # CLI targets
 cli:
 	@echo "Building grid-cli..."
-	@cd grid-cli && $(MAKE) build
+	@cd grid-cli && $(MAKE) build VERSION=$(VERSION) COMMIT=$(COMMIT)
 
 cli-test:
 	@echo "Running grid-cli tests..."
