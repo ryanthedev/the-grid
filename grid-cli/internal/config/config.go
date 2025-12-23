@@ -5,107 +5,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
-	"github.com/spf13/viper"
 	"gopkg.in/yaml.v3"
 
-	"github.com/yourusername/grid-cli/internal/types"
+	"github.com/ryanthedev/grid-cli/internal/types"
 )
 
 const (
 	DefaultConfigDir  = ".config/thegrid"
 	DefaultConfigFile = "config.yaml"
 )
-
-// LoadConfig loads configuration from the specified path or default location
-// If path is empty, uses ~/.config/thegrid/config.yaml
-// Supports both .yaml and .json extensions
-// Automatically merges config.local.yaml if it exists (for machine-specific overrides)
-func LoadConfig(path string) (*Config, error) {
-	if path == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return nil, fmt.Errorf("cannot determine home directory: %w", err)
-		}
-		// Try YAML first, then JSON
-		yamlPath := filepath.Join(home, DefaultConfigDir, "config.yaml")
-		jsonPath := filepath.Join(home, DefaultConfigDir, "config.json")
-
-		if _, err := os.Stat(yamlPath); err == nil {
-			path = yamlPath
-		} else if _, err := os.Stat(jsonPath); err == nil {
-			path = jsonPath
-		} else {
-			return nil, fmt.Errorf("no config file found at %s or %s", yamlPath, jsonPath)
-		}
-	}
-
-	ext := strings.ToLower(filepath.Ext(path))
-
-	// For YAML files, support layered config via Viper
-	if ext == ".yaml" || ext == ".yml" {
-		return loadLayeredConfig(path)
-	}
-
-	// JSON files: load directly (no layering for now)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read config file: %w", err)
-	}
-
-	var cfg Config
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("failed to parse JSON config: %w", err)
-	}
-
-	if err := cfg.Validate(); err != nil {
-		return nil, fmt.Errorf("invalid config: %w", err)
-	}
-
-	return &cfg, nil
-}
-
-// loadLayeredConfig loads base config and merges .local.yaml overlay if present using Viper
-func loadLayeredConfig(basePath string) (*Config, error) {
-	v := viper.New()
-
-	// Configure viper for the base config
-	dir := filepath.Dir(basePath)
-	base := filepath.Base(basePath)
-	ext := filepath.Ext(base)
-	name := strings.TrimSuffix(base, ext)
-
-	v.SetConfigName(name)
-	v.SetConfigType(strings.TrimPrefix(ext, "."))
-	v.AddConfigPath(dir)
-
-	// Load base config
-	if err := v.ReadInConfig(); err != nil {
-		return nil, fmt.Errorf("failed to load base config: %w", err)
-	}
-
-	// Check for and merge local override file
-	localPath := filepath.Join(dir, name+".local"+ext)
-	if _, err := os.Stat(localPath); err == nil {
-		v.SetConfigFile(localPath)
-		if err := v.MergeInConfig(); err != nil {
-			return nil, fmt.Errorf("failed to merge local config %s: %w", localPath, err)
-		}
-	}
-
-	// Unmarshal to Config struct
-	var cfg Config
-	if err := v.Unmarshal(&cfg); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
-	}
-
-	if err := cfg.Validate(); err != nil {
-		return nil, fmt.Errorf("invalid config: %w", err)
-	}
-
-	return &cfg, nil
-}
 
 // LoadConfigFromBytes loads configuration from raw bytes
 // format should be "yaml" or "json"

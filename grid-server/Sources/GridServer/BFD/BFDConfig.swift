@@ -1,6 +1,11 @@
 import Foundation
 import Yams
 
+enum BFDError: Error {
+    case noConfigFound(searchedPaths: [String])
+    case parseError(path: String, underlying: Error)
+}
+
 /// Global defaults for hotkey behavior
 struct BFDDefaults: Codable {
     var repeat_: Bool = true
@@ -107,55 +112,92 @@ struct BFDConfig: Codable {
         apps = try container.decodeIfPresent([String: [String: BFDAppHotkey]].self, forKey: .apps) ?? [:]
     }
 
-    /// Load config from file path, with optional .local.yaml overlay
+    private static func builtinDefaults() -> [String: Any] {
+        return [
+            "shell": "/bin/zsh",
+            "defaults": [
+                "repeat": false,
+                "rate_limit": 50
+            ],
+            "vars": [:],
+            "blacklist": [],
+            "hotkeys": [:],
+            "apps": [:]
+        ]
+    }
+
+    /// Load config using XDG resolution with layered merging.
+    /// This is the primary entry point for normal operation.
+    static func load() async throws -> BFDConfig {
+        let files = await XDG.findConfigFiles(app: "thegrid", filename: "bfd.yaml")
+
+        await JSONLogger.shared.log("cfg.resolve", data: [
+            "xdg_config_home": XDG.configHome,
+            "xdg_config_dirs": XDG.configDirs,
+            "files_found": files
+        ])
+
+        var merged: [String: Any] = builtinDefaults()
+
+        for file in files {
+            let data: Data
+            do {
+                data = try Data(contentsOf: URL(fileURLWithPath: file))
+            } catch {
+                throw BFDError.parseError(path: file, underlying: error)
+            }
+
+            let dict: [String: Any]
+            do {
+                guard let parsed = try Yams.load(yaml: String(data: data, encoding: .utf8) ?? "") as? [String: Any] else {
+                    continue
+                }
+                dict = parsed
+            } catch {
+                throw BFDError.parseError(path: file, underlying: error)
+            }
+
+            merged = deepMerge(merged, dict)
+            await JSONLogger.shared.log("cfg.merge", data: ["path": file])
+        }
+
+        let localPath = "\(XDG.configHome)/thegrid/bfd.local.yaml"
+        if FileManager.default.fileExists(atPath: localPath) {
+            let localData: Data
+            do {
+                localData = try Data(contentsOf: URL(fileURLWithPath: localPath))
+            } catch {
+                throw BFDError.parseError(path: localPath, underlying: error)
+            }
+
+            do {
+                if let localDict = try Yams.load(yaml: String(data: localData, encoding: .utf8) ?? "") as? [String: Any] {
+                    merged = deepMerge(merged, localDict)
+                    await JSONLogger.shared.log("cfg.merge", data: ["path": localPath, "layer": "local"])
+                }
+            } catch {
+                throw BFDError.parseError(path: localPath, underlying: error)
+            }
+        }
+
+        if files.isEmpty && !FileManager.default.fileExists(atPath: localPath) {
+            var searched = XDG.configDirs.map { "\($0)/thegrid/bfd.yaml" }
+            searched.append("\(XDG.configHome)/thegrid/bfd.yaml")
+            throw BFDError.noConfigFound(searchedPaths: searched)
+        }
+
+        let yaml = try Yams.dump(object: merged)
+        return try YAMLDecoder().decode(BFDConfig.self, from: yaml)
+    }
+
+    /// Load config from explicit path (no XDG resolution, no layering).
+    /// Use this when user provides --config flag.
     static func load(from path: String) throws -> BFDConfig {
         let expandedPath = (path as NSString).expandingTildeInPath
         let url = URL(fileURLWithPath: expandedPath)
-        let baseData = try Data(contentsOf: url)
-
-        // Parse base config as dictionary
-        guard var baseDict = try Yams.load(yaml: String(data: baseData, encoding: .utf8) ?? "") as? [String: Any] else {
-            // If it's not a dictionary, just decode directly
-            Task { await JSONLogger.shared.log("warn.bfd.config", msg: "base config not dict, local overrides ignored") }
-            let decoder = YAMLDecoder()
-            return try decoder.decode(BFDConfig.self, from: baseData)
-        }
-
-        // Check for local override file
-        let pathNS = expandedPath as NSString
-        let dir = pathNS.deletingLastPathComponent
-        let filename = pathNS.lastPathComponent as NSString
-        let ext = filename.pathExtension
-        let name = filename.deletingPathExtension
-        let localPath = "\(dir)/\(name).local.\(ext)"
-
-        if FileManager.default.fileExists(atPath: localPath) {
-            let localData = try Data(contentsOf: URL(fileURLWithPath: localPath))
-            if let localDict = try Yams.load(yaml: String(data: localData, encoding: .utf8) ?? "") as? [String: Any] {
-                baseDict = deepMerge(baseDict, localDict)
-            }
-        }
-
-        // Re-encode merged dict and decode as BFDConfig
-        let mergedYaml = try Yams.dump(object: baseDict)
+        let data = try Data(contentsOf: url)
         let decoder = YAMLDecoder()
-        return try decoder.decode(BFDConfig.self, from: mergedYaml)
-    }
-
-    /// Deep merge two dictionaries (override wins for conflicts)
-    private static func deepMerge(_ base: [String: Any], _ override: [String: Any]) -> [String: Any] {
-        var result = base
-        for (key, overrideValue) in override {
-            if let baseDict = result[key] as? [String: Any],
-               let overrideDict = overrideValue as? [String: Any] {
-                // Recursively merge nested dictionaries
-                result[key] = deepMerge(baseDict, overrideDict)
-            } else {
-                // Override wins for non-dict values
-                result[key] = overrideValue
-            }
-        }
-        return result
+        return try decoder.decode(BFDConfig.self, from: data)
     }
 
     /// Default config file path

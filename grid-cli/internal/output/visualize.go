@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/fatih/color"
-	"github.com/yourusername/grid-cli/internal/models"
+	"github.com/ryanthedev/grid-cli/internal/models"
 	"golang.org/x/sys/unix"
 )
 

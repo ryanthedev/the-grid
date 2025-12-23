@@ -1,4 +1,4 @@
-module github.com/yourusername/grid-cli
+module github.com/ryanthedev/grid-cli
 
 go 1.24.0
 

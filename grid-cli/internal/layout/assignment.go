@@ -3,9 +3,9 @@ package layout
 import (
 	"sort"
 
-	"github.com/yourusername/grid-cli/internal/config"
-	"github.com/yourusername/grid-cli/internal/jsonlog"
-	"github.com/yourusername/grid-cli/internal/types"
+	"github.com/ryanthedev/grid-cli/internal/config"
+	"github.com/ryanthedev/grid-cli/internal/jsonlog"
+	"github.com/ryanthedev/grid-cli/internal/types"
 )
 
 // Window represents a window from the server.

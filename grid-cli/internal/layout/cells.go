@@ -3,7 +3,7 @@ package layout
 import (
 	"sort"
 
-	"github.com/yourusername/grid-cli/internal/types"
+	"github.com/ryanthedev/grid-cli/internal/types"
 )
 
 // CalculateCellBounds computes the pixel rect for a cell.

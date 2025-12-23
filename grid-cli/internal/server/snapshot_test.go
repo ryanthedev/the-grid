@@ -3,7 +3,7 @@ package server
 import (
 	"testing"
 
-	"github.com/yourusername/grid-cli/internal/config"
+	"github.com/ryanthedev/grid-cli/internal/config"
 )
 
 func TestParseWindowWithRoleSubrole(t *testing.T) {

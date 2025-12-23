@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/yourusername/grid-cli/internal/config"
+	"github.com/ryanthedev/grid-cli/internal/config"
 )
 
 func TestSendBorderConfig_NilConfig(t *testing.T) {

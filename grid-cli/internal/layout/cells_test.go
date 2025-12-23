@@ -3,7 +3,7 @@ package layout
 import (
 	"testing"
 
-	"github.com/yourusername/grid-cli/internal/types"
+	"github.com/ryanthedev/grid-cli/internal/types"
 )
 
 func TestCalculateCellBounds_SingleCell(t *testing.T) {

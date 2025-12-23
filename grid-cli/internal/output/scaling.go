@@ -3,7 +3,7 @@ package output
 import (
 	"math"
 
-	"github.com/yourusername/grid-cli/internal/models"
+	"github.com/ryanthedev/grid-cli/internal/models"
 )
 
 // ScalingContext handles coordinate transformation from pixel space to terminal character space

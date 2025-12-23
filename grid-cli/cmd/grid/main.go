@@ -12,21 +12,23 @@ import (
 
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
-	"github.com/yourusername/grid-cli/internal/client"
-	gridCell "github.com/yourusername/grid-cli/internal/cell"
-	gridConfig "github.com/yourusername/grid-cli/internal/config"
-	gridFocus "github.com/yourusername/grid-cli/internal/focus"
-	"github.com/yourusername/grid-cli/internal/jsonlog"
-	gridLayout "github.com/yourusername/grid-cli/internal/layout"
-	"github.com/yourusername/grid-cli/internal/models"
-	gridMouse "github.com/yourusername/grid-cli/internal/mouse"
-	"github.com/yourusername/grid-cli/internal/output"
-	gridReconcile "github.com/yourusername/grid-cli/internal/reconcile"
-	gridServer "github.com/yourusername/grid-cli/internal/server"
-	gridState "github.com/yourusername/grid-cli/internal/state"
-	"github.com/yourusername/grid-cli/internal/tracing"
-	gridTypes "github.com/yourusername/grid-cli/internal/types"
-	gridWindow "github.com/yourusername/grid-cli/internal/window"
+	"github.com/ryanthedev/grid-cli/internal/client"
+	gridCell "github.com/ryanthedev/grid-cli/internal/cell"
+	gridConfig "github.com/ryanthedev/grid-cli/internal/config"
+	gridFocus "github.com/ryanthedev/grid-cli/internal/focus"
+	"github.com/ryanthedev/grid-cli/internal/jsonlog"
+	gridLayout "github.com/ryanthedev/grid-cli/internal/layout"
+	"github.com/ryanthedev/grid-cli/internal/models"
+	gridMouse "github.com/ryanthedev/grid-cli/internal/mouse"
+	"github.com/ryanthedev/grid-cli/internal/output"
+	gridReconcile "github.com/ryanthedev/grid-cli/internal/reconcile"
+	gridServer "github.com/ryanthedev/grid-cli/internal/server"
+	gridState "github.com/ryanthedev/grid-cli/internal/state"
+	"github.com/ryanthedev/grid-cli/internal/tracing"
+	gridTypes "github.com/ryanthedev/grid-cli/internal/types"
+	gridWindow "github.com/ryanthedev/grid-cli/internal/window"
+	"github.com/ryanthedev/grid-cli/internal/xdg"
+	"gopkg.in/yaml.v3"
 )
 
 var (
@@ -1374,6 +1376,34 @@ var gridConfigCmd = &cobra.Command{
 	Long:  `Commands for showing and validating grid configuration.`,
 }
 
+// configSourcesCmd shows which config files would be loaded
+var configSourcesCmd = &cobra.Command{
+	Use:   "sources",
+	Short: "Show which config files would be loaded",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		configHome := xdg.ConfigHome()
+		configDirs := xdg.ConfigDirs()
+
+		fmt.Printf("XDG_CONFIG_HOME: %s\n", configHome)
+		if len(configDirs) > 0 {
+			fmt.Printf("XDG_CONFIG_DIRS: %s\n", strings.Join(configDirs, ":"))
+		}
+		fmt.Println()
+		fmt.Println("Config sources (in merge order):")
+
+		sources := gridConfig.GetConfigSources()
+		count := 1
+		for _, src := range sources {
+			if src.Exists {
+				fmt.Printf("  %d. %s (%s)\n", count, src.Path, src.Type)
+				count++
+			}
+		}
+
+		return nil
+	},
+}
+
 // configShowCmd shows current config
 var configShowCmd = &cobra.Command{
 	Use:   "show",
@@ -1384,7 +1414,7 @@ var configShowCmd = &cobra.Command{
 			return fmt.Errorf("failed to load config: %w", err)
 		}
 
-		return printJSON(cfg)
+		return printYAML(cfg)
 	},
 }
 
@@ -1408,10 +1438,21 @@ var configValidateCmd = &cobra.Command{
 			return fmt.Errorf("validation failed: %w", err)
 		}
 
-		successColor.Println("✓ Configuration is valid")
-		fmt.Printf("  Layouts: %d\n", len(cfg.Layouts))
-		fmt.Printf("  Spaces: %d\n", len(cfg.Spaces))
-		fmt.Printf("  App Rules: %d\n", len(cfg.AppRules))
+		if path == "" {
+			sources := gridConfig.GetConfigSources()
+			numExisting := 0
+			for _, src := range sources {
+				if src.Exists {
+					numExisting++
+				}
+			}
+			fmt.Printf("Config valid (%d sources merged)\n", numExisting)
+		} else {
+			successColor.Println("✓ Configuration is valid")
+			fmt.Printf("  Layouts: %d\n", len(cfg.Layouts))
+			fmt.Printf("  Spaces: %d\n", len(cfg.Spaces))
+			fmt.Printf("  App Rules: %d\n", len(cfg.AppRules))
+		}
 
 		return nil
 	},
@@ -2684,6 +2725,7 @@ func init() {
 
 	// Add the-grid config commands
 	rootCmd.AddCommand(gridConfigCmd)
+	gridConfigCmd.AddCommand(configSourcesCmd)
 	gridConfigCmd.AddCommand(configShowCmd)
 	gridConfigCmd.AddCommand(configValidateCmd)
 	gridConfigCmd.AddCommand(configInitCmd)
@@ -2840,6 +2882,13 @@ func main() {
 func printJSON(data interface{}) error {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
+	return enc.Encode(data)
+}
+
+func printYAML(data interface{}) error {
+	enc := yaml.NewEncoder(os.Stdout)
+	enc.SetIndent(2)
+	defer enc.Close()
 	return enc.Encode(data)
 }
 

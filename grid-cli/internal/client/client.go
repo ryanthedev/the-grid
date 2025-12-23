@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/yourusername/grid-cli/internal/models"
-	"github.com/yourusername/grid-cli/internal/tracing"
+	"github.com/ryanthedev/grid-cli/internal/models"
+	"github.com/ryanthedev/grid-cli/internal/tracing"
 )
 
 const (

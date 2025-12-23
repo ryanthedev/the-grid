@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/yourusername/grid-cli/internal/types"
+	"github.com/ryanthedev/grid-cli/internal/types"
 )
 
 func TestParseTrackSize(t *testing.T) {
@@ -564,15 +564,15 @@ settings:
 		t.Fatal(err)
 	}
 
-	// Load config
+	// Load config with explicit path - should NOT apply local layering
 	cfg, err := LoadConfig(basePath)
 	if err != nil {
 		t.Fatalf("LoadConfig failed: %v", err)
 	}
 
-	// Verify override was applied
-	if cfg.Settings.BaseSpacing != 16 {
-		t.Errorf("Expected BaseSpacing=16, got %v", cfg.Settings.BaseSpacing)
+	// With explicit path, local override is NOT applied
+	if cfg.Settings.BaseSpacing != 8 {
+		t.Errorf("Expected BaseSpacing=8 (no layering with explicit path), got %v", cfg.Settings.BaseSpacing)
 	}
 
 	// Verify base values preserved
