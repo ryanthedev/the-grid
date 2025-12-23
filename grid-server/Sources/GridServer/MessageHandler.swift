@@ -103,7 +103,8 @@ class MessageHandler {
         register(method: "getServerInfo") { request, completion in
             let info: [String: Any] = [
                 "name": "GridServer",
-                "version": "0.1.0",
+                "version": GridServerVersion,
+                "commit": GridServerCommit,
                 "platform": "macOS",
                 "capabilities": [
                     "spaces": true,
