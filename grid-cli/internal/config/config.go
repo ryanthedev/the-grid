@@ -335,6 +335,19 @@ func (c *Config) GetSettingsWindowSpacing() (*types.PaddingValue, error) {
 	return &pv, nil
 }
 
+// GetTabIndicatorInset returns the tab indicator inset as a PaddingValue.
+// Returns nil if not configured (falls back to baseSpacing).
+func (c *Config) GetTabIndicatorInset() *types.PaddingValue {
+	if c.Settings.TabIndicatorInset == nil {
+		return nil
+	}
+	pv, err := parseSinglePaddingValue(c.Settings.TabIndicatorInset)
+	if err != nil {
+		return nil
+	}
+	return &pv
+}
+
 // DefaultWindowExclusions returns sensible defaults for window exclusion.
 // These filter out transient windows that shouldn't be tiled.
 var DefaultWindowExclusions = WindowExclusion{
