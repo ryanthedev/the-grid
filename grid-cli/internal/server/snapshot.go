@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/yourusername/grid-cli/internal/client"
-	"github.com/yourusername/grid-cli/internal/config"
-	"github.com/yourusername/grid-cli/internal/types"
+	"github.com/ryanthedev/grid-cli/internal/client"
+	"github.com/ryanthedev/grid-cli/internal/config"
+	"github.com/ryanthedev/grid-cli/internal/types"
 )
 
 // DisplayInfo contains display metadata for cross-monitor navigation

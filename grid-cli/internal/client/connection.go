@@ -8,7 +8,7 @@ import (
 	"net"
 	"time"
 
-	"github.com/yourusername/grid-cli/internal/models"
+	"github.com/ryanthedev/grid-cli/internal/models"
 )
 
 // Connection manages the Unix domain socket connection to GridServer

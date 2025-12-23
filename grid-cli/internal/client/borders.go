@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/yourusername/grid-cli/internal/config"
+	"github.com/ryanthedev/grid-cli/internal/config"
 )
 
 // SendBorderConfig sends border configuration to the server

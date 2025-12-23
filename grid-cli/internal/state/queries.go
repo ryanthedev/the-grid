@@ -1,6 +1,6 @@
 package state
 
-import "github.com/yourusername/grid-cli/internal/types"
+import "github.com/ryanthedev/grid-cli/internal/types"
 
 // GetAllWindowIDs returns all window IDs across all spaces
 func (rs *RuntimeState) GetAllWindowIDs() []uint32 {

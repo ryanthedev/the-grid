@@ -3,8 +3,8 @@ package layout
 import (
 	"testing"
 
-	"github.com/yourusername/grid-cli/internal/config"
-	"github.com/yourusername/grid-cli/internal/types"
+	"github.com/ryanthedev/grid-cli/internal/config"
+	"github.com/ryanthedev/grid-cli/internal/types"
 )
 
 func TestAssignAutoFlow(t *testing.T) {

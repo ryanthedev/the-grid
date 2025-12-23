@@ -3,7 +3,7 @@ package layout
 import (
 	"testing"
 
-	"github.com/yourusername/grid-cli/internal/types"
+	"github.com/ryanthedev/grid-cli/internal/types"
 )
 
 func TestCalculateWindowBounds_Vertical(t *testing.T) {

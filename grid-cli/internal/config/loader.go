@@ -172,3 +172,59 @@ func formatSearchedDirs(dirs []string) string {
 	}
 	return result
 }
+
+// ConfigSource represents a config file source
+type ConfigSource struct {
+	Path   string
+	Type   string // "system", "user", "local"
+	Exists bool
+}
+
+// GetConfigSources returns all potential config sources in merge order
+func GetConfigSources() []ConfigSource {
+	var sources []ConfigSource
+
+	files := xdg.FindConfigFiles("thegrid", "config.yaml")
+	configHome := xdg.ConfigHome()
+	configDirs := xdg.ConfigDirs()
+
+	userPath := filepath.Join(configHome, "thegrid", "config.yaml")
+	localPath := filepath.Join(configHome, "thegrid", "config.local.yaml")
+
+	existingFiles := make(map[string]bool)
+	for _, f := range files {
+		existingFiles[f] = true
+	}
+
+	for _, dir := range configDirs {
+		path := filepath.Join(dir, "thegrid", "config.yaml")
+		exists := existingFiles[path]
+		sources = append(sources, ConfigSource{
+			Path:   path,
+			Type:   "system",
+			Exists: exists,
+		})
+	}
+
+	sources = append(sources, ConfigSource{
+		Path:   userPath,
+		Type:   "user",
+		Exists: existingFiles[userPath],
+	})
+
+	if info, err := os.Stat(localPath); err == nil && !info.IsDir() {
+		sources = append(sources, ConfigSource{
+			Path:   localPath,
+			Type:   "local",
+			Exists: true,
+		})
+	} else {
+		sources = append(sources, ConfigSource{
+			Path:   localPath,
+			Type:   "local",
+			Exists: false,
+		})
+	}
+
+	return sources
+}

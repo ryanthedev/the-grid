@@ -3,13 +3,13 @@ package reconcile
 import (
 	"context"
 
-	"github.com/yourusername/grid-cli/internal/client"
-	"github.com/yourusername/grid-cli/internal/config"
-	"github.com/yourusername/grid-cli/internal/jsonlog"
-	"github.com/yourusername/grid-cli/internal/layout"
-	"github.com/yourusername/grid-cli/internal/server"
-	"github.com/yourusername/grid-cli/internal/state"
-	"github.com/yourusername/grid-cli/internal/types"
+	"github.com/ryanthedev/grid-cli/internal/client"
+	"github.com/ryanthedev/grid-cli/internal/config"
+	"github.com/ryanthedev/grid-cli/internal/jsonlog"
+	"github.com/ryanthedev/grid-cli/internal/layout"
+	"github.com/ryanthedev/grid-cli/internal/server"
+	"github.com/ryanthedev/grid-cli/internal/state"
+	"github.com/ryanthedev/grid-cli/internal/types"
 )
 
 // Sync updates runtimeState to match server reality.

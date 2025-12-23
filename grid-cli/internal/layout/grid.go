@@ -1,7 +1,7 @@
 package layout
 
 import (
-	"github.com/yourusername/grid-cli/internal/types"
+	"github.com/ryanthedev/grid-cli/internal/types"
 )
 
 // CalculateTracks converts track definitions to pixel sizes.

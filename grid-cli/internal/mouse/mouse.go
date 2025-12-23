@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/yourusername/grid-cli/internal/client"
+	"github.com/ryanthedev/grid-cli/internal/client"
 )
 
 // WarpToWindow moves the mouse cursor to the center of the specified window.

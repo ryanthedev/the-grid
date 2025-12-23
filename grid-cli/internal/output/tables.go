@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/olekukonko/tablewriter"
-	"github.com/yourusername/grid-cli/internal/models"
+	"github.com/ryanthedev/grid-cli/internal/models"
 )
 
 // PrintWindowsTable prints windows in a table format

@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/yourusername/grid-cli/internal/types"
+	"github.com/ryanthedev/grid-cli/internal/types"
 )
 
 const (

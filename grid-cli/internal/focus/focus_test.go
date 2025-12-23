@@ -3,8 +3,8 @@ package focus
 import (
 	"testing"
 
-	"github.com/yourusername/grid-cli/internal/state"
-	"github.com/yourusername/grid-cli/internal/types"
+	"github.com/ryanthedev/grid-cli/internal/state"
+	"github.com/ryanthedev/grid-cli/internal/types"
 )
 
 func TestSelectCrossDisplayTargetCell_UsesLastFocusedCell(t *testing.T) {

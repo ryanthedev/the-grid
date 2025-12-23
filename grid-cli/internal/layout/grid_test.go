@@ -4,7 +4,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/yourusername/grid-cli/internal/types"
+	"github.com/ryanthedev/grid-cli/internal/types"
 )
 
 func TestCalculateTracks_Simple(t *testing.T) {
