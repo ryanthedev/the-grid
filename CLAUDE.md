@@ -87,11 +87,18 @@ Output format:
 ```
 
 ## Project Paths
-- **Log files**: `~/.local/state/thegrid/`
+
+Both CLI and server follow the XDG Base Directory Specification:
+
+- **Log files**: `$XDG_STATE_HOME/thegrid/` (default: `~/.local/state/thegrid/`)
   - `thegrid-cli.json` - CLI logs (JSONL)
   - `thegrid-server.json` - Server logs (JSONL)
   - `state.json` - Runtime state
-- **Config**: `~/.config/thegrid/config.yaml`
+- **Config**: `$XDG_CONFIG_HOME/thegrid/` (default: `~/.config/thegrid/`)
+  - `config.yaml` - CLI configuration
+  - `config.local.yaml` - Local overrides
+  - `bfd.yaml` - BFD hotkey configuration
+  - `bfd.local.yaml` - Local hotkey overrides
 - **Server socket**: `/tmp/grid-server.sock` (configurable via `--socket` CLI flag)
 
 ## Config Layering
@@ -111,9 +118,40 @@ settings:
   baseSpacing: 12
 ```
 
+## XDG Config Resolution
+
+Both CLI and server support the XDG Base Directory Specification:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `$XDG_CONFIG_HOME` | `~/.config` | User config directory |
+| `$XDG_CONFIG_DIRS` | `/etc/xdg:/opt/homebrew/etc:/usr/local/etc` | System config paths (colon-separated) |
+| `$XDG_STATE_HOME` | `~/.local/state` | Runtime state (logs) |
+
+### Config Search Order
+
+Configs are merged in this order (lowest to highest priority):
+1. Built-in defaults (hardcoded)
+2. System configs (`$XDG_CONFIG_DIRS/thegrid/`)
+3. User config (`$XDG_CONFIG_HOME/thegrid/`)
+4. Local overlay (`$XDG_CONFIG_HOME/thegrid/*.local.yaml`)
+
+### Debugging Config Resolution
+
+```bash
+# Show config sources and XDG paths
+thegrid config sources
+
+# Show merged config as YAML
+thegrid config show
+
+# Validate config
+thegrid config validate
+```
+
 ## BFD Hotkey Configuration
 
-BFD (Binary Focused Dispatcher) handles keyboard shortcuts. Config at `~/.config/thegrid/bfd.yaml`:
+BFD (Binary Focused Dispatcher) handles keyboard shortcuts. Config at `$XDG_CONFIG_HOME/thegrid/bfd.yaml`:
 
 ```yaml
 shell: /bin/zsh  # Shell for command execution
