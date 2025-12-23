@@ -2,6 +2,9 @@
 grid-server/.build/
 grid-server/.swiftpm/
 grid-server/Package.resolved
+
+# Auto-generated version file
+grid-server/Sources/GridServer/Version.swift
 # Go build artifacts (grid-cli)
 grid-cli/bin/
 grid-cli/thegrid

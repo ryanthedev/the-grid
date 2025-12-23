@@ -31,6 +31,19 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// Build-time version info (injected via ldflags)
+var (
+	Version = "dev"
+	Commit  = "unknown"
+)
+
+func versionString() string {
+	if Commit != "unknown" && len(Commit) >= 7 {
+		return fmt.Sprintf("%s (%s)", Version, Commit[:7])
+	}
+	return Version
+}
+
 var (
 	socketPath string
 	timeout    time.Duration
@@ -56,7 +69,7 @@ var rootCmd = &cobra.Command{
 
 It allows you to query window state, manipulate window positions and sizes,
 and move windows between spaces and displays.`,
-	Version: "0.1.0",
+	Version: versionString(),
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		// Build args map with relevant command arguments
 		argsMap := make(map[string]any)
