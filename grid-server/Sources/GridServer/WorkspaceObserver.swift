@@ -98,15 +98,20 @@ class WorkspaceObserver {
     @objc private func spaceChanged(_ notification: Notification) {
         Task {
             await JSONLogger.shared.log("ws.space", data: [:])
+            let focusState = FocusState(
+                spaceID: 0,
+                displayUUID: "",
+                trigger: .spaceSwitched
+            )
+            await EventRouter.shared.route(.focusChanged(focusState), from: .workspaceObserver)
         }
-        stateManager?.handleSpaceChanged()
     }
 
     @objc private func screenParametersChanged(_ notification: Notification) {
         Task {
             await JSONLogger.shared.log("ws.screen", data: [:])
+            await EventRouter.shared.route(.displayReconfigured(displayUUID: ""), from: .workspaceObserver)
         }
-        stateManager?.handleDisplayConfigurationChanged()
     }
 
     // MARK: - Application Lifecycle Handlers
@@ -121,9 +126,8 @@ class WorkspaceObserver {
                 "app": app.localizedName ?? "?",
                 "pid": app.processIdentifier
             ])
+            await EventRouter.shared.route(.appLaunched(app: app), from: .workspaceObserver)
         }
-
-        stateManager?.handleApplicationLaunched(app)
     }
 
     @objc private func applicationTerminated(_ notification: Notification) {
@@ -136,9 +140,8 @@ class WorkspaceObserver {
                 "app": app.localizedName ?? "?",
                 "pid": app.processIdentifier
             ])
+            await EventRouter.shared.route(.appTerminated(app: app), from: .workspaceObserver)
         }
-
-        stateManager?.handleApplicationTerminated(app)
     }
 
     @objc private func applicationActivated(_ notification: Notification) {
@@ -146,7 +149,14 @@ class WorkspaceObserver {
             return
         }
 
-        stateManager?.handleApplicationActivated(app)
+        Task {
+            let focusState = FocusState(
+                spaceID: 0,
+                displayUUID: "",
+                trigger: .appActivated
+            )
+            await EventRouter.shared.route(.focusChanged(focusState), from: .workspaceObserver)
+        }
     }
 
     // MARK: - Application Visibility Handlers
@@ -161,9 +171,8 @@ class WorkspaceObserver {
                 "app": app.localizedName ?? "?",
                 "pid": app.processIdentifier
             ])
+            await EventRouter.shared.route(.appHidden(app: app), from: .workspaceObserver)
         }
-
-        stateManager?.handleApplicationHidden(app)
     }
 
     @objc private func applicationUnhidden(_ notification: Notification) {
@@ -176,9 +185,8 @@ class WorkspaceObserver {
                 "app": app.localizedName ?? "?",
                 "pid": app.processIdentifier
             ])
+            await EventRouter.shared.route(.appUnhidden(app: app), from: .workspaceObserver)
         }
-
-        stateManager?.handleApplicationUnhidden(app)
     }
 
     // MARK: - System Event Handlers
@@ -186,7 +194,7 @@ class WorkspaceObserver {
     @objc private func systemWoke(_ notification: Notification) {
         Task {
             await JSONLogger.shared.log("ws.wake", data: [:])
+            await EventRouter.shared.route(.systemWoke, from: .workspaceObserver)
         }
-        stateManager?.handleSystemWoke()
     }
 }

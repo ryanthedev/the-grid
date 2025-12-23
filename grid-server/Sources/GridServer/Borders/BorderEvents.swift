@@ -12,49 +12,46 @@ import CoreGraphics
 ///
 /// **Thread Safety**: All methods must be called on the main queue.
 /// The weak references to managers are not thread-safe.
-class BorderEvents {
+class BorderEvents: StateEventHandler {
     private weak var simpleBorderManager: SimpleBorderManager?
-    private weak var stateManager: StateManager?
 
     init() {}
 
     /// Connect to managers
-    func setup(simpleBorderManager: SimpleBorderManager, stateManager: StateManager) {
+    func setup(simpleBorderManager: SimpleBorderManager) {
         self.simpleBorderManager = simpleBorderManager
-        self.stateManager = stateManager
 
-        Task { await JSONLogger.shared.log("bdr.events.init", data: [:]) }
+        Task {
+            await JSONLogger.shared.log("bdr.events.init", data: [:])
+            await EventRouter.shared.register(self)
+        }
     }
 
-    // MARK: - Event Handlers (called by StateManager)
+    // MARK: - StateEventHandler Protocol
 
-    /// Handle window creation with bundleID passed directly to avoid re-entrant StateManager calls
-    func handleWindowCreated(_ windowID: UInt32, bundleID: String?) {
-        // SimpleBorderManager doesn't need per-window creation
-    }
+    func handle(_ event: StateEvent, context: EventContext) async throws {
+        if case .manual = context.source { return }
 
-    func handleWindowDestroyed(_ windowID: UInt32) {
-        simpleBorderManager?.handleWindowDestroyed(windowID: windowID)
-    }
+        switch event {
+        case .windowDestroyed(let windowID):
+            simpleBorderManager?.handleWindowDestroyed(windowID: windowID)
 
-    func handleWindowMoved(_ windowID: UInt32, frame: CGRect) {
-        simpleBorderManager?.handleWindowMoved(windowID: windowID, newFrame: frame)
-    }
+        case .windowMoved(let windowID, let frame):
+            simpleBorderManager?.handleWindowMoved(windowID: windowID, newFrame: frame)
 
-    func handleWindowResized(_ windowID: UInt32, frame: CGRect) {
-        simpleBorderManager?.handleWindowMoved(windowID: windowID, newFrame: frame)
-    }
+        case .windowResized(let windowID, let frame):
+            simpleBorderManager?.handleWindowMoved(windowID: windowID, newFrame: frame)
 
-    func handleWindowFocused(_ windowID: UInt32) {
-        simpleBorderManager?.updateFocus(newFocusedWindow: windowID)
-    }
+        case .focusChanged(let state):
+            if let windowID = state.windowID {
+                simpleBorderManager?.updateFocus(newFocusedWindow: windowID)
+            }
 
-    // NOTE: handleWindowMinimized, handleWindowDeminimized, handleAppHidden,
-    // handleAppUnhidden, and handleSpaceChanged are intentionally not routed.
-    // These events trigger focus changes upstream, and BorderManager reacts
-    // to the resulting focus/assignment changes instead.
+        case .displayDisconnected(let displayUUID):
+            simpleBorderManager?.handleDisplayDisconnected(displayUUID: displayUUID)
 
-    func handleDisplayDisconnected(displayUUID: String) {
-        simpleBorderManager?.handleDisplayDisconnected(displayUUID: displayUUID)
+        default:
+            break
+        }
     }
 }

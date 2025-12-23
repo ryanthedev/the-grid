@@ -205,6 +205,9 @@ class MessageHandler {
             var updatesApplied: [String] = []
             var errors: [String] = []
 
+            // Generate requestID for event correlation
+            let requestID = UUID().uuidString
+
             // Handle display move first (if specified)
             if let displayUuid = displayUuid {
                 let position = (x != nil && y != nil) ? CGPoint(x: x!, y: y!) : nil
@@ -224,6 +227,14 @@ class MessageHandler {
             }
             // Handle space move (if no display specified)
             else if let spaceIdStr = spaceId, let spaceID = UInt64(spaceIdStr) {
+                // Emit command event before executing
+                Task {
+                    await EventRouter.shared.route(
+                        .commandMoveWindowToSpace(windowID: windowID, spaceID: spaceID, requestID: requestID),
+                        from: .manual(reason: "cli")
+                    )
+                }
+
                 if manipulator.moveWindowToSpace(windowID: windowID, spaceID: spaceID) {
                     updatesApplied.append("space")
                 } else {
@@ -245,7 +256,21 @@ class MessageHandler {
 
                 // Update position (if specified and display wasn't moved)
                 if let x = x, let y = y, displayUuid == nil {
-                    if manipulator.setWindowPosition(element: element, point: CGPoint(x: x, y: y)) {
+                    let targetPoint = CGPoint(x: x, y: y)
+                    let targetFrame = CGRect(
+                        origin: targetPoint,
+                        size: windowState.frame.size
+                    )
+
+                    // Emit command event before executing
+                    Task {
+                        await EventRouter.shared.route(
+                            .commandMoveWindow(windowID: windowID, frame: targetFrame, requestID: requestID),
+                            from: .manual(reason: "cli")
+                        )
+                    }
+
+                    if manipulator.setWindowPosition(element: element, point: targetPoint) {
                         updatesApplied.append("position")
                     } else {
                         errors.append("Failed to set window position")
@@ -254,7 +279,21 @@ class MessageHandler {
 
                 // Update size (if specified)
                 if let width = width, let height = height {
-                    if manipulator.setWindowSize(element: element, size: CGSize(width: width, height: height)) {
+                    let targetSize = CGSize(width: width, height: height)
+                    let targetFrame = CGRect(
+                        origin: windowState.frame.origin,
+                        size: targetSize
+                    )
+
+                    // Emit command event before executing
+                    Task {
+                        await EventRouter.shared.route(
+                            .commandResizeWindow(windowID: windowID, frame: targetFrame, requestID: requestID),
+                            from: .manual(reason: "cli")
+                        )
+                    }
+
+                    if manipulator.setWindowSize(element: element, size: targetSize) {
                         updatesApplied.append("size")
                     } else {
                         errors.append("Failed to set window size")
@@ -495,6 +534,15 @@ class MessageHandler {
                 return
             }
 
+            // Emit command event before executing
+            let requestID = UUID().uuidString
+            Task {
+                await EventRouter.shared.route(
+                    .commandMinimizeWindow(windowID: windowID, requestID: requestID),
+                    from: .manual(reason: "cli")
+                )
+            }
+
             let state = StateManager.shared.getState()
             let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
 
@@ -591,6 +639,15 @@ class MessageHandler {
                 }
                 completion(Response(id: request.id, error: ErrorInfo(code: -32001, message: "Window not found: \(wid)")))
                 return
+            }
+
+            // Emit command event before executing
+            let requestID = UUID().uuidString
+            Task {
+                await EventRouter.shared.route(
+                    .commandFocusWindow(windowID: wid, requestID: requestID),
+                    from: .manual(reason: "cli")
+                )
             }
 
             let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
