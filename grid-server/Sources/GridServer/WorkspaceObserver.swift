@@ -7,6 +7,11 @@
 
 import Foundation
 import AppKit
+import ApplicationServices
+
+// Private API for getting window ID from AXUIElement
+@_silgen_name("_AXUIElementGetWindow")
+private func _AXUIElementGetWindow(_ element: AXUIElement, _ windowID: UnsafeMutablePointer<UInt32>) -> AXError
 
 /// Manages NSWorkspace notifications for system-level events
 class WorkspaceObserver {
@@ -150,13 +155,39 @@ class WorkspaceObserver {
         }
 
         Task {
+            // Query the focused window of the activated app
+            let windowID = getFocusedWindowID(for: app.processIdentifier)
+
             let focusState = FocusState(
+                windowID: windowID,
                 spaceID: 0,
                 displayUUID: "",
                 trigger: .appActivated
             )
             await EventRouter.shared.route(.focusChanged(focusState), from: .workspaceObserver)
         }
+    }
+
+    /// Get the focused window ID for an application
+    private func getFocusedWindowID(for pid: pid_t) -> UInt32? {
+        let appElement = AXUIElementCreateApplication(pid)
+
+        var focusedWindow: CFTypeRef?
+        let result = AXUIElementCopyAttributeValue(
+            appElement,
+            kAXFocusedWindowAttribute as CFString,
+            &focusedWindow
+        )
+
+        guard result == .success, let windowElement = focusedWindow else {
+            return nil
+        }
+
+        // Get window ID using private API
+        var windowID: UInt32 = 0
+        let windowResult = _AXUIElementGetWindow(windowElement as! AXUIElement, &windowID)
+
+        return windowResult == .success ? windowID : nil
     }
 
     // MARK: - Application Visibility Handlers

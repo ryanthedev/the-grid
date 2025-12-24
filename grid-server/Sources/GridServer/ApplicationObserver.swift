@@ -128,6 +128,13 @@ class ApplicationObserver {
     func handleNotification(element: AXUIElement, notification: CFString) async {
         let notifName = notification as String
 
+        // [OBERDEBUG-005] Log ALL notifications received
+        JSONLogger.shared.log("dbg.ax.notif_raw", data: [
+            "notif": notifName,
+            "pid": pid,
+            "app": appName ?? "unknown"
+        ])
+
         // For AXCreated and AXUIElementDestroyed notifications, check element role first
         // to avoid processing non-window elements (buttons, menus, popups, etc.)
         if notifName == kAXCreatedNotification as String ||
@@ -175,6 +182,12 @@ class ApplicationObserver {
             await EventRouter.shared.route(event, from: source)
 
         case kAXFocusedWindowChangedNotification as String:
+            // [OBERDEBUG-004] AX focus notification received
+            JSONLogger.shared.log("dbg.ax.focus_notif", data: [
+                "wid": windowID,
+                "pid": pid,
+                "app": appName ?? "unknown"
+            ])
             let focusState = FocusState(
                 windowID: windowID,
                 spaceID: 0,
@@ -270,6 +283,10 @@ private func axNotificationCallback(
     notification: CFString,
     refcon: UnsafeMutableRawPointer?
 ) -> Void {
+    // [OBERDEBUG-006] Raw callback - before any processing
+    let notifStr = notification as String
+    jlog("dbg.ax.callback_raw", data: ["notif": notifStr])
+
     guard let refcon = refcon else {
         print("[ERROR] AX callback: refcon is nil")
         return
