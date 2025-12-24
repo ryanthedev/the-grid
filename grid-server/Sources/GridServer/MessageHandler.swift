@@ -85,7 +85,12 @@ class MessageHandler {
         register(method: "ping") { request, completion in
             let response = Response(
                 id: request.id,
-                result: AnyCodable(["pong": true, "timestamp": Date().timeIntervalSince1970])
+                result: AnyCodable([
+                    "pong": true,
+                    "timestamp": Date().timeIntervalSince1970,
+                    "version": GridServerVersion,
+                    "commit": GridServerCommit
+                ])
             )
             completion(response)
         }
@@ -127,9 +132,18 @@ class MessageHandler {
                 // Get state from StateManager (Codable type preserves all type information)
                 let state = try StateManager.shared.getStateDictionary()
 
+                // Encode state to JSON, decode as dictionary, add version info
+                let encoder = JSONEncoder()
+                let data = try encoder.encode(state)
+                var dict = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
+
+                // Add server version info to the dump
+                dict["serverVersion"] = GridServerVersion
+                dict["serverCommit"] = GridServerCommit
+
                 let response = Response(
                     id: request.id,
-                    result: AnyCodable(state)
+                    result: AnyCodable(dict)
                 )
                 completion(response)
             } catch {

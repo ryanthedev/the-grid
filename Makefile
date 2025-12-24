@@ -197,6 +197,9 @@ help:
 # Debug app bundle (for development - required for Accessibility permissions)
 APP_BUNDLE := grid-server/.build/debug/GridServer.app
 
+# Where launchd expects the server (main repo location)
+DEPLOY_LOCATION := /Users/r/repos/theGrid/grid-server/.build/debug/GridServer.app
+
 # Build debug app bundle
 dev: server cli
 	@echo "Creating debug GridServer.app bundle..."
@@ -208,6 +211,11 @@ dev: server cli
 	@codesign -fs "$(CODESIGN_IDENTITY)" --entitlements $(ENTITLEMENTS) $(APP_BUNDLE)/Contents/MacOS/grid-server
 	@codesign -fs "$(CODESIGN_IDENTITY)" --entitlements $(ENTITLEMENTS) $(APP_BUNDLE)
 	@echo "✓ Debug GridServer.app created at $(APP_BUNDLE)"
+	@echo "Deploying to $(DEPLOY_LOCATION)..."
+	@mkdir -p $(dir $(DEPLOY_LOCATION))
+	@rm -rf $(DEPLOY_LOCATION)
+	@cp -R $(APP_BUNDLE) $(DEPLOY_LOCATION)
+	@echo "✓ Server deployed to $(DEPLOY_LOCATION)"
 
 # Build and restart thegrid service
 run: dev install-dev

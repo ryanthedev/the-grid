@@ -695,6 +695,25 @@ class StateManager: StateEventHandler {
                 return display
             }
         }
+        // Log all display bounds when no match found
+        var displayBounds: [[String: Any]] = []
+        for display in state.displays {
+            if let frame = display.frame {
+                displayBounds.append([
+                    "uuid": String(display.uuid.prefix(8)),
+                    "name": display.name ?? "?",
+                    "minX": frame.origin.x,
+                    "maxX": frame.origin.x + frame.size.width,
+                    "minY": frame.origin.y,
+                    "maxY": frame.origin.y + frame.size.height
+                ])
+            }
+        }
+        jlog("dbg.display_bounds", msg: "no display contains point", data: [
+            "pointX": point.x,
+            "pointY": point.y,
+            "displays": displayBounds
+        ])
         return nil
     }
 
@@ -712,7 +731,22 @@ class StateManager: StateEventHandler {
         if window.isMinimized {
             return window.displayUUID
         }
-        return displayForWindowFrame(window.frame)?.uuid
+        let result = displayForWindowFrame(window.frame)
+        if result == nil {
+            let centerX = window.frame.origin.x + window.frame.size.width / 2
+            let centerY = window.frame.origin.y + window.frame.size.height / 2
+            jlog("dbg.displayUUID_miss", msg: "no display for window", data: [
+                "wid": window.id,
+                "app": window.appName ?? "?",
+                "centerX": centerX,
+                "centerY": centerY,
+                "frameX": window.frame.origin.x,
+                "frameY": window.frame.origin.y,
+                "frameW": window.frame.size.width,
+                "frameH": window.frame.size.height
+            ])
+        }
+        return result?.uuid
     }
 
     /// Re-query AX properties for windows on the active space whose role is nil
@@ -744,6 +778,8 @@ class StateManager: StateEventHandler {
     }
 
     private func refreshWindows() {
+        jlog("dbg.refreshWindows_START", msg: "entering refreshWindows")
+
         // Use public CGWindowListCopyWindowInfo API instead of private SkyLight API
         // This is safer and won't crash, though it provides slightly different data
         // Use .optionAll to get windows from all spaces, not just the active space
@@ -752,6 +788,7 @@ class StateManager: StateEventHandler {
             jlog("warn.win", msg: "failed to get window list")
             return
         }
+        jlog("dbg.refreshWindows_count", data: ["windowCount": windowList.count])
 
         var windows: [String: WindowState] = [:]
 
@@ -840,6 +877,16 @@ class StateManager: StateEventHandler {
 
             // Compute displayUUID geometrically based on frame position
             windowState.displayUUID = computeDisplayUUID(for: windowState)
+
+            // Debug: log displayUUID computation result
+            jlog("dbg.displayUUID_result", data: [
+                "wid": windowState.id,
+                "app": windowState.appName ?? "?",
+                "displayUUID": windowState.displayUUID ?? "nil",
+                "frameX": windowState.frame.origin.x,
+                "frameY": windowState.frame.origin.y,
+                "spaces": windowState.spaces
+            ])
 
             // Store window state
             windows[String(windowID)] = windowState
