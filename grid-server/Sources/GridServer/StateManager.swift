@@ -542,6 +542,8 @@ class StateManager: StateEventHandler {
     // MARK: - Queue Helpers
 
     /// Execute an async operation on the state queue with span propagation
+    /// WARNING: The Task inside does NOT inherit queue isolation - use executeOnQueueSync
+    /// for high-frequency state mutations that must be serialized (e.g., window move/resize)
     private func executeOnQueue(_ operation: @escaping () async -> Void) {
         let span = CurrentSpan.current
         queue.async { [span] in
@@ -550,6 +552,14 @@ class StateManager: StateEventHandler {
                     await operation()
                 }
             }
+        }
+    }
+
+    /// Execute a synchronous operation on the state queue
+    /// Use this for high-frequency operations that must be truly serialized
+    private func executeOnQueueSync(_ operation: @escaping () -> Void) {
+        queue.async {
+            operation()
         }
     }
 
@@ -688,25 +698,6 @@ class StateManager: StateEventHandler {
                 return display
             }
         }
-        // Log all display bounds when no match found
-        var displayBounds: [[String: Any]] = []
-        for display in state.displays {
-            if let frame = display.frame {
-                displayBounds.append([
-                    "uuid": String(display.uuid.prefix(8)),
-                    "name": display.name ?? "?",
-                    "minX": frame.origin.x,
-                    "maxX": frame.origin.x + frame.size.width,
-                    "minY": frame.origin.y,
-                    "maxY": frame.origin.y + frame.size.height
-                ])
-            }
-        }
-        jlog("dbg.display_bounds", msg: "no display contains point", data: [
-            "pointX": point.x,
-            "pointY": point.y,
-            "displays": displayBounds
-        ])
         return nil
     }
 
@@ -724,22 +715,7 @@ class StateManager: StateEventHandler {
         if window.isMinimized {
             return window.displayUUID
         }
-        let result = displayForWindowFrame(window.frame)
-        if result == nil {
-            let centerX = window.frame.origin.x + window.frame.size.width / 2
-            let centerY = window.frame.origin.y + window.frame.size.height / 2
-            jlog("dbg.displayUUID_miss", msg: "no display for window", data: [
-                "wid": window.id,
-                "app": window.appName ?? "?",
-                "centerX": centerX,
-                "centerY": centerY,
-                "frameX": window.frame.origin.x,
-                "frameY": window.frame.origin.y,
-                "frameW": window.frame.size.width,
-                "frameH": window.frame.size.height
-            ])
-        }
-        return result?.uuid
+        return displayForWindowFrame(window.frame)?.uuid
     }
 
     /// Derive window's space from its geometric displayUUID
@@ -759,7 +735,9 @@ class StateManager: StateEventHandler {
         } else {
             // Fallback: keep original macOS-reported spaces
             window.spaces = originalSpaces
-            if originalSpaces.isEmpty {
+            // Only warn for real windows, not menu bar items (small height, off-screen)
+            let isMenuBarItem = window.frame.size.height <= 30 && window.displayUUID == nil
+            if originalSpaces.isEmpty && !isMenuBarItem {
                 jlog("warn.spaces", msg: "both geometric and macOS space detection failed", data: [
                     "wid": window.id,
                     "app": window.appName ?? "unknown",
@@ -1231,7 +1209,7 @@ class StateManager: StateEventHandler {
     }
 
     private func handleWindowMoved(_ windowID: UInt32, frame: CGRect) {
-        executeOnQueue {
+        executeOnQueueSync {
             guard var window = self.state.windows[String(windowID)] else { return }
             window.frame = frame
             // Recompute displayUUID and derive space from display
@@ -1248,7 +1226,7 @@ class StateManager: StateEventHandler {
     }
 
     private func handleWindowResized(_ windowID: UInt32, frame: CGRect) {
-        executeOnQueue {
+        executeOnQueueSync {
             guard var window = self.state.windows[String(windowID)] else { return }
             window.frame = frame
             // Recompute displayUUID and derive space from display
