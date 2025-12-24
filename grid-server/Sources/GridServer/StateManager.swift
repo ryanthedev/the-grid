@@ -559,9 +559,16 @@ class StateManager: StateEventHandler {
 
     /// Execute a synchronous operation on the state queue
     /// Use this for high-frequency operations that must be truly serialized
+    /// Includes re-entrancy protection to prevent deadlock when called from within queue
+    /// WARNING: Closures must not call async functions without wrapping in Task {}
     private func executeOnQueueSync(_ operation: @escaping () -> Void) {
-        queue.async {
+        if DispatchQueue.getSpecific(key: queueKey) == true {
+            // Already on queue, execute directly to avoid deadlock
             operation()
+        } else {
+            queue.sync {
+                operation()
+            }
         }
     }
 
