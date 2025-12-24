@@ -23,6 +23,7 @@ class StateManager: StateEventHandler {
     private var state: WindowManagerState
     private let connectionID: Int32
     private let queue = DispatchQueue(label: "com.grid.StateManager", qos: .userInitiated)
+    private let queueKey = DispatchSpecificKey<Bool>()
 
     // AX Observers (one per application)
     private var applicationObservers: [pid_t: ApplicationObserver] = [:]
@@ -42,6 +43,7 @@ class StateManager: StateEventHandler {
     // MARK: - Initialization
 
     private init() {
+        queue.setSpecific(key: queueKey, value: true)
         self.connectionID = SLSMainConnectionID()
         self.state = WindowManagerState()
         self.state.metadata.connectionID = self.connectionID
