@@ -656,29 +656,22 @@ class StateManager: StateEventHandler {
     }
 
     /// Re-query and update space assignment for a specific window
-    /// Called after window moves or space changes to get fresh space data
+    /// Uses geometric derivation from displayUUID, with macOS API as fallback
     private func updateWindowSpaces(_ windowID: UInt32) {
         guard var window = state.windows[String(windowID)] else { return }
 
-        // Query spaces using SkyLight API with properly typed CFArray
+        // Query spaces using SkyLight API as fallback data
+        var apiSpaces: [UInt64] = []
         let windowArray = createWindowIDArray([windowID])
         if let spacesArray = SLSCopySpacesForWindows(connectionID, 0x7, windowArray) {
-            // Result is flat array of space IDs (CFNumbers)
             let spaceNumbers: [NSNumber] = cfArrayToSwiftArray(spacesArray)
-            if !spaceNumbers.isEmpty {
-                // Success - update with actual spaces
-                window.spaces = spaceNumbers.map { $0.uint64Value }
-                state.windows[String(windowID)] = window
-            } else {
-                // API returned empty - mark as unknown
-                window.spaces = []
-                state.windows[String(windowID)] = window
-            }
-        } else {
-            // API call failed - mark as unknown
-            window.spaces = []
-            state.windows[String(windowID)] = window
+            apiSpaces = spaceNumbers.map { $0.uint64Value }
         }
+
+        // Use geometric derivation, falling back to API-reported spaces
+        let originalSpaces = apiSpaces.isEmpty ? window.spaces : apiSpaces
+        deriveSpaceFromDisplay(for: &window, originalSpaces: originalSpaces)
+        state.windows[String(windowID)] = window
     }
 
     /// Find the display that geometrically contains the given point
@@ -747,6 +740,40 @@ class StateManager: StateEventHandler {
             ])
         }
         return result?.uuid
+    }
+
+    /// Derive window's space from its geometric displayUUID
+    /// Falls back to original macOS-reported spaces if geometric detection fails
+    /// IMPORTANT: Must be called AFTER computeDisplayUUID() sets window.displayUUID
+    private func deriveSpaceFromDisplay(for window: inout WindowState, originalSpaces: [UInt64]) {
+        // Don't derive for sticky windows - they should be on all spaces
+        if let isSticky = mssClient.isWindowSticky(window.id), isSticky {
+            window.spaces = getAllUserSpaceIDs()
+            return
+        }
+
+        if let displayUUID = window.displayUUID,
+           let display = state.displays.first(where: { $0.uuid == displayUUID }),
+           display.currentSpaceID != 0 {
+            window.spaces = [display.currentSpaceID]
+        } else {
+            // Fallback: keep original macOS-reported spaces
+            window.spaces = originalSpaces
+            if originalSpaces.isEmpty {
+                jlog("warn.spaces", msg: "both geometric and macOS space detection failed", data: [
+                    "wid": window.id,
+                    "app": window.appName ?? "unknown",
+                    "title": window.title ?? "untitled",
+                    "displayUUID": window.displayUUID ?? "nil",
+                    "isMinimized": window.isMinimized,
+                    "frameX": window.frame.origin.x,
+                    "frameY": window.frame.origin.y,
+                    "frameW": window.frame.size.width,
+                    "frameH": window.frame.size.height,
+                    "availableDisplays": state.displays.map { $0.uuid }
+                ])
+            }
+        }
     }
 
     /// Re-query AX properties for windows on the active space whose role is nil
@@ -875,18 +902,10 @@ class StateManager: StateEventHandler {
                 }
             }
 
-            // Compute displayUUID geometrically based on frame position
+            // Compute displayUUID geometrically and derive space from display
+            let originalSpaces = windowState.spaces
             windowState.displayUUID = computeDisplayUUID(for: windowState)
-
-            // Debug: log displayUUID computation result
-            jlog("dbg.displayUUID_result", data: [
-                "wid": windowState.id,
-                "app": windowState.appName ?? "?",
-                "displayUUID": windowState.displayUUID ?? "nil",
-                "frameX": windowState.frame.origin.x,
-                "frameY": windowState.frame.origin.y,
-                "spaces": windowState.spaces
-            ])
+            deriveSpaceFromDisplay(for: &windowState, originalSpaces: originalSpaces)
 
             // Store window state
             windows[String(windowID)] = windowState
@@ -1054,14 +1073,13 @@ class StateManager: StateEventHandler {
             window.title = name
         }
 
-        // Recompute displayUUID based on new frame
+        // Recompute displayUUID and derive space from display
+        let originalSpaces = window.spaces
         window.displayUUID = computeDisplayUUID(for: window)
+        deriveSpaceFromDisplay(for: &window, originalSpaces: originalSpaces)
 
         window.lastUpdated = timestamp
         state.windows[String(windowID)] = window
-
-        // Refresh space assignment
-        updateWindowSpaces(windowID)
     }
 
     /// Add new window discovered by poll
@@ -1108,11 +1126,12 @@ class StateManager: StateEventHandler {
         window.hasZoomButton = axProps.hasZoomButton
         window.isModal = axProps.isModal
 
-        // Compute displayUUID geometrically based on frame position
+        // Compute displayUUID geometrically and derive space from display
+        let originalSpaces = window.spaces
         window.displayUUID = computeDisplayUUID(for: window)
+        deriveSpaceFromDisplay(for: &window, originalSpaces: originalSpaces)
 
         state.windows[String(windowID)] = window
-        updateWindowSpaces(windowID)
     }
 
     // MARK: - AX Event Handlers (Per-Window Events)
@@ -1157,13 +1176,12 @@ class StateManager: StateEventHandler {
             window.hasZoomButton = axProps.hasZoomButton
             window.isModal = axProps.isModal
 
-            // Compute displayUUID geometrically based on frame position
+            // Compute displayUUID geometrically and derive space from display
+            let originalSpaces = window.spaces
             window.displayUUID = self.computeDisplayUUID(for: window)
+            self.deriveSpaceFromDisplay(for: &window, originalSpaces: originalSpaces)
 
             self.state.windows[String(windowID)] = window
-
-            // Query space assignment
-            self.updateWindowSpaces(windowID)
 
             // Add window to app's window list
             let pidKey = String(pid)
@@ -1216,13 +1234,12 @@ class StateManager: StateEventHandler {
         executeOnQueue {
             guard var window = self.state.windows[String(windowID)] else { return }
             window.frame = frame
-            // Recompute displayUUID since window may have moved to different display
+            // Recompute displayUUID and derive space from display
+            let originalSpaces = window.spaces
             window.displayUUID = self.computeDisplayUUID(for: window)
+            self.deriveSpaceFromDisplay(for: &window, originalSpaces: originalSpaces)
             window.lastUpdated = Date()
             self.state.windows[String(windowID)] = window
-
-            // Re-query space assignment after move
-            self.updateWindowSpaces(windowID)
 
             self.state.metadata.update()
 
@@ -1232,11 +1249,17 @@ class StateManager: StateEventHandler {
 
     private func handleWindowResized(_ windowID: UInt32, frame: CGRect) {
         executeOnQueue {
-            await self.updateWindow(windowID, logEvent: nil) {
-                $0.frame = frame
-                // Recompute displayUUID since resize can move window to different display
-                $0.displayUUID = self.computeDisplayUUID(for: $0)
-            }
+            guard var window = self.state.windows[String(windowID)] else { return }
+            window.frame = frame
+            // Recompute displayUUID and derive space from display
+            let originalSpaces = window.spaces
+            window.displayUUID = self.computeDisplayUUID(for: window)
+            self.deriveSpaceFromDisplay(for: &window, originalSpaces: originalSpaces)
+            window.lastUpdated = Date()
+            self.state.windows[String(windowID)] = window
+
+            self.state.metadata.update()
+
             // EventRouter handles logging and BorderEvents notification
         }
     }
