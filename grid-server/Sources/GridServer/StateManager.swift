@@ -676,8 +676,11 @@ class StateManager: StateEventHandler {
 
     /// Public method to set focused window (for MessageHandler focus commands)
     /// This updates state immediately rather than waiting for AX callback which may not fire
-    /// Uses executeOnQueueSync for proper serialization (no Task spawning)
+    /// Uses executeOnQueueSync for proper serialization, then emits focusChanged event
     func setFocusedWindow(_ windowID: UInt32) {
+        var activeSpaceID: UInt64 = 0
+        var activeDisplayUUID: String = ""
+
         executeOnQueueSync {
             self.state.metadata.focusedWindowID = windowID
 
@@ -707,6 +710,21 @@ class StateManager: StateEventHandler {
             }
 
             self.state.metadata.update()
+
+            // Capture values for event emission
+            activeSpaceID = self.state.metadata.activeSpaceID ?? 0
+            activeDisplayUUID = self.state.metadata.activeDisplayUUID ?? ""
+        }
+
+        // Emit focusChanged event to trigger border refresh (async, after sync state update)
+        Task {
+            let focusState = FocusState(
+                windowID: windowID,
+                spaceID: activeSpaceID,
+                displayUUID: activeDisplayUUID,
+                trigger: .manual
+            )
+            await EventRouter.shared.route(.focusChanged(focusState), from: .manual(reason: "cli-focus"))
         }
     }
 

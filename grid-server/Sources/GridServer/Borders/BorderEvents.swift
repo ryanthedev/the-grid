@@ -30,7 +30,8 @@ class BorderEvents: StateEventHandler {
     // MARK: - StateEventHandler Protocol
 
     func handle(_ event: StateEvent, context: EventContext) async throws {
-        if case .manual = context.source { return }
+        // Allow focusChanged from CLI commands (cli-focus), filter other manual events
+        if case .manual(let reason) = context.source, reason != "cli-focus" { return }
 
         switch event {
         case .windowDestroyed(let windowID):
