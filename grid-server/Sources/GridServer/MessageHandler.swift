@@ -20,7 +20,7 @@ class MessageHandler {
     func register(method: String, handler: @escaping RequestHandler) {
         handlers[method] = handler
         Task {
-            await JSONLogger.shared.log("msg.register", data: ["method": method])
+            JSONLogger.shared.log("msg.register", data: ["method": method])
         }
     }
 
@@ -46,7 +46,7 @@ class MessageHandler {
         // Execute handler within span context
         Task {
             await CurrentSpan.$current.withValue(span) {
-                await JSONLogger.shared.log("msg.handle", data: ["id": request.id, "method": request.method])
+                JSONLogger.shared.log("msg.handle", data: ["id": request.id, "method": request.method])
 
                 guard let handler = handlers[request.method] else {
                     let response = Response(
@@ -57,7 +57,7 @@ class MessageHandler {
                         )
                     )
 
-                    await JSONLogger.shared.log("msg.err", data: [
+                    JSONLogger.shared.log("msg.err", data: [
                         "op": "method_not_found",
                         "method": request.method,
                         "id": request.id
@@ -143,7 +143,7 @@ class MessageHandler {
                 completion(response)
             } catch {
                 Task {
-                    await JSONLogger.shared.log("err.state", data: ["op": "dump", "error": "\(error)"])
+                    JSONLogger.shared.log("err.state", data: ["op": "dump", "error": "\(error)"])
                 }
                 let response = Response(
                     id: request.id,
@@ -185,9 +185,8 @@ class MessageHandler {
             let spaceId = params["spaceId"]?.value as? String
             let displayUuid = params["displayUuid"]?.value as? String
 
-            // Get window state
-            let state = StateManager.shared.getState()
-            guard let windowState = state.windows[String(windowID)] else {
+            // Create context from window state
+            guard var context = ManipulationContext.from(windowID: windowID) else {
                 let response = Response(
                     id: request.id,
                     error: ErrorInfo(code: -32001, message: "Window not found: \(windowID)")
@@ -195,7 +194,7 @@ class MessageHandler {
 
                 // Log error event
                 Task {
-                    await JSONLogger.shared.log("err.window", data: [
+                    JSONLogger.shared.log("err.window", data: [
                         "op": "updateWindow",
                         "msg": "not_found",
                         "wid": windowID,
@@ -208,6 +207,7 @@ class MessageHandler {
             }
 
             // Create WindowManipulator
+            let state = StateManager.shared.getState()
             let manipulator = WindowManipulator(
                 connectionID: state.metadata.connectionID
             )
@@ -254,23 +254,11 @@ class MessageHandler {
 
             // Handle frame updates (if display wasn't moved, or if only size is being updated)
             if displayUuid == nil || (width != nil || height != nil) {
-                // Get AX element
-                guard let element = manipulator.getAXElement(pid: windowState.pid, windowID: windowID) else {
-                    let response = Response(
-                        id: request.id,
-                        error: ErrorInfo(code: -32002, message: "Failed to get AX element for window")
-                    )
-                    completion(response)
-                    return
-                }
-
                 // Update position (if specified and display wasn't moved)
                 if let x = x, let y = y, displayUuid == nil {
                     let targetPoint = CGPoint(x: x, y: y)
-                    let targetFrame = CGRect(
-                        origin: targetPoint,
-                        size: windowState.frame.size
-                    )
+                    let currentSize = context.frame?.size ?? CGSize(width: 100, height: 100)
+                    let targetFrame = CGRect(origin: targetPoint, size: currentSize)
 
                     // Emit command event before executing
                     Task {
@@ -280,7 +268,10 @@ class MessageHandler {
                         )
                     }
 
-                    if manipulator.setWindowPosition(element: element, point: targetPoint) {
+                    // Context-based move updates state automatically on success
+                    if manipulator.moveWindow(context: context, to: targetPoint) {
+                        // Update context frame for subsequent operations
+                        context.frame = targetFrame
                         updatesApplied.append("position")
                     } else {
                         errors.append("Failed to set window position")
@@ -290,10 +281,8 @@ class MessageHandler {
                 // Update size (if specified)
                 if let width = width, let height = height {
                     let targetSize = CGSize(width: width, height: height)
-                    let targetFrame = CGRect(
-                        origin: windowState.frame.origin,
-                        size: targetSize
-                    )
+                    let currentOrigin = context.frame?.origin ?? CGPoint.zero
+                    let targetFrame = CGRect(origin: currentOrigin, size: targetSize)
 
                     // Emit command event before executing
                     Task {
@@ -303,7 +292,9 @@ class MessageHandler {
                         )
                     }
 
-                    if manipulator.setWindowSize(element: element, size: targetSize) {
+                    // Context-based resize updates state automatically on success
+                    if manipulator.resizeWindow(context: context, to: targetSize) {
+                        context.frame = targetFrame
                         updatesApplied.append("size")
                     } else {
                         errors.append("Failed to set window size")
@@ -333,7 +324,7 @@ class MessageHandler {
 
                 // Log error event
                 Task {
-                    await JSONLogger.shared.log("err.window", data: [
+                    JSONLogger.shared.log("err.window", data: [
                         "op": "updateWindow",
                         "msg": errors.joined(separator: ", "),
                         "wid": windowID,
@@ -544,6 +535,12 @@ class MessageHandler {
                 return
             }
 
+            // Create context from window state
+            guard let context = ManipulationContext.from(windowID: windowID) else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32001, message: "Window not found: \(windowID)")))
+                return
+            }
+
             // Emit command event before executing
             let requestID = UUID().uuidString
             Task {
@@ -556,7 +553,8 @@ class MessageHandler {
             let state = StateManager.shared.getState()
             let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
 
-            if manipulator.mssClient.minimizeWindow(windowID) {
+            // Context-based minimize updates state automatically on success
+            if manipulator.minimizeWindow(context: context) {
                 completion(Response(id: request.id, result: AnyCodable(["success": true, "windowId": windowId])))
             } else {
                 completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to minimize window. MSS may not be available.")))
@@ -577,10 +575,17 @@ class MessageHandler {
                 return
             }
 
+            // Create context from window state
+            guard let context = ManipulationContext.from(windowID: windowID) else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32001, message: "Window not found: \(windowID)")))
+                return
+            }
+
             let state = StateManager.shared.getState()
             let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
 
-            if manipulator.mssClient.unminimizeWindow(windowID) {
+            // Context-based unminimize updates state automatically on success
+            if manipulator.unminimizeWindow(context: context) {
                 completion(Response(id: request.id, result: AnyCodable(["success": true, "windowId": windowId])))
             } else {
                 completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to unminimize window. MSS may not be available.")))
@@ -635,12 +640,10 @@ class MessageHandler {
                 return
             }
 
-            // Get window state to find PID
-            let state = StateManager.shared.getState()
-            guard let windowState = state.windows[String(wid)] else {
-                // Log error event
+            // Create context from window state
+            guard let context = ManipulationContext.from(windowID: wid) else {
                 Task {
-                    await JSONLogger.shared.log("err.window", data: [
+                    JSONLogger.shared.log("err.window", data: [
                         "op": "window.focus",
                         "msg": "not_found",
                         "wid": wid,
@@ -660,16 +663,16 @@ class MessageHandler {
                 )
             }
 
+            let state = StateManager.shared.getState()
             let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
 
-            if manipulator.focusWindow(pid: windowState.pid, windowID: wid) {
-                // Border and state updates happen automatically via OS focus event:
-                // AX observer → StateManager → BorderEvents → SimpleBorderManager
+            // Context-based focus updates state automatically on success
+            if manipulator.focusWindow(context: context) {
                 completion(Response(id: request.id, result: AnyCodable(["success": true, "windowId": wid])))
             } else {
                 // Log error event
                 Task {
-                    await JSONLogger.shared.log("err.window", data: [
+                    JSONLogger.shared.log("err.window", data: [
                         "op": "window.focus",
                         "msg": "failed",
                         "wid": wid,
@@ -793,7 +796,7 @@ class MessageHandler {
             let result = CGWarpMouseCursorPosition(center)
             if result == .success {
                 Task {
-                    await JSONLogger.shared.log("dbg.mouse_warp", data: [
+                    JSONLogger.shared.log("dbg.mouse_warp", data: [
                         "wid": wid,
                         "x": center.x,
                         "y": center.y
@@ -806,7 +809,7 @@ class MessageHandler {
                 ])))
             } else {
                 Task {
-                    await JSONLogger.shared.log("err.mouse", data: ["op": "warp", "result": result.rawValue])
+                    JSONLogger.shared.log("err.mouse", data: ["op": "warp", "result": result.rawValue])
                 }
                 completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to warp mouse cursor")))
             }
@@ -834,7 +837,7 @@ class MessageHandler {
             BorderConfigManager.shared.update(from: configDict)
 
             Task {
-                await JSONLogger.shared.log("dbg.border_config", data: [
+                JSONLogger.shared.log("dbg.border_config", data: [
                     "enabled": BorderConfigManager.shared.enabled,
                     "activeWidth": BorderConfigManager.shared.activeStyle.width,
                     "padding": BorderConfigManager.shared.padding
@@ -882,7 +885,7 @@ class MessageHandler {
                         cellBounds[cellID] = CGRect(x: x, y: y, width: width, height: height)
                     } else {
                         Task {
-                            await JSONLogger.shared.log("warn.cell_bounds", data: ["op": "parse", "cell": cellID])
+                            JSONLogger.shared.log("warn.cell_bounds", data: ["op": "parse", "cell": cellID])
                         }
                     }
                 }
@@ -897,7 +900,7 @@ class MessageHandler {
             }
 
             Task {
-                await JSONLogger.shared.log("dbg.cell_assign", data: [
+                JSONLogger.shared.log("dbg.cell_assign", data: [
                     "display": displayUUID,
                     "count": cellAssignments.count
                 ])

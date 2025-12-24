@@ -369,17 +369,17 @@ class BorderConfigManager {
             let alphaStr = String(hexSanitized.prefix(2))
             rgbHex = String(hexSanitized.dropFirst(2))
             guard let alphaInt = UInt8(alphaStr, radix: 16) else {
-                Task { await JSONLogger.shared.log("warn.config", data: ["msg": "failed to parse alpha in hex color", "hex": hex]) }
+                Task { JSONLogger.shared.log("warn.config", data: ["msg": "failed to parse alpha in hex color", "hex": hex]) }
                 return nil
             }
             alpha = CGFloat(alphaInt) / 255.0
         default:
-            Task { await JSONLogger.shared.log("warn.config", data: ["msg": "invalid hex color format (expected 6 or 8 chars)", "hex": hex]) }
+            Task { JSONLogger.shared.log("warn.config", data: ["msg": "invalid hex color format (expected 6 or 8 chars)", "hex": hex]) }
             return nil
         }
 
         guard let hexInt = UInt32(rgbHex, radix: 16) else {
-            Task { await JSONLogger.shared.log("warn.config", data: ["msg": "failed to parse hex color", "hex": hex]) }
+            Task { JSONLogger.shared.log("warn.config", data: ["msg": "failed to parse hex color", "hex": hex]) }
             return nil
         }
 

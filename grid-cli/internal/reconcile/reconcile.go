@@ -100,7 +100,13 @@ func syncFocus(snap *server.Snapshot, rs *state.RuntimeState) bool {
 	}
 
 	// Update focus
-
+	jsonlog.Log("dbg.sync_focus", jsonlog.WithData(map[string]any{
+		"snap_focused_wid": snap.FocusedWindowID,
+		"old_cell":         spaceState.FocusedCell,
+		"old_idx":          spaceState.FocusedWindow,
+		"new_cell":         focusedCell,
+		"new_idx":          windowIndex,
+	}))
 	rs.GetSpace(snap.SpaceID).SetFocus(focusedCell, windowIndex)
 	return true
 }

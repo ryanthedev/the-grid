@@ -32,11 +32,11 @@ class BFDManager {
             keyHandler.updateConfig(loadedConfig)
 
             Task {
-                await JSONLogger.shared.log("bfd.init", data: ["path": configPath])
+                JSONLogger.shared.log("bfd.init", data: ["path": configPath])
             }
         } catch {
             Task {
-                await JSONLogger.shared.log("bfd.err.config", data: ["err": "\(error)", "path": configPath])
+                JSONLogger.shared.log("bfd.err.config", data: ["err": "\(error)", "path": configPath])
             }
             // Start without config - will be loaded on reload
             self.config = BFDConfig()
@@ -46,7 +46,7 @@ class BFDManager {
         // Start key handler
         guard keyHandler.start() else {
             Task {
-                await JSONLogger.shared.log("bfd.err.start", data: [:])
+                JSONLogger.shared.log("bfd.err.start", data: [:])
             }
             return false
         }
@@ -63,7 +63,7 @@ class BFDManager {
         keyHandler.stop()
 
         Task {
-            await JSONLogger.shared.log("bfd.stop", data: [:])
+            JSONLogger.shared.log("bfd.stop", data: [:])
         }
     }
 
@@ -76,11 +76,11 @@ class BFDManager {
             keyHandler.updateConfig(loadedConfig)
 
             Task {
-                await JSONLogger.shared.log("bfd.reload", data: ["path": configPath])
+                JSONLogger.shared.log("bfd.reload", data: ["path": configPath])
             }
         } catch {
             Task {
-                await JSONLogger.shared.log("bfd.err.reload", data: ["err": "\(error)"])
+                JSONLogger.shared.log("bfd.err.reload", data: ["err": "\(error)"])
             }
         }
     }

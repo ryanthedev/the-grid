@@ -22,7 +22,7 @@ class BorderEvents: StateEventHandler {
         self.simpleBorderManager = simpleBorderManager
 
         Task {
-            await JSONLogger.shared.log("bdr.events.init", data: [:])
+            JSONLogger.shared.log("bdr.events.init", data: [:])
             await EventRouter.shared.register(self)
         }
     }

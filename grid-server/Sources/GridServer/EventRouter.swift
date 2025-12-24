@@ -166,7 +166,7 @@ actor EventRouter {
         handlers.append(WeakHandler(handler))
 
         Task {
-            await JSONLogger.shared.log("router.register", data: [
+            JSONLogger.shared.log("router.register", data: [
                 "handler": String(describing: type(of: handler)),
                 "count": handlers.count
             ])
@@ -178,7 +178,7 @@ actor EventRouter {
         handlers.removeAll { $0.handler === handler || $0.handler == nil }
 
         Task {
-            await JSONLogger.shared.log("router.unregister", data: [
+            JSONLogger.shared.log("router.unregister", data: [
                 "handler": String(describing: type(of: handler)),
                 "count": handlers.count
             ])
@@ -199,7 +199,7 @@ actor EventRouter {
                 do {
                     try await handler.handle(event, context: context)
                 } catch {
-                    await JSONLogger.shared.log("router.err", msg: "handler error", data: [
+                    JSONLogger.shared.log("router.err", msg: "handler error", data: [
                         "handler": String(describing: type(of: handler)),
                         "event": event.logInfo.0,
                         "error": String(describing: error)
@@ -226,7 +226,7 @@ actor EventRouter {
             logData["tid"] = tid
         }
 
-        await JSONLogger.shared.log(eventName, data: logData)
+        JSONLogger.shared.log(eventName, data: logData)
     }
 }
 

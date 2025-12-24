@@ -48,7 +48,7 @@ class StateManager: StateEventHandler {
         self.mssClient = MSSClient()
 
         Task {
-            await JSONLogger.shared.log("state.init", data: ["cid": self.connectionID])
+            JSONLogger.shared.log("state.init", data: ["cid": self.connectionID])
         }
     }
 
@@ -124,7 +124,7 @@ class StateManager: StateEventHandler {
             handleWindowTitleChanged(windowID, title: title)
 
         case .windowSpaceAssignmentChanged(let windowID, let spaces):
-            await JSONLogger.shared.log("dbg.spaces", msg: "space assignment changed", data: [
+            JSONLogger.shared.log("dbg.spaces", msg: "space assignment changed", data: [
                 "wid": windowID,
                 "spaces": spaces
             ])
@@ -161,58 +161,58 @@ class StateManager: StateEventHandler {
             handleDisplayConfigurationChanged()
 
         case .spaceCreated(let spaceID, let displayUUID):
-            await JSONLogger.shared.log("dbg.space", msg: "space created", data: [
+            JSONLogger.shared.log("dbg.space", msg: "space created", data: [
                 "sid": spaceID,
                 "display": displayUUID
             ])
 
         case .spaceDestroyed(let spaceID):
-            await JSONLogger.shared.log("dbg.space", msg: "space destroyed", data: [
+            JSONLogger.shared.log("dbg.space", msg: "space destroyed", data: [
                 "sid": spaceID
             ])
 
         case .displayConnected(let displayUUID):
-            await JSONLogger.shared.log("dbg.display", msg: "display connected", data: [
+            JSONLogger.shared.log("dbg.display", msg: "display connected", data: [
                 "display": displayUUID
             ])
 
         case .displayDisconnected(let displayUUID):
-            await JSONLogger.shared.log("dbg.display", msg: "display disconnected", data: [
+            JSONLogger.shared.log("dbg.display", msg: "display disconnected", data: [
                 "display": displayUUID
             ])
 
         case .commandFocusWindow(let windowID, let requestID):
-            await JSONLogger.shared.log("dbg.cmd", msg: "focus command", data: [
+            JSONLogger.shared.log("dbg.cmd", msg: "focus command", data: [
                 "wid": windowID,
                 "req": requestID
             ])
 
         case .commandMoveWindow(let windowID, let frame, let requestID):
-            await JSONLogger.shared.log("dbg.cmd", msg: "move command", data: [
+            JSONLogger.shared.log("dbg.cmd", msg: "move command", data: [
                 "wid": windowID,
                 "req": requestID
             ])
 
         case .commandResizeWindow(let windowID, let frame, let requestID):
-            await JSONLogger.shared.log("dbg.cmd", msg: "resize command", data: [
+            JSONLogger.shared.log("dbg.cmd", msg: "resize command", data: [
                 "wid": windowID,
                 "req": requestID
             ])
 
         case .commandMinimizeWindow(let windowID, let requestID):
-            await JSONLogger.shared.log("dbg.cmd", msg: "minimize command", data: [
+            JSONLogger.shared.log("dbg.cmd", msg: "minimize command", data: [
                 "wid": windowID,
                 "req": requestID
             ])
 
         case .commandCloseWindow(let windowID, let requestID):
-            await JSONLogger.shared.log("dbg.cmd", msg: "close command", data: [
+            JSONLogger.shared.log("dbg.cmd", msg: "close command", data: [
                 "wid": windowID,
                 "req": requestID
             ])
 
         case .commandMoveWindowToSpace(let windowID, let spaceID, let requestID):
-            await JSONLogger.shared.log("dbg.cmd", msg: "move to space command", data: [
+            JSONLogger.shared.log("dbg.cmd", msg: "move to space command", data: [
                 "wid": windowID,
                 "sid": spaceID,
                 "req": requestID
@@ -285,7 +285,7 @@ class StateManager: StateEventHandler {
         }
 
         // Log combined startup focus event
-        await JSONLogger.shared.log("win.focus", data: [
+        JSONLogger.shared.log("win.focus", data: [
             "wid": windowID,
             "app": frontApp.localizedName ?? "unknown",
             "sid": spaceID,
@@ -477,7 +477,7 @@ class StateManager: StateEventHandler {
         // where SkyLight reports multiple phantom window IDs but AX only sees one real window)
         if windows.count == 1 {
             Task {
-                await JSONLogger.shared.log("ax.single", data: ["wid": windowID, "pid": pid])
+                JSONLogger.shared.log("ax.single", data: ["wid": windowID, "pid": pid])
             }
             return extractAXProperties(from: windows[0])
         }
@@ -584,7 +584,7 @@ class StateManager: StateEventHandler {
 
         if let displayStr = displayStr {
             if logChanges && state.metadata.activeDisplayUUID != displayStr {
-                await JSONLogger.shared.log("dsp.change", data: [
+                JSONLogger.shared.log("dsp.change", data: [
                     "display": displayStr,
                     "wid": windowID,
                     "method": method
@@ -654,7 +654,7 @@ class StateManager: StateEventHandler {
         if let event = logEvent {
             var data: [String: Any] = ["wid": windowID]
             data.merge(logData) { _, new in new }
-            await JSONLogger.shared.log(event, data: data)
+            JSONLogger.shared.log(event, data: data)
         }
     }
 
@@ -662,6 +662,72 @@ class StateManager: StateEventHandler {
     func updateWindowSpacesPublic(_ windowID: UInt32) {
         executeOnQueue {
             self.updateWindowSpaces(windowID)
+        }
+    }
+
+    /// Public method to set focused window (for MessageHandler focus commands)
+    /// This updates state immediately rather than waiting for AX callback which may not fire
+    /// Uses executeOnQueueSync for proper serialization (no Task spawning)
+    func setFocusedWindow(_ windowID: UInt32) {
+        executeOnQueueSync {
+            self.state.metadata.focusedWindowID = windowID
+
+            // Update active display (geometric lookup, no logging in sync path)
+            let windowKey = String(windowID)
+            if let window = self.state.windows[windowKey],
+               !window.isMinimized,
+               let display = self.displayForWindowFrame(window.frame) {
+                self.state.metadata.activeDisplayUUID = display.uuid
+            } else if let displayUUID = SLSCopyManagedDisplayForWindow(self.connectionID, windowID) {
+                self.state.metadata.activeDisplayUUID = displayUUID as String
+            }
+
+            // Update active space
+            if let window = self.state.windows[windowKey],
+               let firstSpace = window.spaces.first {
+                self.state.metadata.activeSpaceID = UInt64(firstSpace)
+                let spaceKey = String(firstSpace)
+                self.state.spaces[spaceKey]?.lastFocusedWindowID = windowID
+            } else if let displayUUID = SLSCopyManagedDisplayForWindow(self.connectionID, windowID) {
+                let querySpaceID = SLSManagedDisplayGetCurrentSpace(self.connectionID, displayUUID)
+                if querySpaceID != 0 {
+                    self.state.metadata.activeSpaceID = querySpaceID
+                    let spaceKey = String(querySpaceID)
+                    self.state.spaces[spaceKey]?.lastFocusedWindowID = windowID
+                }
+            }
+
+            self.state.metadata.update()
+        }
+    }
+
+    /// Public method to update window frame (for MessageHandler move/resize commands)
+    /// This updates state immediately rather than waiting for AX callback which may not fire
+    func setWindowFrame(_ windowID: UInt32, frame: CGRect) {
+        executeOnQueueSync {
+            guard var window = self.state.windows[String(windowID)] else { return }
+            window.frame = frame
+            let originalSpaces = window.spaces
+            window.displayUUID = self.computeDisplayUUID(for: window)
+            self.deriveSpaceFromDisplay(for: &window, originalSpaces: originalSpaces)
+            window.lastUpdated = Date()
+            self.state.windows[String(windowID)] = window
+            self.state.metadata.update()
+        }
+    }
+
+    /// Public method to set window minimized state (for MessageHandler minimize commands)
+    /// This updates state immediately rather than waiting for AX callback which may not fire
+    /// Uses executeOnQueueSync for proper serialization (no Task spawning)
+    func setWindowMinimized(_ windowID: UInt32, minimized: Bool) {
+        executeOnQueueSync {
+            let key = String(windowID)
+            guard var window = self.state.windows[key] else { return }
+            window.isMinimized = minimized
+            window.isOrderedIn = !minimized
+            window.lastUpdated = Date()
+            self.state.windows[key] = window
+            self.state.metadata.update()
         }
     }
 
@@ -1354,7 +1420,7 @@ class StateManager: StateEventHandler {
                 state.metadata.activeSpaceID = display.currentSpaceID  // Fix: also set activeSpaceID
                 if oldUUID != display.uuid {
                     Task {
-                        await JSONLogger.shared.log("dsp.update", data: [
+                        JSONLogger.shared.log("dsp.update", data: [
                             "display": display.uuid,
                             "sid": display.currentSpaceID,
                             "prev": oldUUID ?? "nil"
@@ -1365,7 +1431,7 @@ class StateManager: StateEventHandler {
             }
         }
         Task {
-            await JSONLogger.shared.log("warn.dsp", msg: "no active space found")
+            JSONLogger.shared.log("warn.dsp", msg: "no active space found")
         }
     }
 
@@ -1375,7 +1441,7 @@ class StateManager: StateEventHandler {
         guard let space = state.spaces[spaceKey],
               let windowID = space.lastFocusedWindowID else {
             Task {
-                await JSONLogger.shared.log("dbg.focus", msg: "no last focused window", data: ["sid": spaceID])
+                JSONLogger.shared.log("dbg.focus", msg: "no last focused window", data: ["sid": spaceID])
             }
             return
         }
@@ -1384,7 +1450,7 @@ class StateManager: StateEventHandler {
         guard let window = state.windows[String(windowID)],
               window.isOrderedIn && !window.isMinimized else {
             Task {
-                await JSONLogger.shared.log("dbg.focus", msg: "window unavailable", data: [
+                JSONLogger.shared.log("dbg.focus", msg: "window unavailable", data: [
                     "sid": spaceID,
                     "wid": windowID
                 ])
@@ -1393,7 +1459,7 @@ class StateManager: StateEventHandler {
         }
 
         Task {
-            await JSONLogger.shared.log("win.focus.restore", data: [
+            JSONLogger.shared.log("win.focus.restore", data: [
                 "sid": spaceID,
                 "wid": windowID,
                 "app": window.appName ?? "unknown"
@@ -1406,7 +1472,7 @@ class StateManager: StateEventHandler {
 
         if !success {
             Task {
-                await JSONLogger.shared.log("warn.focus", msg: "restore failed", data: ["wid": windowID])
+                JSONLogger.shared.log("warn.focus", msg: "restore failed", data: ["wid": windowID])
             }
         }
     }
@@ -1463,7 +1529,7 @@ class StateManager: StateEventHandler {
             if let focusedID = self.state.metadata.focusedWindowID,
                let focusedWindow = self.state.windows[String(focusedID)],
                focusedWindow.pid == pid {
-                await JSONLogger.shared.log("dbg.focus", msg: "clearing focus (app terminated)", data: ["pid": pid])
+                JSONLogger.shared.log("dbg.focus", msg: "clearing focus (app terminated)", data: ["pid": pid])
                 self.state.metadata.focusedWindowID = nil
             }
 
@@ -1513,7 +1579,7 @@ class StateManager: StateEventHandler {
 
         guard result == .success,
               let windowElement = focusedWindow else {
-            await JSONLogger.shared.log("dbg.ax", msg: "could not get focused window", data: ["pid": pid])
+            JSONLogger.shared.log("dbg.ax", msg: "could not get focused window", data: ["pid": pid])
             return
         }
 
@@ -1522,11 +1588,11 @@ class StateManager: StateEventHandler {
         let windowResult = _AXUIElementGetWindow(windowElement as! AXUIElement, &windowID)
 
         guard windowResult == .success, windowID != 0 else {
-            await JSONLogger.shared.log("dbg.ax", msg: "could not get window ID", data: ["pid": pid])
+            JSONLogger.shared.log("dbg.ax", msg: "could not get window ID", data: ["pid": pid])
             return
         }
 
-        await JSONLogger.shared.log("win.focus.app", data: ["wid": windowID, "pid": pid])
+        JSONLogger.shared.log("win.focus.app", data: ["wid": windowID, "pid": pid])
         await applyWindowFocus(windowID)
     }
 
@@ -1575,7 +1641,7 @@ class StateManager: StateEventHandler {
 
     private func handleSystemWoke() {
         executeOnQueue {
-            await JSONLogger.shared.log("state.wake")
+            JSONLogger.shared.log("state.wake")
             await self.refreshCompleteState()
         }
     }

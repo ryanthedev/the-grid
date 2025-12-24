@@ -59,7 +59,7 @@ class BFDKeyHandler {
         }
 
         Task {
-            await JSONLogger.shared.log("bfd.config", data: [
+            JSONLogger.shared.log("bfd.config", data: [
                 "hotkeys": globalHotkeys.count,
                 "apps": appHotkeys.count,
                 "blacklist": blacklist.count
@@ -85,7 +85,7 @@ class BFDKeyHandler {
             },
             userInfo: Unmanaged.passUnretained(self).toOpaque()
         ) else {
-            Task { await JSONLogger.shared.log("bfd.err.tap", data: [:]) }
+            Task { JSONLogger.shared.log("bfd.err.tap", data: [:]) }
             return false
         }
 
@@ -102,7 +102,7 @@ class BFDKeyHandler {
         CGEvent.tapEnable(tap: tap, enable: true)
 
         isEnabled = true
-        Task { await JSONLogger.shared.log("bfd.start", data: [:]) }
+        Task { JSONLogger.shared.log("bfd.start", data: [:]) }
 
         return true
     }
@@ -122,7 +122,7 @@ class BFDKeyHandler {
         eventTap = nil
         isEnabled = false
 
-        Task { await JSONLogger.shared.log("bfd.stop", data: [:]) }
+        Task { JSONLogger.shared.log("bfd.stop", data: [:]) }
     }
 
     // MARK: - Private

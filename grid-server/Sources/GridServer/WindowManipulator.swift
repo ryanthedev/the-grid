@@ -9,6 +9,36 @@ import Foundation
 import CoreGraphics
 import AppKit
 
+/// Context object for window manipulation operations
+/// Passed through manipulation methods to provide state and enable immediate state updates
+struct ManipulationContext {
+    let windowID: UInt32
+    let pid: pid_t
+    var frame: CGRect?
+
+    // Use shared StateManager - can be extended later if needed
+    var stateManager: StateManager { StateManager.shared }
+
+    init(windowID: UInt32, pid: pid_t, frame: CGRect? = nil) {
+        self.windowID = windowID
+        self.pid = pid
+        self.frame = frame
+    }
+
+    /// Create context from window state lookup
+    static func from(windowID: UInt32) -> ManipulationContext? {
+        let state = StateManager.shared.getState()
+        guard let windowState = state.windows[String(windowID)] else {
+            return nil
+        }
+        return ManipulationContext(
+            windowID: windowID,
+            pid: windowState.pid,
+            frame: windowState.frame
+        )
+    }
+}
+
 /// Helper class for window manipulation operations
 class WindowManipulator {
     private let connectionID: Int32
@@ -30,7 +60,7 @@ class WindowManipulator {
         let result = AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &windowsValue)
 
         guard result == .success, let windows = windowsValue as? [AXUIElement] else {
-            Task { await JSONLogger.shared.log("ax.fail", data: ["pid": pid, "reason": "windows_list"]) }
+            Task { JSONLogger.shared.log("ax.fail", data: ["pid": pid, "reason": "windows_list"]) }
             return nil
         }
 
@@ -44,11 +74,11 @@ class WindowManipulator {
         // Fallback: If only one AX window exists, use it (handles apps like Ghostty
         // where SkyLight reports multiple phantom window IDs but AX only sees one real window)
         if windows.count == 1 {
-            Task { await JSONLogger.shared.log("ax.single", data: ["wid": windowID, "pid": pid]) }
+            Task { JSONLogger.shared.log("ax.single", data: ["wid": windowID, "pid": pid]) }
             return windows[0]
         }
 
-        Task { await JSONLogger.shared.log("ax.fail", data: ["pid": pid, "wid": windowID, "reason": "not_in_list"]) }
+        Task { JSONLogger.shared.log("ax.fail", data: ["pid": pid, "wid": windowID, "reason": "not_in_list"]) }
         // Note: Don't call handleWindowDestroyed - window still exists, just can't be found by AX ID
         return nil
     }
@@ -70,7 +100,7 @@ class WindowManipulator {
         let result = AXUIElementSetAttributeValue(element, kAXPositionAttribute as CFString, axValue)
 
         if result != AXError.success {
-            Task { await JSONLogger.shared.log("ax.fail", data: ["op": "position", "err": result.rawValue, "x": point.x, "y": point.y]) }
+            Task { JSONLogger.shared.log("ax.fail", data: ["op": "position", "err": result.rawValue, "x": point.x, "y": point.y]) }
             return false
         }
 
@@ -85,7 +115,7 @@ class WindowManipulator {
         let result = AXUIElementSetAttributeValue(element, kAXSizeAttribute as CFString, axValue)
 
         if result != AXError.success {
-            Task { await JSONLogger.shared.log("ax.fail", data: ["op": "size", "err": result.rawValue, "w": size.width, "h": size.height]) }
+            Task { JSONLogger.shared.log("ax.fail", data: ["op": "size", "err": result.rawValue, "w": size.width, "h": size.height]) }
             return false
         }
 
@@ -99,6 +129,66 @@ class WindowManipulator {
         let sizeSuccess = setWindowSize(element: element, size: frame.size)
 
         return positionSuccess && sizeSuccess
+    }
+
+    // MARK: - Context-Based Frame Manipulation
+
+    /// Move window to position using context - updates state immediately on success
+    func moveWindow(context: ManipulationContext, to point: CGPoint) -> Bool {
+        guard let element = getAXElement(pid: context.pid, windowID: context.windowID) else {
+            return false
+        }
+        let result = setWindowPosition(element: element, point: point)
+        if result {
+            let currentSize = context.frame?.size ?? CGSize(width: 100, height: 100)
+            let newFrame = CGRect(origin: point, size: currentSize)
+            context.stateManager.setWindowFrame(context.windowID, frame: newFrame)
+        }
+        return result
+    }
+
+    /// Resize window using context - updates state immediately on success
+    func resizeWindow(context: ManipulationContext, to size: CGSize) -> Bool {
+        guard let element = getAXElement(pid: context.pid, windowID: context.windowID) else {
+            return false
+        }
+        let result = setWindowSize(element: element, size: size)
+        if result {
+            let currentOrigin = context.frame?.origin ?? CGPoint.zero
+            let newFrame = CGRect(origin: currentOrigin, size: size)
+            context.stateManager.setWindowFrame(context.windowID, frame: newFrame)
+        }
+        return result
+    }
+
+    /// Set window frame using context - updates state immediately on success
+    func setWindowFrame(context: ManipulationContext, frame: CGRect) -> Bool {
+        guard let element = getAXElement(pid: context.pid, windowID: context.windowID) else {
+            return false
+        }
+        let result = setWindowFrame(element: element, frame: frame)
+        if result {
+            context.stateManager.setWindowFrame(context.windowID, frame: frame)
+        }
+        return result
+    }
+
+    /// Minimize window using context - updates state immediately on success
+    func minimizeWindow(context: ManipulationContext) -> Bool {
+        let result = mssClient.minimizeWindow(context.windowID)
+        if result {
+            context.stateManager.setWindowMinimized(context.windowID, minimized: true)
+        }
+        return result
+    }
+
+    /// Unminimize window using context - updates state immediately on success
+    func unminimizeWindow(context: ManipulationContext) -> Bool {
+        let result = mssClient.unminimizeWindow(context.windowID)
+        if result {
+            context.stateManager.setWindowMinimized(context.windowID, minimized: false)
+        }
+        return result
     }
 
     // MARK: - Space Manipulation
@@ -154,7 +244,7 @@ class WindowManipulator {
 
     /// Move window using compatibility workspace IDs (for modern macOS)
     private func moveWindowViaCompatibilityWorkspace(windowID: UInt32, spaceID: UInt64) -> Bool {
-        Task { await JSONLogger.shared.log("sls.compat", data: ["wid": windowID, "sid": spaceID]) }
+        Task { JSONLogger.shared.log("sls.compat", data: ["wid": windowID, "sid": spaceID]) }
 
         // Use "grid" as magic constant (0x67726964)
         let compatID: Int32 = 0x67726964
@@ -163,7 +253,7 @@ class WindowManipulator {
         var result = SLSSpaceSetCompatID(connectionID, spaceID, compatID)
 
         if result != .success {
-            Task { await JSONLogger.shared.log("err.sls", data: ["op": "set_compat", "err": result.rawValue, "sid": spaceID]) }
+            Task { JSONLogger.shared.log("err.sls", data: ["op": "set_compat", "err": result.rawValue, "sid": spaceID]) }
             return false
         }
 
@@ -174,11 +264,11 @@ class WindowManipulator {
         // Always clean up - reset compat ID to 0
         let resetResult = SLSSpaceSetCompatID(connectionID, spaceID, 0)
         if resetResult != .success {
-            Task { await JSONLogger.shared.log("warn.sls", data: ["op": "reset_compat", "err": resetResult.rawValue]) }
+            Task { JSONLogger.shared.log("warn.sls", data: ["op": "reset_compat", "err": resetResult.rawValue]) }
         }
 
         if result != .success {
-            Task { await JSONLogger.shared.log("err.sls", data: ["op": "workspace", "err": result.rawValue, "wid": windowID]) }
+            Task { JSONLogger.shared.log("err.sls", data: ["op": "workspace", "err": result.rawValue, "wid": windowID]) }
             return false
         }
 
@@ -187,7 +277,7 @@ class WindowManipulator {
 
     /// Move window using direct SLSMoveWindowsToManagedSpace API
     private func moveWindowViaSkyLightAPI(windowID: UInt32, spaceID: UInt64) -> Bool {
-        Task { await JSONLogger.shared.log("sls.move", data: ["wid": windowID, "sid": spaceID]) }
+        Task { JSONLogger.shared.log("sls.move", data: ["wid": windowID, "sid": spaceID]) }
 
         // Create CFArray with proper kCFTypeArrayCallBacks
         let windowArray = createWindowArray(windowIDs: [windowID])
@@ -201,13 +291,13 @@ class WindowManipulator {
 
     /// Move a window to a specific space
     func moveWindowToSpace(windowID: UInt32, spaceID: UInt64) -> Bool {
-        Task { await JSONLogger.shared.log("win.space", data: ["wid": windowID, "sid": spaceID]) }
+        Task { JSONLogger.shared.log("win.space", data: ["wid": windowID, "sid": spaceID]) }
 
         // Validate space type - don't allow moves to fullscreen spaces
         let spaceType = SLSSpaceGetType(connectionID, spaceID)
 
         if spaceType == SpaceType.fullscreen.rawValue {
-            Task { await JSONLogger.shared.log("err.space", data: ["reason": "fullscreen", "sid": spaceID]) }
+            Task { JSONLogger.shared.log("err.space", data: ["reason": "fullscreen", "sid": spaceID]) }
             return false
         }
 
@@ -215,7 +305,7 @@ class WindowManipulator {
         let currentSpace = getWindowSpace(windowID: windowID)
 
         if currentSpace == spaceID {
-            Task { await JSONLogger.shared.log("dbg.space", data: ["reason": "already_there", "wid": windowID]) }
+            Task { JSONLogger.shared.log("dbg.space", data: ["reason": "already_there", "wid": windowID]) }
             return true
         }
 
@@ -230,7 +320,7 @@ class WindowManipulator {
                 let success = mssClient.moveWindowToSpace(windowID: windowID, spaceID: spaceID)
 
                 if !success {
-                    Task { await JSONLogger.shared.log("mss.fail", data: ["op": "move", "wid": windowID, "sid": spaceID]) }
+                    Task { JSONLogger.shared.log("mss.fail", data: ["op": "move", "wid": windowID, "sid": spaceID]) }
                     return false
                 }
 
@@ -239,16 +329,16 @@ class WindowManipulator {
                 let verified = newSpace == spaceID
 
                 if verified {
-                    Task { await JSONLogger.shared.log("mss.move", data: ["wid": windowID, "sid": spaceID]) }
+                    Task { JSONLogger.shared.log("mss.move", data: ["wid": windowID, "sid": spaceID]) }
                     return true
                 } else {
-                    Task { await JSONLogger.shared.log("err.verify", data: ["wid": windowID, "expected": spaceID, "actual": newSpace as Any]) }
+                    Task { JSONLogger.shared.log("err.verify", data: ["wid": windowID, "expected": spaceID, "actual": newSpace as Any]) }
                     return false
                 }
 
             } else {
                 // MSS not available
-                Task { await JSONLogger.shared.log("warn.mss", data: ["reason": "not_available"]) }
+                Task { JSONLogger.shared.log("warn.mss", data: ["reason": "not_available"]) }
                 return false
             }
         } else {
@@ -257,7 +347,7 @@ class WindowManipulator {
             let success = moveWindowViaSkyLightAPI(windowID: windowID, spaceID: spaceID)
 
             if !success {
-                Task { await JSONLogger.shared.log("err.sls", data: ["op": "move"]) }
+                Task { JSONLogger.shared.log("err.sls", data: ["op": "move"]) }
                 return false
             }
 
@@ -265,7 +355,7 @@ class WindowManipulator {
             let verified = newSpace == spaceID
 
             if !verified {
-                Task { await JSONLogger.shared.log("err.verify", data: ["wid": windowID, "expected": spaceID, "actual": newSpace as Any]) }
+                Task { JSONLogger.shared.log("err.verify", data: ["wid": windowID, "expected": spaceID, "actual": newSpace as Any]) }
             }
 
             return verified
@@ -310,7 +400,7 @@ class WindowManipulator {
         // 1. Get PSN from PID
         var psn = ProcessSerialNumber(highLongOfPSN: 0, lowLongOfPSN: 0)
         guard GetProcessForPID(pid, &psn) == 0 else {
-            Task { await JSONLogger.shared.log("warn.focus", data: ["reason": "psn_fail", "pid": pid]) }
+            Task { JSONLogger.shared.log("warn.focus", data: ["reason": "psn_fail", "pid": pid]) }
             return focusWindowFallback(pid: pid, windowID: windowID)
         }
 
@@ -350,12 +440,21 @@ class WindowManipulator {
     /// Focus a window by raising it and activating its app
     /// Uses yabai-style event synthesis for reliable same-app window focus
     func focusWindow(pid: pid_t, windowID: UInt32) -> Bool {
-        Task { await JSONLogger.shared.log("win.focus", data: ["pid": pid, "wid": windowID]) }
+        Task { JSONLogger.shared.log("win.focus", data: ["pid": pid, "wid": windowID]) }
 
         let result = focusWindowWithRaise(pid: pid, windowID: windowID)
 
         if !result {
-            Task { await JSONLogger.shared.log("err.focus", data: ["wid": windowID]) }
+            Task { JSONLogger.shared.log("err.focus", data: ["wid": windowID]) }
+        }
+        return result
+    }
+
+    /// Focus a window using context - updates state immediately on success
+    func focusWindow(context: ManipulationContext) -> Bool {
+        let result = focusWindow(pid: context.pid, windowID: context.windowID)
+        if result {
+            context.stateManager.setFocusedWindow(context.windowID)
         }
         return result
     }
@@ -366,11 +465,11 @@ class WindowManipulator {
     func moveWindowToDisplay(windowID: UInt32, displayUUID: String, position: CGPoint?, stateManager: StateManager) -> Bool {
         // Find a space on the target display
         guard let targetSpace = stateManager.getState().spaces.values.first(where: { $0.displayUUID == displayUUID }) else {
-            Task { await JSONLogger.shared.log("err.display", data: ["reason": "no_space", "uuid": displayUUID]) }
+            Task { JSONLogger.shared.log("err.display", data: ["reason": "no_space", "uuid": displayUUID]) }
             return false
         }
 
-        Task { await JSONLogger.shared.log("win.move", data: ["wid": windowID, "display": displayUUID, "sid": targetSpace.id]) }
+        Task { JSONLogger.shared.log("win.move", data: ["wid": windowID, "display": displayUUID, "sid": targetSpace.id]) }
 
         // First, move the window to a space on that display
         if !moveWindowToSpace(windowID: windowID, spaceID: targetSpace.id) {
@@ -382,13 +481,13 @@ class WindowManipulator {
             // Get the window from state to find its PID
             guard let windowState = stateManager.getState().windows[String(windowID)],
                   let element = getAXElement(pid: windowState.pid, windowID: windowID) else {
-                Task { await JSONLogger.shared.log("err.ax", data: ["op": "get_element", "wid": windowID]) }
+                Task { JSONLogger.shared.log("err.ax", data: ["op": "get_element", "wid": windowID]) }
                 return false
             }
 
             // Set the position
             if !setWindowPosition(element: element, point: position) {
-                Task { await JSONLogger.shared.log("warn.move", data: ["reason": "position_fail", "wid": windowID]) }
+                Task { JSONLogger.shared.log("warn.move", data: ["reason": "position_fail", "wid": windowID]) }
                 return false
             }
         }

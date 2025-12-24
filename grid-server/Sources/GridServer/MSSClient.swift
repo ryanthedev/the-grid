@@ -62,11 +62,11 @@ class MSSClient {
             }
 
             guard ctx != nil else {
-                Task { await JSONLogger.shared.log("err.mss", data: ["op": "init"]) }
+                Task { JSONLogger.shared.log("err.mss", data: ["op": "init"]) }
                 return
             }
 
-            Task { await JSONLogger.shared.log("mss.init", data: [:]) }
+            Task { JSONLogger.shared.log("mss.init", data: [:]) }
         }
     }
 
@@ -94,7 +94,7 @@ class MSSClient {
             if result == 0 {  // MSS_SUCCESS = 0
                 return true
             } else {
-                Task { await JSONLogger.shared.log("mss.fail", data: ["op": "handshake", "err": result]) }
+                Task { JSONLogger.shared.log("mss.fail", data: ["op": "handshake", "err": result]) }
                 return false
             }
         }
@@ -129,14 +129,14 @@ class MSSClient {
     func moveWindowToSpace(windowID: UInt32, spaceID: UInt64) -> Bool {
         return queue.sync {
             guard let ctx = ctx else {
-                Task { await JSONLogger.shared.log("err.mss", data: ["op": "no_ctx"]) }
+                Task { JSONLogger.shared.log("err.mss", data: ["op": "no_ctx"]) }
                 return false
             }
 
             let result = mss_window_move_to_space(ctx, windowID, spaceID)
 
             if !result {
-                Task { await JSONLogger.shared.log("mss.fail", data: ["op": "move", "wid": windowID, "sid": spaceID]) }
+                Task { JSONLogger.shared.log("mss.fail", data: ["op": "move", "wid": windowID, "sid": spaceID]) }
             }
 
             return result
@@ -259,7 +259,7 @@ class MSSClient {
         return queue.sync {
             guard let ctx = ctx else { return false }
 
-            Task { await JSONLogger.shared.log("mss.focus", data: ["wid": windowID]) }
+            Task { JSONLogger.shared.log("mss.focus", data: ["wid": windowID]) }
             return mss_window_focus(ctx, windowID)
         }
     }

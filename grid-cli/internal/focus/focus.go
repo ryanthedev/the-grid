@@ -46,6 +46,12 @@ func CycleFocus(
 
 	// Calculate next window index
 	idx := spaceState.FocusedWindow
+	jsonlog.Log("dbg.cycle", jsonlog.WithData(map[string]any{
+		"step":         "before_cycle",
+		"idx_before":   idx,
+		"cell_windows": cell.Windows,
+		"cell_id":      cellID,
+	}))
 	if idx < 0 || idx >= len(cell.Windows) {
 		idx = 0
 	}
@@ -72,6 +78,11 @@ func CycleFocus(
 	}
 
 	windowID := cell.Windows[idx]
+	jsonlog.Log("dbg.cycle", jsonlog.WithData(map[string]any{
+		"step":       "after_cycle",
+		"idx_after":  idx,
+		"target_wid": windowID,
+	}))
 
 	// Focus via server
 	if err := FocusWindow(ctx, c, windowID); err != nil {
