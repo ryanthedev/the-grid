@@ -17,6 +17,8 @@ struct WindowManagerState: Codable {
     var windows: [String: WindowState]  // Keyed by window ID (as string for JSON compatibility)
     var applications: [String: ApplicationState]  // Keyed by PID (as string for JSON compatibility)
     var metadata: StateMetadata
+    var serverVersion: String?
+    var serverCommit: String?
 
     init() {
         self.displays = []
@@ -24,6 +26,8 @@ struct WindowManagerState: Codable {
         self.windows = [:]
         self.applications = [:]
         self.metadata = StateMetadata()
+        self.serverVersion = nil
+        self.serverCommit = nil
     }
 }
 

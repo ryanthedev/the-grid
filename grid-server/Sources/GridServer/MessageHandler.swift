@@ -130,20 +130,15 @@ class MessageHandler {
         register(method: "dump") { [weak self] request, completion in
             do {
                 // Get state from StateManager (Codable type preserves all type information)
-                let state = try StateManager.shared.getStateDictionary()
+                var state = try StateManager.shared.getStateDictionary()
 
-                // Encode state to JSON, decode as dictionary, add version info
-                let encoder = JSONEncoder()
-                let data = try encoder.encode(state)
-                var dict = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
-
-                // Add server version info to the dump
-                dict["serverVersion"] = GridServerVersion
-                dict["serverCommit"] = GridServerCommit
+                // Add server version info directly to state (avoids JSONSerialization type coercion)
+                state.serverVersion = GridServerVersion
+                state.serverCommit = GridServerCommit
 
                 let response = Response(
                     id: request.id,
-                    result: AnyCodable(dict)
+                    result: AnyCodable(state)
                 )
                 completion(response)
             } catch {

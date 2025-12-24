@@ -9,6 +9,11 @@ import (
 	"github.com/ryanthedev/grid-cli/internal/types"
 )
 
+// MinTileableDimension filters out toolbars (30px), tab bars, and other
+// UI chrome that appears in CGWindowList but shouldn't be tiled.
+// Set to 100px to allow small utility windows (calculator ~180px).
+const MinTileableDimension = 100
+
 // DisplayInfo contains display metadata for cross-monitor navigation
 type DisplayInfo struct {
 	UUID           string
@@ -55,6 +60,14 @@ type WindowInfo struct {
 // that exist in CGWindowList but cannot be controlled via accessibility APIs.
 func (w WindowInfo) IsTileable() bool {
 	if w.IsMinimized || w.IsHidden || w.Level != 0 {
+		return false
+	}
+	// Filter windows with invalid dimensions (toolbars, tab bars)
+	if w.Frame.Height < MinTileableDimension || w.Frame.Width < MinTileableDimension {
+		return false
+	}
+	// Filter windows significantly above screen (phantom windows at Y=-1080)
+	if w.Frame.Y < -100 {
 		return false
 	}
 	// Must have valid AX window role - phantoms have empty role
