@@ -123,6 +123,17 @@ var pingCmd = &cobra.Command{
 		if ts, ok := result["timestamp"].(float64); ok {
 			fmt.Printf("Server timestamp: %v\n", time.Unix(int64(ts), 0))
 		}
+		if version, ok := result["version"].(string); ok {
+			commit := ""
+			if c, ok := result["commit"].(string); ok && len(c) >= 7 {
+				commit = c[:7]
+			}
+			if commit != "" {
+				fmt.Printf("Server version: %s (%s)\n", version, commit)
+			} else {
+				fmt.Printf("Server version: %s\n", version)
+			}
+		}
 
 		return nil
 	},
