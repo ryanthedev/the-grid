@@ -47,6 +47,7 @@ type WindowInfo struct {
 	HasMinimizeButton   bool
 	HasZoomButton       bool
 	IsModal             bool
+	DisplayUUID         string // Geometrically computed display UUID
 }
 
 // IsTileable returns true if the window should be included in tiling.
@@ -460,6 +461,7 @@ func parseWindow(w interface{}, spaceID string) *WindowInfo {
 		HasMinimizeButton:   toBool(win["hasMinimizeButton"]),
 		HasZoomButton:       toBool(win["hasZoomButton"]),
 		IsModal:             toBool(win["isModal"]),
+		DisplayUUID:         toString(win["displayUUID"]),
 	}
 
 	// Parse frame

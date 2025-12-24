@@ -193,6 +193,9 @@ struct WindowState: Codable {
     // Timestamp for conflict resolution between events and polling
     var lastUpdated: Date
 
+    // Geometrically computed display UUID (based on window frame center point)
+    var displayUUID: String?
+
     enum CodingKeys: String, CodingKey {
         case id
         case frame
@@ -216,6 +219,7 @@ struct WindowState: Codable {
         case hasZoomButton
         case isModal
         case lastUpdated
+        case displayUUID
     }
 
     init(id: UInt32) {
@@ -241,6 +245,7 @@ struct WindowState: Codable {
         self.hasZoomButton = false
         self.isModal = false
         self.lastUpdated = Date()
+        self.displayUUID = nil
     }
 }
 

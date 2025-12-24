@@ -705,6 +705,16 @@ class StateManager: StateEventHandler {
         return displayContainingPoint(CGPoint(x: centerX, y: centerY))
     }
 
+    /// Compute displayUUID for a window based on its frame
+    /// For non-minimized windows, uses geometric detection (center point)
+    /// For minimized windows, retains existing displayUUID (doesn't recompute)
+    private func computeDisplayUUID(for window: WindowState) -> String? {
+        if window.isMinimized {
+            return window.displayUUID
+        }
+        return displayForWindowFrame(window.frame)?.uuid
+    }
+
     /// Re-query AX properties for windows on the active space whose role is nil
     /// Called after space change when AX may now be accessible for previously inaccessible windows
     private func refreshAXPropertiesForActiveSpace() {
@@ -827,6 +837,9 @@ class StateManager: StateEventHandler {
                     windowState.spaces = []
                 }
             }
+
+            // Compute displayUUID geometrically based on frame position
+            windowState.displayUUID = computeDisplayUUID(for: windowState)
 
             // Store window state
             windows[String(windowID)] = windowState
@@ -994,6 +1007,9 @@ class StateManager: StateEventHandler {
             window.title = name
         }
 
+        // Recompute displayUUID based on new frame
+        window.displayUUID = computeDisplayUUID(for: window)
+
         window.lastUpdated = timestamp
         state.windows[String(windowID)] = window
 
@@ -1045,6 +1061,9 @@ class StateManager: StateEventHandler {
         window.hasZoomButton = axProps.hasZoomButton
         window.isModal = axProps.isModal
 
+        // Compute displayUUID geometrically based on frame position
+        window.displayUUID = computeDisplayUUID(for: window)
+
         state.windows[String(windowID)] = window
         updateWindowSpaces(windowID)
     }
@@ -1090,6 +1109,9 @@ class StateManager: StateEventHandler {
             window.hasMinimizeButton = axProps.hasMinimizeButton
             window.hasZoomButton = axProps.hasZoomButton
             window.isModal = axProps.isModal
+
+            // Compute displayUUID geometrically based on frame position
+            window.displayUUID = self.computeDisplayUUID(for: window)
 
             self.state.windows[String(windowID)] = window
 
@@ -1147,6 +1169,8 @@ class StateManager: StateEventHandler {
         executeOnQueue {
             guard var window = self.state.windows[String(windowID)] else { return }
             window.frame = frame
+            // Recompute displayUUID since window may have moved to different display
+            window.displayUUID = self.computeDisplayUUID(for: window)
             window.lastUpdated = Date()
             self.state.windows[String(windowID)] = window
 
@@ -1161,7 +1185,11 @@ class StateManager: StateEventHandler {
 
     private func handleWindowResized(_ windowID: UInt32, frame: CGRect) {
         executeOnQueue {
-            await self.updateWindow(windowID, logEvent: nil) { $0.frame = frame }
+            await self.updateWindow(windowID, logEvent: nil) {
+                $0.frame = frame
+                // Recompute displayUUID since resize can move window to different display
+                $0.displayUUID = self.computeDisplayUUID(for: $0)
+            }
             // EventRouter handles logging and BorderEvents notification
         }
     }

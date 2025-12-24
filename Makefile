@@ -172,7 +172,7 @@ help:
 	@echo "Development targets:"
 	@echo "  dev              - Build debug GridServer.app bundle"
 	@echo "  run              - Build and restart thegrid-dev service"
-	@echo "  install-dev      - Install dev CLI to ~/.local/state/thegrid/bin"
+	@echo "  install-dev      - Install dev CLI to ~/.local/bin"
 	@echo "  setup-signing    - Create code signing certificate (one-time)"
 	@echo "  reset-accessibility - Reset TCC accessibility permissions"
 	@echo ""
@@ -215,11 +215,11 @@ run: dev install-dev
 	@services restart thegrid-dev
 	@echo "✓ Service restarted"
 
-# Install dev build to ~/.local/state/thegrid/bin for wrapper resolution
+# Install dev build to ~/.local/bin
 install-dev: cli
-	@mkdir -p ~/.local/state/thegrid/bin
-	@cp grid-cli/bin/thegrid ~/.local/state/thegrid/bin/thegrid
-	@echo "✓ Installed dev CLI to ~/.local/state/thegrid/bin/thegrid"
+	@mkdir -p ~/.local/bin
+	@cp grid-cli/bin/thegrid ~/.local/bin/thegrid
+	@echo "✓ Installed dev CLI to ~/.local/bin/thegrid"
 
 # Install utility scripts to ~/.local/bin
 install-scripts:
