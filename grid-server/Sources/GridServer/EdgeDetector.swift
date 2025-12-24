@@ -64,7 +64,7 @@ struct EdgeDetector {
         // Get all windows on this space
         let windowsOnSpace = space.windows.compactMap { windowID -> WindowState? in
             state.windows[String(windowID)]
-        }.filter { $0.isOrderedIn && !$0.isMinimized }
+        }.filter { !$0.isHidden && !$0.isMinimized }
 
         if windowsOnSpace.isEmpty {
             return nil
@@ -178,7 +178,7 @@ struct EdgeDetector {
 
         let windowsOnSpace = space.windows.compactMap { windowID -> WindowState? in
             state.windows[String(windowID)]
-        }.filter { $0.isOrderedIn && !$0.isMinimized }
+        }.filter { !$0.isHidden && !$0.isMinimized }
 
         // Find pairs of windows that appear to be splits within the same cell
         // (same parent frame, adjacent)

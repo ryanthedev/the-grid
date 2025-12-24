@@ -175,7 +175,7 @@ struct WindowState: Codable {
     var pid: pid_t
     var appName: String?
     var title: String?
-    var isOrderedIn: Bool
+    var isHidden: Bool
     var isMinimized: Bool
     var spaces: [UInt64]  // Space IDs this window is on
     var alpha: Float
@@ -208,7 +208,7 @@ struct WindowState: Codable {
         case pid
         case appName
         case title
-        case isOrderedIn
+        case isHidden
         case isMinimized
         case spaces
         case alpha
@@ -234,7 +234,7 @@ struct WindowState: Codable {
         self.pid = 0
         self.appName = nil
         self.title = nil
-        self.isOrderedIn = false
+        self.isHidden = false
         self.isMinimized = false
         self.spaces = []
         self.alpha = 1.0

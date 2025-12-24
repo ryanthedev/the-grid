@@ -724,7 +724,7 @@ class StateManager: StateEventHandler {
             let key = String(windowID)
             guard var window = self.state.windows[key] else { return }
             window.isMinimized = minimized
-            window.isOrderedIn = !minimized
+            window.isHidden = minimized
             window.lastUpdated = Date()
             self.state.windows[key] = window
             self.state.metadata.update()
@@ -915,11 +915,11 @@ class StateManager: StateEventHandler {
                 windowState.isModal = axProps.isModal
             }
 
-            // Extract isOrderedIn from kCGWindowIsOnscreen (phantom windows lack this key)
+            // Extract isHidden from kCGWindowIsOnscreen (phantom windows lack this key)
             if let isOnScreen = windowInfo["kCGWindowIsOnscreen"] as? Int {
-                windowState.isOrderedIn = (isOnScreen == 1)
+                windowState.isHidden = (isOnScreen != 1)
             } else {
-                windowState.isOrderedIn = false
+                windowState.isHidden = true
             }
 
             // Get spaces for this window - check sticky first, then use SkyLight API
@@ -1157,11 +1157,11 @@ class StateManager: StateEventHandler {
             window.title = name
         }
 
-        // Extract isOrderedIn from kCGWindowIsOnscreen
+        // Extract isHidden from kCGWindowIsOnscreen
         if let isOnScreen = windowInfo["kCGWindowIsOnscreen"] as? Int {
-            window.isOrderedIn = (isOnScreen == 1)
+            window.isHidden = (isOnScreen != 1)
         } else {
-            window.isOrderedIn = false
+            window.isHidden = true
         }
         window.lastUpdated = timestamp
 
@@ -1210,11 +1210,11 @@ class StateManager: StateEventHandler {
                 if let name = windowInfo[kCGWindowName as String] as? String, !name.isEmpty {
                     window.title = name
                 }
-                // Extract isOrderedIn from kCGWindowIsOnscreen
+                // Extract isHidden from kCGWindowIsOnscreen
                 if let isOnScreen = windowInfo["kCGWindowIsOnscreen"] as? Int {
-                    window.isOrderedIn = (isOnScreen == 1)
+                    window.isHidden = (isOnScreen != 1)
                 } else {
-                    window.isOrderedIn = false
+                    window.isHidden = true
                 }
             }
 
@@ -1336,7 +1336,7 @@ class StateManager: StateEventHandler {
         executeOnQueue {
             await self.updateWindow(windowID, logEvent: nil) {
                 $0.isMinimized = true
-                $0.isOrderedIn = false
+                $0.isHidden = true
             }
             // EventRouter handles logging
         }
@@ -1346,7 +1346,7 @@ class StateManager: StateEventHandler {
         executeOnQueue {
             await self.updateWindow(windowID, logEvent: nil) {
                 $0.isMinimized = false
-                $0.isOrderedIn = true
+                $0.isHidden = false
             }
             // EventRouter handles logging
         }
@@ -1398,7 +1398,7 @@ class StateManager: StateEventHandler {
             for windowKey in self.state.windows.keys {
                 if let windowID = UInt32(windowKey),
                    let window = self.state.windows[windowKey],
-                   window.isOrderedIn && !window.isMinimized {
+                   !window.isHidden && !window.isMinimized {
                     self.updateWindowSpaces(windowID)
                 }
             }
@@ -1457,7 +1457,7 @@ class StateManager: StateEventHandler {
 
         // Check if window still exists in our state
         guard let window = state.windows[String(windowID)],
-              window.isOrderedIn && !window.isMinimized else {
+              !window.isHidden && !window.isMinimized else {
             Task {
                 JSONLogger.shared.log("dbg.focus", msg: "window unavailable", data: [
                     "sid": spaceID,
@@ -1615,9 +1615,9 @@ class StateManager: StateEventHandler {
                 self.state.applications[pidKey]!.isHidden = true
             }
 
-            // Mark all windows for this app as not ordered in
+            // Mark all windows for this app as hidden
             for (key, var window) in self.state.windows where window.pid == pid {
-                window.isOrderedIn = false
+                window.isHidden = true
                 self.state.windows[key] = window
             }
 
@@ -1635,9 +1635,9 @@ class StateManager: StateEventHandler {
                 self.state.applications[pidKey]!.isHidden = false
             }
 
-            // Mark all windows for this app as ordered in and re-query their spaces
+            // Mark all windows for this app as visible and re-query their spaces
             for (key, var window) in self.state.windows where window.pid == pid {
-                window.isOrderedIn = true
+                window.isHidden = false
                 self.state.windows[key] = window
 
                 // Re-query space assignment (may have changed while hidden)
