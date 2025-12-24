@@ -219,6 +219,8 @@ dev: server cli
 
 # Build and restart thegrid service
 run: dev install-dev
+	@echo "Clearing state directory..."
+	@rm -rf ~/.local/state/thegrid/*
 	@echo "Restarting thegrid-dev service..."
 	@services restart thegrid-dev
 	@echo "✓ Service restarted"
