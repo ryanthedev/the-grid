@@ -22,5 +22,7 @@
     <true/>
     <key>NSAccessibilityUsageDescription</key>
     <string>TheGrid requires accessibility permissions to manage window positions and layouts across your displays.</string>
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>TheGrid requires screen recording permissions to read window titles and detect which windows are visible on screen.</string>
 </dict>
 </plist>

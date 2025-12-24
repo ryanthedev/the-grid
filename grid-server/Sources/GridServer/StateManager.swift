@@ -898,11 +898,9 @@ class StateManager: StateEventHandler {
                 // Get app name from PID
                 windowState.appName = getAppNameForPID(pid)
 
-                // Get window name/title if available
-                if let name = windowInfo[kCGWindowName as String] as? String {
+                // Get window name/title if available (don't fall back to ownerName - phantom windows have empty titles)
+                if let name = windowInfo[kCGWindowName as String] as? String, !name.isEmpty {
                     windowState.title = name
-                } else if let ownerName = windowInfo[kCGWindowOwnerName as String] as? String {
-                    windowState.title = ownerName
                 }
 
                 // Get AX properties for client-side filtering
@@ -917,8 +915,12 @@ class StateManager: StateEventHandler {
                 windowState.isModal = axProps.isModal
             }
 
-            // Window is on-screen if it's in the list (we filtered for on-screen only)
-            windowState.isOrderedIn = true
+            // Extract isOrderedIn from kCGWindowIsOnscreen (phantom windows lack this key)
+            if let isOnScreen = windowInfo["kCGWindowIsOnscreen"] as? Int {
+                windowState.isOrderedIn = (isOnScreen == 1)
+            } else {
+                windowState.isOrderedIn = false
+            }
 
             // Get spaces for this window - check sticky first, then use SkyLight API
             // 1. Check if window is sticky (visible on all spaces) using MSS
@@ -1150,13 +1152,17 @@ class StateManager: StateEventHandler {
             )
         }
 
-        if let name = windowInfo[kCGWindowName as String] as? String {
+        // Get title (don't fall back to ownerName - phantom windows have empty titles)
+        if let name = windowInfo[kCGWindowName as String] as? String, !name.isEmpty {
             window.title = name
-        } else if let ownerName = windowInfo[kCGWindowOwnerName as String] as? String {
-            window.title = ownerName
         }
 
-        window.isOrderedIn = true
+        // Extract isOrderedIn from kCGWindowIsOnscreen
+        if let isOnScreen = windowInfo["kCGWindowIsOnscreen"] as? Int {
+            window.isOrderedIn = (isOnScreen == 1)
+        } else {
+            window.isOrderedIn = false
+        }
         window.lastUpdated = timestamp
 
         // Get AX properties
@@ -1186,7 +1192,6 @@ class StateManager: StateEventHandler {
             var window = WindowState(id: windowID)
             window.pid = pid
             window.appName = getAppNameForPID(pid)
-            window.isOrderedIn = true
 
             // Query window properties from CGWindowList
             let options: CGWindowListOption = [.optionIncludingWindow]
@@ -1201,11 +1206,15 @@ class StateManager: StateEventHandler {
                         height: boundsDict["Height"] ?? 0
                     )
                 }
-                // Get title
-                if let name = windowInfo[kCGWindowName as String] as? String {
+                // Get title (don't fall back to ownerName - phantom windows have empty titles)
+                if let name = windowInfo[kCGWindowName as String] as? String, !name.isEmpty {
                     window.title = name
-                } else if let ownerName = windowInfo[kCGWindowOwnerName as String] as? String {
-                    window.title = ownerName
+                }
+                // Extract isOrderedIn from kCGWindowIsOnscreen
+                if let isOnScreen = windowInfo["kCGWindowIsOnscreen"] as? Int {
+                    window.isOrderedIn = (isOnScreen == 1)
+                } else {
+                    window.isOrderedIn = false
                 }
             }
 

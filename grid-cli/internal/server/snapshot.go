@@ -59,17 +59,32 @@ type WindowInfo struct {
 // Requires valid AX access (Role == "AXWindow") to filter out phantom windows
 // that exist in CGWindowList but cannot be controlled via accessibility APIs.
 func (w WindowInfo) IsTileable() bool {
+	// Must have actual window title (empty = phantom window)
+	// Note: Requires screen recording permission for kCGWindowName
+	if w.Title == "" {
+		return false
+	}
+
+	// Basic state checks
 	if w.IsMinimized || w.IsHidden || w.Level != 0 {
 		return false
 	}
+
 	// Filter windows with invalid dimensions (toolbars, tab bars)
 	if w.Frame.Height < MinTileableDimension || w.Frame.Width < MinTileableDimension {
 		return false
 	}
+
 	// Filter windows significantly above screen (phantom windows at Y=-1080)
 	if w.Frame.Y < -100 {
 		return false
 	}
+
+	// Only tile standard windows, not dialogs or floating panels
+	if w.Subrole != "" && w.Subrole != "AXStandardWindow" {
+		return false
+	}
+
 	// Must have valid AX window role - phantoms have empty role
 	return w.Role == "AXWindow"
 }
