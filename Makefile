@@ -93,7 +93,7 @@ dist: server-release cli
 	@shasum -a 256 dist/thegrid-$(VERSION).tar.gz
 
 # Universal binary builds (arm64 + x86_64)
-server-universal:
+server-universal: generate-version
 	@echo "Building grid-server (universal binary)..."
 	@cd grid-server && swift build -c release --arch arm64 --arch x86_64
 	@echo "Verifying universal binary..."
