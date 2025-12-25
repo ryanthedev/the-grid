@@ -582,14 +582,34 @@ class StateManager: StateEventHandler {
         var displayStr: String?
         var method = "geometric"
 
-        if let window = state.windows[windowKey],
+        // [OBERDEBUG-003] Debug: trace display detection
+        let window = state.windows[windowKey]
+        let foundWindow = window != nil
+        let isMinimized = window?.isMinimized ?? false
+        var foundDisplay: DisplayState? = nil
+        if let window = window, !window.isMinimized {
+            foundDisplay = displayForWindowFrame(window.frame)
+        }
+
+        if let window = window,
            !window.isMinimized,
-           let display = displayForWindowFrame(window.frame) {
+           let display = foundDisplay {
             displayStr = display.uuid
         } else if let displayUUID = SLSCopyManagedDisplayForWindow(connectionID, windowID) {
             displayStr = displayUUID as String
             method = "fallback"
         }
+
+        // [OBERDEBUG-003] Log the decision
+        JSONLogger.shared.log("dbg.dsp.update", data: [
+            "wid": windowID,
+            "foundWindow": foundWindow,
+            "isMinimized": isMinimized,
+            "foundDisplay": foundDisplay?.uuid ?? "nil",
+            "result": displayStr ?? "nil",
+            "method": method,
+            "oldActiveDisplay": state.metadata.activeDisplayUUID ?? "nil"
+        ])
 
         if let displayStr = displayStr {
             if logChanges && state.metadata.activeDisplayUUID != displayStr {
@@ -610,9 +630,13 @@ class StateManager: StateEventHandler {
     private func updateActiveSpace(for windowID: UInt32, trackLastFocused: Bool = true) async {
         let windowKey = String(windowID)
         var spaceID: UInt64?
+        var method = "primary"
 
         // Primary: use window's space assignment
-        if let window = state.windows[windowKey],
+        let window = state.windows[windowKey]
+        let windowSpaces = window?.spaces ?? []
+
+        if let window = window,
            let firstSpace = window.spaces.first {
             spaceID = UInt64(firstSpace)
         }
@@ -621,8 +645,19 @@ class StateManager: StateEventHandler {
             let querySpaceID = SLSManagedDisplayGetCurrentSpace(connectionID, displayUUID)
             if querySpaceID != 0 {
                 spaceID = querySpaceID
+                method = "fallback"
             }
         }
+
+        // [OBERDEBUG-004] Log space update decision
+        JSONLogger.shared.log("dbg.spc.update", data: [
+            "wid": windowID,
+            "foundWindow": window != nil,
+            "windowSpaces": windowSpaces.map { Int($0) },
+            "result": spaceID.map { Int($0) } ?? 0,
+            "method": method,
+            "oldActiveSpace": state.metadata.activeSpaceID.map { Int($0) } ?? 0
+        ])
 
         if let spaceID = spaceID {
             state.metadata.activeSpaceID = spaceID
@@ -665,6 +700,21 @@ class StateManager: StateEventHandler {
             data.merge(logData) { _, new in new }
             JSONLogger.shared.log(event, data: data)
         }
+    }
+
+    /// Synchronous version of updateWindow for use with executeOnQueueSync
+    /// Use this for high-frequency operations that must be truly serialized
+    private func updateWindowSync(
+        _ windowID: UInt32,
+        mutation: (inout WindowState) -> Void
+    ) {
+        let key = String(windowID)
+        guard var window = state.windows[key] else { return }
+
+        mutation(&window)
+        window.lastUpdated = Date()
+        state.windows[key] = window
+        state.metadata.update()
     }
 
     /// Public method to update window spaces (for WindowManipulator)
@@ -1380,8 +1430,9 @@ class StateManager: StateEventHandler {
     }
 
     private func handleWindowTitleChanged(_ windowID: UInt32, title: String) {
-        executeOnQueue {
-            await self.updateWindow(windowID) { $0.title = title }
+        // Use sync version to prevent race conditions from rapid title updates
+        executeOnQueueSync {
+            self.updateWindowSync(windowID) { $0.title = title }
         }
     }
 

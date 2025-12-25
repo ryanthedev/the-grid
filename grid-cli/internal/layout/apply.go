@@ -67,6 +67,21 @@ func ApplyLayout(
 	// 4. Filter and convert windows (exclude transient windows)
 	exclusions := cfg.GetWindowExclusions()
 	tileableWindows := snap.FilterTileable(exclusions)
+
+	// [OBERDEBUG-001] Debug: show snapshot state and window filtering
+	jsonlog.Log("dbg.layout.snap", jsonlog.WithData(map[string]any{
+		"spaceID":       snap.SpaceID,
+		"tileableCount": len(tileableWindows),
+		"allCount":      len(snap.Windows),
+		"displayBounds": snap.DisplayBounds,
+	}))
+	for _, w := range snap.Windows {
+		jsonlog.Log("dbg.layout.win", jsonlog.WithData(map[string]any{
+			"wid": w.ID, "app": w.AppName, "tileable": w.IsTileable(), "displayUUID": w.DisplayUUID, "title": w.Title,
+			"frameY": w.Frame.Y, "frameH": w.Frame.Height, "role": w.Role, "subrole": w.Subrole,
+		}))
+	}
+
 	windows := convertWindows(tileableWindows)
 
 	// 4. Get previous assignments from local state

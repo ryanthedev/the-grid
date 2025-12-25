@@ -160,29 +160,21 @@ class ApplicationObserver {
             }
         }
 
-        // Extract window ID from AX element
-        guard let windowID = getWindowID(from: element) else {
-            JSONLogger.shared.log("ax.fail", data: [
-                "op": "get_window_id",
-                "notif": notifName
-            ])
-            return
-        }
-
         let source = EventSource.axObserver(pid: pid, appName: appName ?? "Unknown")
 
-        // Route to EventRouter based on notification type
-        switch notifName {
-        case kAXCreatedNotification as String:
-            let event = StateEvent.windowCreated(windowID: windowID, pid: pid)
-            await EventRouter.shared.route(event, from: source)
+        // Handle focus notification specially - element is the app, not the window
+        if notifName == kAXFocusedWindowChangedNotification as String {
+            // Get the focused window from the app element
+            guard let focusedWindow = getFocusedWindow(from: element),
+                  let windowID = getWindowID(from: focusedWindow) else {
+                JSONLogger.shared.log("ax.fail", data: [
+                    "op": "get_focused_window",
+                    "notif": notifName,
+                    "app": appName ?? "unknown"
+                ])
+                return
+            }
 
-        case kAXUIElementDestroyedNotification as String:
-            let event = StateEvent.windowDestroyed(windowID: windowID)
-            await EventRouter.shared.route(event, from: source)
-
-        case kAXFocusedWindowChangedNotification as String:
-            // [OBERDEBUG-004] AX focus notification received
             JSONLogger.shared.log("dbg.ax.focus_notif", data: [
                 "wid": windowID,
                 "pid": pid,
@@ -195,6 +187,27 @@ class ApplicationObserver {
                 trigger: .windowActivated
             )
             let event = StateEvent.focusChanged(focusState)
+            await EventRouter.shared.route(event, from: source)
+            return
+        }
+
+        // Extract window ID from AX element for other notifications
+        guard let windowID = getWindowID(from: element) else {
+            JSONLogger.shared.log("ax.fail", data: [
+                "op": "get_window_id",
+                "notif": notifName
+            ])
+            return
+        }
+
+        // Route to EventRouter based on notification type
+        switch notifName {
+        case kAXCreatedNotification as String:
+            let event = StateEvent.windowCreated(windowID: windowID, pid: pid)
+            await EventRouter.shared.route(event, from: source)
+
+        case kAXUIElementDestroyedNotification as String:
+            let event = StateEvent.windowDestroyed(windowID: windowID)
             await EventRouter.shared.route(event, from: source)
 
         case kAXWindowMovedNotification as String:
@@ -229,6 +242,18 @@ class ApplicationObserver {
     }
 
     // MARK: - AX Property Helpers
+
+    /// Get the focused window element from an application element
+    private func getFocusedWindow(from appElement: AXUIElement) -> AXUIElement? {
+        var focusedWindow: CFTypeRef?
+        let error = AXUIElementCopyAttributeValue(
+            appElement,
+            kAXFocusedWindowAttribute as CFString,
+            &focusedWindow
+        )
+        guard error == .success else { return nil }
+        return (focusedWindow as! AXUIElement)
+    }
 
     private func getWindowID(from element: AXUIElement) -> UInt32? {
         var windowID: CFTypeRef?

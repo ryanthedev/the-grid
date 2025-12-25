@@ -75,10 +75,9 @@ func (w WindowInfo) IsTileable() bool {
 		return false
 	}
 
-	// Filter windows significantly above screen (phantom windows at Y=-1080)
-	if w.Frame.Y < -100 {
-		return false
-	}
+	// Note: Removed Y < -100 check - it incorrectly filtered windows on displays
+	// positioned above the main display (negative Y coordinates). Phantom windows
+	// are now filtered by empty title and empty role checks.
 
 	// Only tile standard windows, not dialogs or floating panels
 	if w.Subrole != "" && w.Subrole != "AXStandardWindow" {
