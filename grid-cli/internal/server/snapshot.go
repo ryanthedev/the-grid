@@ -59,11 +59,9 @@ type WindowInfo struct {
 // Requires valid AX access (Role == "AXWindow") to filter out phantom windows
 // that exist in CGWindowList but cannot be controlled via accessibility APIs.
 func (w WindowInfo) IsTileable() bool {
-	// Must have actual window title (empty = phantom window)
-	// Note: Requires screen recording permission for kCGWindowName
-	if w.Title == "" {
-		return false
-	}
+	// Note: Removed empty title check - Chrome and other apps temporarily have
+	// empty titles during focus transitions. Phantom windows are already filtered
+	// by the Role == "AXWindow" check below, which phantoms fail.
 
 	// Basic state checks
 	if w.IsMinimized || w.IsHidden || w.Level != 0 {
@@ -123,6 +121,17 @@ func (s *Snapshot) FilterTileable(exclusions config.WindowExclusion) []WindowInf
 		}
 	}
 	return result
+}
+
+// GetWindowByID returns the WindowInfo for the given window ID, or nil if not found.
+// This searches the raw Windows list (all windows on the space), not just tileable ones.
+func (s *Snapshot) GetWindowByID(wid uint32) *WindowInfo {
+	for i := range s.Windows {
+		if s.Windows[i].ID == wid {
+			return &s.Windows[i]
+		}
+	}
+	return nil
 }
 
 // GetCurrentDisplayUUID returns the UUID of the display for the current space.
