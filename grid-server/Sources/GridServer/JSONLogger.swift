@@ -108,8 +108,8 @@ final class JSONLoggerImpl: @unchecked Sendable {
         JSONLogWriter.shared.enqueue(line)
     }
 
-    /// Log with trace context from CurrentSpan
-    func log(_ ev: String, msg: String? = nil, data: [String: Any]? = nil) async {
+    /// Log with trace context from CurrentSpan (sync - TaskLocal reads work from any context)
+    func log(_ ev: String, msg: String? = nil, data: [String: Any]? = nil) {
         let tid = CurrentSpan.traceId
         let sid = CurrentSpan.spanId
         log(ev, msg: msg, data: data, tid: tid, sid: sid)

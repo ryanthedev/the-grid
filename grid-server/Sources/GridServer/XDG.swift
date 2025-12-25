@@ -49,7 +49,7 @@ enum XDG {
                     paths.append(path)
                 }
             } else if let error = checkAccessError(path: path) {
-                await JSONLogger.shared.log("cfg.skip", msg: "cannot access file",
+                JSONLogger.shared.log("cfg.skip", msg: "cannot access file",
                     data: ["path": path, "err": error])
             }
         }
@@ -62,7 +62,7 @@ enum XDG {
                     paths.append(userPath)
                 }
             } else if let error = checkAccessError(path: userPath) {
-                await JSONLogger.shared.log("cfg.skip", msg: "cannot access file",
+                JSONLogger.shared.log("cfg.skip", msg: "cannot access file",
                     data: ["path": userPath, "err": error])
             }
         }

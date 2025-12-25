@@ -54,7 +54,7 @@ class ResizeOverlay {
         // Show the window
         window?.orderFront(nil)
 
-        Task { await JSONLogger.shared.log("resize.overlay.show", data: ["mode": mode]) }
+        Task { JSONLogger.shared.log("resize.overlay.show", data: ["mode": mode]) }
     }
 
     /// Hide the overlay
@@ -67,7 +67,7 @@ class ResizeOverlay {
         }
 
         window?.orderOut(nil)
-        Task { await JSONLogger.shared.log("resize.overlay.hide", data: [:]) }
+        Task { JSONLogger.shared.log("resize.overlay.hide", data: [:]) }
     }
 
     /// Update the overlay position (e.g., to follow cursor)
@@ -147,8 +147,6 @@ class ResizeOverlay {
 
         self.window = window
         self.textField = textField
-
-        Task { await JSONLogger.shared.log("dbg.resize.overlay.created", data: [:]) }
     }
 
     private func positionWindow() {

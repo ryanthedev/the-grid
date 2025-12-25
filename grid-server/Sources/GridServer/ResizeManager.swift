@@ -42,7 +42,7 @@ class ResizeManager {
         self.overlay = ResizeOverlay()
 
         setupCallbacks()
-        Task { await JSONLogger.shared.log("resize.init", data: [:]) }
+        Task { JSONLogger.shared.log("resize.init", data: [:]) }
     }
 
     // MARK: - Setup
@@ -65,13 +65,13 @@ class ResizeManager {
 
     /// Start resize mode
     func start() -> Bool {
-        Task { await JSONLogger.shared.log("resize.start", data: [:]) }
+        Task { JSONLogger.shared.log("resize.start", data: [:]) }
         return mouseHandler.start()
     }
 
     /// Stop resize mode
     func stop() {
-        Task { await JSONLogger.shared.log("resize.stop", data: [:]) }
+        Task { JSONLogger.shared.log("resize.stop", data: [:]) }
         mouseHandler.stop()
     }
 
@@ -107,7 +107,7 @@ class ResizeManager {
     // MARK: - Event Handlers
 
     private func handleDragStart(resizeType: ResizeType, targetID: String, edge: ResizeEdge) {
-        Task { await JSONLogger.shared.log("resize.drag.start", data: [
+        Task { JSONLogger.shared.log("resize.drag.start", data: [
             "type": resizeType.rawValue,
             "target": targetID,
             "edge": edge.rawValue
@@ -159,7 +159,7 @@ class ResizeManager {
     }
 
     private func handleDragEnd() {
-        Task { await JSONLogger.shared.log("resize.drag.end", data: [:]) }
+        Task { JSONLogger.shared.log("resize.drag.end", data: [:]) }
 
         // Reset accumulators
         accumulatedDeltaX = 0
@@ -186,7 +186,7 @@ class ResizeManager {
 
         let absDelta = abs(delta)
 
-        Task { await JSONLogger.shared.log("resize.exec", data: [
+        Task { JSONLogger.shared.log("resize.exec", data: [
             "type": resizeType.rawValue,
             "direction": direction,
             "delta": absDelta
@@ -228,7 +228,7 @@ class ResizeManager {
         }
 
         guard let path = gridPath else {
-            Task { await JSONLogger.shared.log("warn.resize.cli_not_found", data: [:]) }
+            Task { JSONLogger.shared.log("warn.resize.cli_not_found", data: [:]) }
             return
         }
 
@@ -246,14 +246,13 @@ class ResizeManager {
 
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
             if let output = String(data: data, encoding: .utf8), !output.isEmpty {
-                Task { await JSONLogger.shared.log("dbg.resize.output", data: ["output": output]) }
-            }
+}
 
             if process.terminationStatus != 0 {
-                Task { await JSONLogger.shared.log("warn.resize.exec_failed", data: ["status": process.terminationStatus]) }
+                Task { JSONLogger.shared.log("warn.resize.exec_failed", data: ["status": process.terminationStatus]) }
             }
         } catch {
-            Task { await JSONLogger.shared.log("err.resize.exec", data: ["error": error.localizedDescription]) }
+            Task { JSONLogger.shared.log("err.resize.exec", data: ["error": error.localizedDescription]) }
         }
     }
 }

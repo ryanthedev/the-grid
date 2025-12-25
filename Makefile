@@ -172,7 +172,7 @@ help:
 	@echo "Development targets:"
 	@echo "  dev              - Build debug GridServer.app bundle"
 	@echo "  run              - Build and restart thegrid-dev service"
-	@echo "  install-dev      - Install dev CLI to ~/.local/state/thegrid/bin"
+	@echo "  install-dev      - Install dev CLI to ~/.local/bin"
 	@echo "  setup-signing    - Create code signing certificate (one-time)"
 	@echo "  reset-accessibility - Reset TCC accessibility permissions"
 	@echo ""
@@ -197,6 +197,9 @@ help:
 # Debug app bundle (for development - required for Accessibility permissions)
 APP_BUNDLE := grid-server/.build/debug/GridServer.app
 
+# Where launchd expects the server (main repo location)
+DEPLOY_LOCATION := /Users/r/repos/theGrid/grid-server/.build/debug/GridServer.app
+
 # Build debug app bundle
 dev: server cli
 	@echo "Creating debug GridServer.app bundle..."
@@ -208,18 +211,25 @@ dev: server cli
 	@codesign -fs "$(CODESIGN_IDENTITY)" --entitlements $(ENTITLEMENTS) $(APP_BUNDLE)/Contents/MacOS/grid-server
 	@codesign -fs "$(CODESIGN_IDENTITY)" --entitlements $(ENTITLEMENTS) $(APP_BUNDLE)
 	@echo "✓ Debug GridServer.app created at $(APP_BUNDLE)"
+	@echo "Deploying to $(DEPLOY_LOCATION)..."
+	@mkdir -p $(dir $(DEPLOY_LOCATION))
+	@rm -rf $(DEPLOY_LOCATION)
+	@cp -R $(APP_BUNDLE) $(DEPLOY_LOCATION)
+	@echo "✓ Server deployed to $(DEPLOY_LOCATION)"
 
 # Build and restart thegrid service
 run: dev install-dev
+	@echo "Clearing state directory..."
+	@rm -rf ~/.local/state/thegrid/*
 	@echo "Restarting thegrid-dev service..."
 	@services restart thegrid-dev
 	@echo "✓ Service restarted"
 
-# Install dev build to ~/.local/state/thegrid/bin for wrapper resolution
+# Install dev build to ~/.local/bin
 install-dev: cli
-	@mkdir -p ~/.local/state/thegrid/bin
-	@cp grid-cli/bin/thegrid ~/.local/state/thegrid/bin/thegrid
-	@echo "✓ Installed dev CLI to ~/.local/state/thegrid/bin/thegrid"
+	@mkdir -p ~/.local/bin
+	@cp grid-cli/bin/thegrid ~/.local/bin/thegrid
+	@echo "✓ Installed dev CLI to ~/.local/bin/thegrid"
 
 # Install utility scripts to ~/.local/bin
 install-scripts:

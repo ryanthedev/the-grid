@@ -201,24 +201,15 @@ func renderWindowsOnCanvas(sortedWindows []*models.Window, sc *ScalingContext, c
 	return canvas.String()
 }
 
-// getWindowsForDisplay returns all windows on the given display's spaces
+// getWindowsForDisplay returns all windows on the given display (using geometric displayUUID)
 func getWindowsForDisplay(state *models.State, display *models.Display) []*models.Window {
-	// Get space IDs for this display
-	spaceIDs := make(map[string]bool)
-	for _, spaceID := range display.GetSpaceIDs() {
-		spaceIDs[spaceID] = true
-	}
-
-	// Find windows on these spaces
 	var windows []*models.Window
 	for _, win := range state.Windows {
-		// Check if window is on any of this display's spaces
-		primarySpace := win.GetPrimarySpace()
-		if spaceIDs[primarySpace] {
+		// Use geometric displayUUID for accurate display membership
+		if win.GetDisplayUUID() == display.UUID {
 			windows = append(windows, win)
 		}
 	}
-
 	return windows
 }
 

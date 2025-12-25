@@ -103,7 +103,7 @@ struct GridServerCommand: ParsableCommand {
             let connectionID = SLSMainConnectionID()
             let simpleBorderManager = SimpleBorderManager(connectionID: connectionID)
             let borderEvents = BorderEvents()
-            borderEvents.setup(simpleBorderManager: simpleBorderManager, stateManager: StateManager.shared)
+            borderEvents.setup(simpleBorderManager: simpleBorderManager)
             StateManager.shared.borderEvents = borderEvents
             messageHandler.simpleBorderManager = simpleBorderManager
             jlog("bdr.init")

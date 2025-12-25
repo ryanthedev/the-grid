@@ -42,7 +42,7 @@ class ApplicationObserver {
 
         guard error == .success, let observerRef = observerRef else {
             Task {
-                await JSONLogger.shared.log("ax.fail", data: [
+                JSONLogger.shared.log("ax.fail", data: [
                     "op": "create_observer",
                     "pid": pid,
                     "app": appName ?? "unknown",
@@ -73,7 +73,7 @@ class ApplicationObserver {
                 successCount += 1
             } else {
                 Task {
-                    await JSONLogger.shared.log("ax.fail", data: [
+                    JSONLogger.shared.log("ax.fail", data: [
                         "op": "register_notif",
                         "notif": notification as String,
                         "err": result.rawValue
@@ -84,7 +84,7 @@ class ApplicationObserver {
 
         guard successCount > 0 else {
             Task {
-                await JSONLogger.shared.log("ax.fail", data: [
+                JSONLogger.shared.log("ax.fail", data: [
                     "op": "register_notifs",
                     "msg": "no notifications registered"
                 ])
@@ -97,7 +97,7 @@ class ApplicationObserver {
         CFRunLoopAddSource(CFRunLoopGetMain(), runLoopSource, .defaultMode)
 
         Task {
-            await JSONLogger.shared.log("ax.observer.create", data: [
+            JSONLogger.shared.log("ax.observer.create", data: [
                 "pid": pid,
                 "app": appName ?? "?",
                 "notifs": "\(successCount)/\(Self.observedNotifications.count)"
@@ -117,7 +117,7 @@ class ApplicationObserver {
         self.observer = nil
 
         Task {
-            await JSONLogger.shared.log("ax.observer.stop", data: [
+            JSONLogger.shared.log("ax.observer.stop", data: [
                 "pid": pid,
                 "app": appName ?? "unknown"
             ])
@@ -125,7 +125,7 @@ class ApplicationObserver {
     }
 
     /// Handle AX notification callback
-    func handleNotification(element: AXUIElement, notification: CFString) {
+    func handleNotification(element: AXUIElement, notification: CFString) async {
         let notifName = notification as String
 
         // For AXCreated and AXUIElementDestroyed notifications, check element role first
@@ -153,57 +153,95 @@ class ApplicationObserver {
             }
         }
 
-        // Extract window ID from AX element
-        guard let windowID = getWindowID(from: element) else {
-            Task {
-                await JSONLogger.shared.log("ax.fail", data: [
-                    "op": "get_window_id",
-                    "notif": notifName
+        let source = EventSource.axObserver(pid: pid, appName: appName ?? "Unknown")
+
+        // Handle focus notification specially - element is the app, not the window
+        if notifName == kAXFocusedWindowChangedNotification as String {
+            // Get the focused window from the app element
+            guard let focusedWindow = getFocusedWindow(from: element),
+                  let windowID = getWindowID(from: focusedWindow) else {
+                JSONLogger.shared.log("ax.fail", data: [
+                    "op": "get_focused_window",
+                    "notif": notifName,
+                    "app": appName ?? "unknown"
                 ])
+                return
             }
+
+            let focusState = FocusState(
+                windowID: windowID,
+                spaceID: 0,
+                displayUUID: "",
+                trigger: .windowActivated
+            )
+            let event = StateEvent.focusChanged(focusState)
+            await EventRouter.shared.route(event, from: source)
             return
         }
 
-        // Route to appropriate handler based on notification type
+        // Extract window ID from AX element for other notifications
+        guard let windowID = getWindowID(from: element) else {
+            JSONLogger.shared.log("ax.fail", data: [
+                "op": "get_window_id",
+                "notif": notifName
+            ])
+            return
+        }
+
+        // Route to EventRouter based on notification type
         switch notifName {
         case kAXCreatedNotification as String:
-            stateManager?.handleWindowCreated(windowID, pid: pid)
+            let event = StateEvent.windowCreated(windowID: windowID, pid: pid)
+            await EventRouter.shared.route(event, from: source)
 
         case kAXUIElementDestroyedNotification as String:
-            stateManager?.handleWindowDestroyed(windowID)
-
-        case kAXFocusedWindowChangedNotification as String:
-            stateManager?.handleWindowFocused(windowID)
+            let event = StateEvent.windowDestroyed(windowID: windowID)
+            await EventRouter.shared.route(event, from: source)
 
         case kAXWindowMovedNotification as String:
             if let frame = getWindowFrame(from: element) {
-                stateManager?.handleWindowMoved(windowID, frame: frame)
+                let event = StateEvent.windowMoved(windowID: windowID, frame: frame)
+                await EventRouter.shared.route(event, from: source)
             }
 
         case kAXWindowResizedNotification as String:
             if let frame = getWindowFrame(from: element) {
-                stateManager?.handleWindowResized(windowID, frame: frame)
+                let event = StateEvent.windowResized(windowID: windowID, frame: frame)
+                await EventRouter.shared.route(event, from: source)
             }
 
         case kAXWindowMiniaturizedNotification as String:
-            stateManager?.handleWindowMinimized(windowID)
+            let event = StateEvent.windowMinimized(windowID: windowID)
+            await EventRouter.shared.route(event, from: source)
 
         case kAXWindowDeminiaturizedNotification as String:
-            stateManager?.handleWindowDeminimized(windowID)
+            let event = StateEvent.windowDeminimized(windowID: windowID)
+            await EventRouter.shared.route(event, from: source)
 
         case kAXTitleChangedNotification as String:
             if let title = getWindowTitle(from: element) {
-                stateManager?.handleWindowTitleChanged(windowID, title: title)
+                let event = StateEvent.windowTitleChanged(windowID: windowID, title: title)
+                await EventRouter.shared.route(event, from: source)
             }
 
         default:
-            Task {
-                await JSONLogger.shared.log("dbg.unknown_notif", data: ["notif": notifName])
-            }
+            break
         }
     }
 
     // MARK: - AX Property Helpers
+
+    /// Get the focused window element from an application element
+    private func getFocusedWindow(from appElement: AXUIElement) -> AXUIElement? {
+        var focusedWindow: CFTypeRef?
+        let error = AXUIElementCopyAttributeValue(
+            appElement,
+            kAXFocusedWindowAttribute as CFString,
+            &focusedWindow
+        )
+        guard error == .success else { return nil }
+        return (focusedWindow as! AXUIElement)
+    }
 
     private func getWindowID(from element: AXUIElement) -> UInt32? {
         var windowID: CFTypeRef?
@@ -264,7 +302,9 @@ private func axNotificationCallback(
     }
 
     let appObserver = Unmanaged<ApplicationObserver>.fromOpaque(refcon).takeUnretainedValue()
-    appObserver.handleNotification(element: element, notification: notification)
+    Task {
+        await appObserver.handleNotification(element: element, notification: notification)
+    }
 }
 
 // MARK: - Private AX API

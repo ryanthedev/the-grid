@@ -7,6 +7,7 @@ import (
 
 	"github.com/ryanthedev/grid-cli/internal/client"
 	"github.com/ryanthedev/grid-cli/internal/config"
+	"github.com/ryanthedev/grid-cli/internal/jsonlog"
 	"github.com/ryanthedev/grid-cli/internal/layout"
 	"github.com/ryanthedev/grid-cli/internal/reconcile"
 	"github.com/ryanthedev/grid-cli/internal/server"
@@ -180,6 +181,13 @@ func MoveFocus(
 	// Pick closest candidate
 	targetCell := PickClosestCell(currentCell, candidates, calculated.CellBounds)
 
+	jsonlog.Log("focus.move", jsonlog.WithData(map[string]any{
+		"dir":    direction.String(),
+		"from":   currentCell,
+		"to":     targetCell,
+		"method": "adjacent",
+	}))
+
 	// Focus the target cell
 	return focusCellByID(ctx, c, rs, snap.SpaceID, targetCell)
 }
@@ -196,15 +204,30 @@ func moveFocusCrossDisplay(
 	currentCellBounds map[string]types.Rect,
 	wrapAround bool,
 ) (uint32, error) {
-	// Find current display UUID from snapshot
+	// Find current display UUID from focused window's geometric displayUUID
 	currentDisplayUUID := ""
-	for _, d := range snap.AllDisplays {
-		spaceIDStr := fmt.Sprintf("%v", d.CurrentSpaceID)
-		if spaceIDStr == snap.SpaceID {
-			currentDisplayUUID = d.UUID
-			break
+
+	// Primary: Use focused window's geometric displayUUID (most accurate)
+	if snap.FocusedWindowID > 0 {
+		for _, w := range snap.Windows {
+			if w.ID == snap.FocusedWindowID && w.DisplayUUID != "" {
+				currentDisplayUUID = w.DisplayUUID
+				break
+			}
 		}
 	}
+
+	// Fallback: Match space ID to display (for backward compatibility)
+	if currentDisplayUUID == "" {
+		for _, d := range snap.AllDisplays {
+			spaceIDStr := fmt.Sprintf("%v", d.CurrentSpaceID)
+			if spaceIDStr == snap.SpaceID {
+				currentDisplayUUID = d.UUID
+				break
+			}
+		}
+	}
+
 	if currentDisplayUUID == "" {
 		return 0, fmt.Errorf("could not determine current display")
 	}
@@ -258,9 +281,18 @@ func moveFocusCrossDisplay(
 		currentDisplayBounds,
 		targetDisplayBounds,
 	)
+
 	if targetCell == "" {
 		return 0, fmt.Errorf("no cells on adjacent display")
 	}
+
+	jsonlog.Log("focus.cross_display", jsonlog.WithData(map[string]any{
+		"dir":         direction.String(),
+		"fromDisplay": currentDisplayUUID,
+		"toDisplay":   adjacentDisplay.UUID,
+		"toCell":      targetCell,
+		"toSpace":     targetSpaceIDStr,
+	}))
 
 	// Focus the cell on the target space
 	windowID, err := focusCellByID(ctx, c, rs, targetSpaceIDStr, targetCell)
@@ -599,7 +631,8 @@ func FindAdjacentDisplay(currentDisplayUUID string, direction types.Direction, a
 
 		case types.DirUp:
 			// B is above: B.Y + B.Height ≈ A.Y AND horizontal overlap
-			edgesAlign := math.Abs((candidateFrame.Y+candidateFrame.Height)-currentFrame.Y) <= edgeTolerance
+			edgeDiff := math.Abs((candidateFrame.Y + candidateFrame.Height) - currentFrame.Y)
+			edgesAlign := edgeDiff <= edgeTolerance
 			horizontalOverlap := overlapsHorizontally(currentFrame, candidateFrame)
 			isAdjacent = edgesAlign && horizontalOverlap
 

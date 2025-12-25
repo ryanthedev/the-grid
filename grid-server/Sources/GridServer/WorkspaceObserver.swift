@@ -7,6 +7,11 @@
 
 import Foundation
 import AppKit
+import ApplicationServices
+
+// Private API for getting window ID from AXUIElement
+@_silgen_name("_AXUIElementGetWindow")
+private func _AXUIElementGetWindow(_ element: AXUIElement, _ windowID: UnsafeMutablePointer<UInt32>) -> AXError
 
 /// Manages NSWorkspace notifications for system-level events
 class WorkspaceObserver {
@@ -81,7 +86,7 @@ class WorkspaceObserver {
         )
 
         Task {
-            await JSONLogger.shared.log("ws.register", data: [:])
+            JSONLogger.shared.log("ws.register", data: [:])
         }
     }
 
@@ -89,7 +94,7 @@ class WorkspaceObserver {
     func stopObserving() {
         NSWorkspace.shared.notificationCenter.removeObserver(self)
         Task {
-            await JSONLogger.shared.log("ws.stop", data: [:])
+            JSONLogger.shared.log("ws.stop", data: [:])
         }
     }
 
@@ -97,16 +102,21 @@ class WorkspaceObserver {
 
     @objc private func spaceChanged(_ notification: Notification) {
         Task {
-            await JSONLogger.shared.log("ws.space", data: [:])
+            JSONLogger.shared.log("ws.space", data: [:])
+            let focusState = FocusState(
+                spaceID: 0,
+                displayUUID: "",
+                trigger: .spaceSwitched
+            )
+            await EventRouter.shared.route(.focusChanged(focusState), from: .workspaceObserver)
         }
-        stateManager?.handleSpaceChanged()
     }
 
     @objc private func screenParametersChanged(_ notification: Notification) {
         Task {
-            await JSONLogger.shared.log("ws.screen", data: [:])
+            JSONLogger.shared.log("ws.screen", data: [:])
+            await EventRouter.shared.route(.displayReconfigured(displayUUID: ""), from: .workspaceObserver)
         }
-        stateManager?.handleDisplayConfigurationChanged()
     }
 
     // MARK: - Application Lifecycle Handlers
@@ -117,13 +127,12 @@ class WorkspaceObserver {
         }
 
         Task {
-            await JSONLogger.shared.log("app.launch", data: [
+            JSONLogger.shared.log("app.launch", data: [
                 "app": app.localizedName ?? "?",
                 "pid": app.processIdentifier
             ])
+            await EventRouter.shared.route(.appLaunched(app: app), from: .workspaceObserver)
         }
-
-        stateManager?.handleApplicationLaunched(app)
     }
 
     @objc private func applicationTerminated(_ notification: Notification) {
@@ -132,13 +141,12 @@ class WorkspaceObserver {
         }
 
         Task {
-            await JSONLogger.shared.log("app.term", data: [
+            JSONLogger.shared.log("app.term", data: [
                 "app": app.localizedName ?? "?",
                 "pid": app.processIdentifier
             ])
+            await EventRouter.shared.route(.appTerminated(app: app), from: .workspaceObserver)
         }
-
-        stateManager?.handleApplicationTerminated(app)
     }
 
     @objc private func applicationActivated(_ notification: Notification) {
@@ -146,7 +154,40 @@ class WorkspaceObserver {
             return
         }
 
-        stateManager?.handleApplicationActivated(app)
+        Task {
+            // Query the focused window of the activated app
+            let windowID = getFocusedWindowID(for: app.processIdentifier)
+
+            let focusState = FocusState(
+                windowID: windowID,
+                spaceID: 0,
+                displayUUID: "",
+                trigger: .appActivated
+            )
+            await EventRouter.shared.route(.focusChanged(focusState), from: .workspaceObserver)
+        }
+    }
+
+    /// Get the focused window ID for an application
+    private func getFocusedWindowID(for pid: pid_t) -> UInt32? {
+        let appElement = AXUIElementCreateApplication(pid)
+
+        var focusedWindow: CFTypeRef?
+        let result = AXUIElementCopyAttributeValue(
+            appElement,
+            kAXFocusedWindowAttribute as CFString,
+            &focusedWindow
+        )
+
+        guard result == .success, let windowElement = focusedWindow else {
+            return nil
+        }
+
+        // Get window ID using private API
+        var windowID: UInt32 = 0
+        let windowResult = _AXUIElementGetWindow(windowElement as! AXUIElement, &windowID)
+
+        return windowResult == .success ? windowID : nil
     }
 
     // MARK: - Application Visibility Handlers
@@ -157,13 +198,12 @@ class WorkspaceObserver {
         }
 
         Task {
-            await JSONLogger.shared.log("app.hide", data: [
+            JSONLogger.shared.log("app.hide", data: [
                 "app": app.localizedName ?? "?",
                 "pid": app.processIdentifier
             ])
+            await EventRouter.shared.route(.appHidden(app: app), from: .workspaceObserver)
         }
-
-        stateManager?.handleApplicationHidden(app)
     }
 
     @objc private func applicationUnhidden(_ notification: Notification) {
@@ -172,21 +212,20 @@ class WorkspaceObserver {
         }
 
         Task {
-            await JSONLogger.shared.log("app.unhide", data: [
+            JSONLogger.shared.log("app.unhide", data: [
                 "app": app.localizedName ?? "?",
                 "pid": app.processIdentifier
             ])
+            await EventRouter.shared.route(.appUnhidden(app: app), from: .workspaceObserver)
         }
-
-        stateManager?.handleApplicationUnhidden(app)
     }
 
     // MARK: - System Event Handlers
 
     @objc private func systemWoke(_ notification: Notification) {
         Task {
-            await JSONLogger.shared.log("ws.wake", data: [:])
+            JSONLogger.shared.log("ws.wake", data: [:])
+            await EventRouter.shared.route(.systemWoke, from: .workspaceObserver)
         }
-        stateManager?.handleSystemWoke()
     }
 }

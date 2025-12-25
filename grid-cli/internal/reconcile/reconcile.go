@@ -100,7 +100,6 @@ func syncFocus(snap *server.Snapshot, rs *state.RuntimeState) bool {
 	}
 
 	// Update focus
-
 	rs.GetSpace(snap.SpaceID).SetFocus(focusedCell, windowIndex)
 	return true
 }

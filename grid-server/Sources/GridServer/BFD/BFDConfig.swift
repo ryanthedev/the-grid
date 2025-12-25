@@ -131,7 +131,7 @@ struct BFDConfig: Codable {
     static func load() async throws -> BFDConfig {
         let files = await XDG.findConfigFiles(app: "thegrid", filename: "bfd.yaml")
 
-        await JSONLogger.shared.log("cfg.resolve", data: [
+        JSONLogger.shared.log("cfg.resolve", data: [
             "xdg_config_home": XDG.configHome,
             "xdg_config_dirs": XDG.configDirs,
             "files_found": files
@@ -158,7 +158,7 @@ struct BFDConfig: Codable {
             }
 
             merged = deepMerge(merged, dict)
-            await JSONLogger.shared.log("cfg.merge", data: ["path": file])
+            JSONLogger.shared.log("cfg.merge", data: ["path": file])
         }
 
         let localPath = "\(XDG.configHome)/thegrid/bfd.local.yaml"
@@ -173,7 +173,7 @@ struct BFDConfig: Codable {
             do {
                 if let localDict = try Yams.load(yaml: String(data: localData, encoding: .utf8) ?? "") as? [String: Any] {
                     merged = deepMerge(merged, localDict)
-                    await JSONLogger.shared.log("cfg.merge", data: ["path": localPath, "layer": "local"])
+                    JSONLogger.shared.log("cfg.merge", data: ["path": localPath, "layer": "local"])
                 }
             } catch {
                 throw BFDError.parseError(path: localPath, underlying: error)

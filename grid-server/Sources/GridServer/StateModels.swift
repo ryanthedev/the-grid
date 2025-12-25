@@ -17,6 +17,8 @@ struct WindowManagerState: Codable {
     var windows: [String: WindowState]  // Keyed by window ID (as string for JSON compatibility)
     var applications: [String: ApplicationState]  // Keyed by PID (as string for JSON compatibility)
     var metadata: StateMetadata
+    var serverVersion: String?
+    var serverCommit: String?
 
     init() {
         self.displays = []
@@ -24,6 +26,8 @@ struct WindowManagerState: Codable {
         self.windows = [:]
         self.applications = [:]
         self.metadata = StateMetadata()
+        self.serverVersion = nil
+        self.serverCommit = nil
     }
 }
 
@@ -171,7 +175,7 @@ struct WindowState: Codable {
     var pid: pid_t
     var appName: String?
     var title: String?
-    var isOrderedIn: Bool
+    var isHidden: Bool
     var isMinimized: Bool
     var spaces: [UInt64]  // Space IDs this window is on
     var alpha: Float
@@ -193,6 +197,9 @@ struct WindowState: Codable {
     // Timestamp for conflict resolution between events and polling
     var lastUpdated: Date
 
+    // Geometrically computed display UUID (based on window frame center point)
+    var displayUUID: String?
+
     enum CodingKeys: String, CodingKey {
         case id
         case frame
@@ -201,7 +208,7 @@ struct WindowState: Codable {
         case pid
         case appName
         case title
-        case isOrderedIn
+        case isHidden
         case isMinimized
         case spaces
         case alpha
@@ -216,6 +223,7 @@ struct WindowState: Codable {
         case hasZoomButton
         case isModal
         case lastUpdated
+        case displayUUID
     }
 
     init(id: UInt32) {
@@ -226,7 +234,7 @@ struct WindowState: Codable {
         self.pid = 0
         self.appName = nil
         self.title = nil
-        self.isOrderedIn = false
+        self.isHidden = false
         self.isMinimized = false
         self.spaces = []
         self.alpha = 1.0
@@ -241,6 +249,7 @@ struct WindowState: Codable {
         self.hasZoomButton = false
         self.isModal = false
         self.lastUpdated = Date()
+        self.displayUUID = nil
     }
 }
 

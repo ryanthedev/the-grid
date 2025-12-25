@@ -30,9 +30,10 @@ type Window struct {
 	SubLevel     interface{}            `json:"subLevel"`
 	HasTransform bool                   `json:"hasTransform"`
 	Metadata     map[string]interface{} `json:"metadata"`
-	Role         *string                `json:"role,omitempty"`    // AX role for filtering
-	Subrole      *string                `json:"subrole,omitempty"` // AX subrole for filtering
-	Parent       *int                   `json:"parent,omitempty"`  // Parent window ID for filtering
+	Role         *string                `json:"role,omitempty"`       // AX role for filtering
+	Subrole      *string                `json:"subrole,omitempty"`    // AX subrole for filtering
+	Parent       *int                   `json:"parent,omitempty"`     // Parent window ID for filtering
+	DisplayUUID  *string                `json:"displayUUID,omitempty"` // Geometrically computed display UUID
 }
 
 // toFloat64 converts interface{} to float64, handling bool for overflow
@@ -97,6 +98,14 @@ func (w *Window) GetPrimarySpace() string {
 		}
 	}
 	return "-"
+}
+
+// GetDisplayUUID returns the geometrically computed display UUID
+func (w *Window) GetDisplayUUID() string {
+	if w.DisplayUUID != nil {
+		return *w.DisplayUUID
+	}
+	return ""
 }
 
 // FormatFrame returns a formatted string representation of the window frame

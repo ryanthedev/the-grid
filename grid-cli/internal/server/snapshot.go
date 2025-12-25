@@ -6,8 +6,14 @@ import (
 
 	"github.com/ryanthedev/grid-cli/internal/client"
 	"github.com/ryanthedev/grid-cli/internal/config"
+	"github.com/ryanthedev/grid-cli/internal/jsonlog"
 	"github.com/ryanthedev/grid-cli/internal/types"
 )
+
+// MinTileableDimension filters out toolbars (30px), tab bars, and other
+// UI chrome that appears in CGWindowList but shouldn't be tiled.
+// Set to 100px to allow small utility windows (calculator ~180px).
+const MinTileableDimension = 100
 
 // DisplayInfo contains display metadata for cross-monitor navigation
 type DisplayInfo struct {
@@ -47,15 +53,36 @@ type WindowInfo struct {
 	HasMinimizeButton   bool
 	HasZoomButton       bool
 	IsModal             bool
+	DisplayUUID         string // Geometrically computed display UUID
 }
 
 // IsTileable returns true if the window should be included in tiling.
 // Requires valid AX access (Role == "AXWindow") to filter out phantom windows
 // that exist in CGWindowList but cannot be controlled via accessibility APIs.
 func (w WindowInfo) IsTileable() bool {
+	// Note: Removed empty title check - Chrome and other apps temporarily have
+	// empty titles during focus transitions. Phantom windows are already filtered
+	// by the Role == "AXWindow" check below, which phantoms fail.
+
+	// Basic state checks
 	if w.IsMinimized || w.IsHidden || w.Level != 0 {
 		return false
 	}
+
+	// Filter windows with invalid dimensions (toolbars, tab bars)
+	if w.Frame.Height < MinTileableDimension || w.Frame.Width < MinTileableDimension {
+		return false
+	}
+
+	// Note: Removed Y < -100 check - it incorrectly filtered windows on displays
+	// positioned above the main display (negative Y coordinates). Phantom windows
+	// are now filtered by empty title and empty role checks.
+
+	// Only tile standard windows, not dialogs or floating panels
+	if w.Subrole != "" && w.Subrole != "AXStandardWindow" {
+		return false
+	}
+
 	// Must have valid AX window role - phantoms have empty role
 	return w.Role == "AXWindow"
 }
@@ -87,14 +114,101 @@ func (w WindowInfo) IsExcluded(exclusions config.WindowExclusion) bool {
 }
 
 // FilterTileable returns windows that are tileable and not excluded.
+// Logs each excluded window with the reason for exclusion.
 func (s *Snapshot) FilterTileable(exclusions config.WindowExclusion) []WindowInfo {
 	var result []WindowInfo
 	for _, w := range s.Windows {
-		if w.IsTileable() && !w.IsExcluded(exclusions) {
-			result = append(result, w)
+		// Check tileable first
+		if !w.IsTileable() {
+			reason := w.exclusionReason()
+			if reason != "" {
+				jsonlog.Log("win.exclude", jsonlog.WithData(map[string]any{
+					"wid":    w.ID,
+					"app":    w.AppName,
+					"title":  truncate(w.Title, 30),
+					"reason": reason,
+				}))
+			}
+			continue
 		}
+
+		// Check config exclusions
+		if w.IsExcluded(exclusions) {
+			reason := w.configExclusionReason(exclusions)
+			jsonlog.Log("win.exclude", jsonlog.WithData(map[string]any{
+				"wid":    w.ID,
+				"app":    w.AppName,
+				"title":  truncate(w.Title, 30),
+				"reason": reason,
+			}))
+			continue
+		}
+
+		result = append(result, w)
 	}
 	return result
+}
+
+// exclusionReason returns a human-readable reason why this window is not tileable.
+func (w WindowInfo) exclusionReason() string {
+	if w.IsMinimized {
+		return "minimized"
+	}
+	if w.IsHidden {
+		return "hidden"
+	}
+	if w.Level != 0 {
+		return fmt.Sprintf("level=%d", w.Level)
+	}
+	if w.Frame.Height < MinTileableDimension || w.Frame.Width < MinTileableDimension {
+		return fmt.Sprintf("small_size:%.0fx%.0f", w.Frame.Width, w.Frame.Height)
+	}
+	if w.Subrole != "" && w.Subrole != "AXStandardWindow" {
+		return fmt.Sprintf("subrole=%s", w.Subrole)
+	}
+	if w.Role != "AXWindow" {
+		return fmt.Sprintf("role=%s", w.Role)
+	}
+	return ""
+}
+
+// configExclusionReason returns why this window was excluded by config rules.
+func (w WindowInfo) configExclusionReason(exclusions config.WindowExclusion) string {
+	for _, role := range exclusions.Roles {
+		if w.Role == role {
+			return fmt.Sprintf("config_role=%s", role)
+		}
+	}
+	for _, subrole := range exclusions.Subroles {
+		if w.Subrole == subrole {
+			return fmt.Sprintf("config_subrole=%s", subrole)
+		}
+	}
+	for _, app := range exclusions.Apps {
+		if w.AppName == app {
+			return fmt.Sprintf("config_app=%s", app)
+		}
+	}
+	return "config_unknown"
+}
+
+// truncate shortens a string to max length with ellipsis.
+func truncate(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max-3] + "..."
+}
+
+// GetWindowByID returns the WindowInfo for the given window ID, or nil if not found.
+// This searches the raw Windows list (all windows on the space), not just tileable ones.
+func (s *Snapshot) GetWindowByID(wid uint32) *WindowInfo {
+	for i := range s.Windows {
+		if s.Windows[i].ID == wid {
+			return &s.Windows[i]
+		}
+	}
+	return nil
 }
 
 // GetCurrentDisplayUUID returns the UUID of the display for the current space.
@@ -460,6 +574,7 @@ func parseWindow(w interface{}, spaceID string) *WindowInfo {
 		HasMinimizeButton:   toBool(win["hasMinimizeButton"]),
 		HasZoomButton:       toBool(win["hasZoomButton"]),
 		IsModal:             toBool(win["isModal"]),
+		DisplayUUID:         toString(win["displayUUID"]),
 	}
 
 	// Parse frame
