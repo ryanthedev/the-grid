@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/ryanthedev/grid-cli/internal/config"
+	"github.com/ryanthedev/grid-cli/internal/types"
 )
 
 func TestParseWindowWithRoleSubrole(t *testing.T) {
@@ -123,12 +124,14 @@ func TestWindowInfoIsExcluded(t *testing.T) {
 }
 
 func TestSnapshotFilterTileable(t *testing.T) {
+	// Windows need valid frames (>= MinTileableDimension) to be tileable
+	validFrame := types.Rect{X: 0, Y: 0, Width: 800, Height: 600}
 	snap := &Snapshot{
 		Windows: []WindowInfo{
-			{ID: 1, Role: "AXWindow", Subrole: "AXStandardWindow", AppName: "Chrome"},
-			{ID: 2, Role: "AXHelpTag", Subrole: "AXUnknown", AppName: "Chrome"},                       // Tooltip
-			{ID: 3, Role: "AXWindow", Subrole: "AXStandardWindow", AppName: "Dock"},                   // Excluded app
-			{ID: 4, Role: "AXWindow", Subrole: "AXStandardWindow", AppName: "Code", IsMinimized: true}, // Minimized
+			{ID: 1, Role: "AXWindow", Subrole: "AXStandardWindow", AppName: "Chrome", Frame: validFrame},
+			{ID: 2, Role: "AXHelpTag", Subrole: "AXUnknown", AppName: "Chrome", Frame: validFrame},                       // Tooltip
+			{ID: 3, Role: "AXWindow", Subrole: "AXStandardWindow", AppName: "Dock", Frame: validFrame},                   // Excluded app
+			{ID: 4, Role: "AXWindow", Subrole: "AXStandardWindow", AppName: "Code", Frame: validFrame, IsMinimized: true}, // Minimized
 		},
 	}
 

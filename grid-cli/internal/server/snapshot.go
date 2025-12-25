@@ -6,6 +6,7 @@ import (
 
 	"github.com/ryanthedev/grid-cli/internal/client"
 	"github.com/ryanthedev/grid-cli/internal/config"
+	"github.com/ryanthedev/grid-cli/internal/jsonlog"
 	"github.com/ryanthedev/grid-cli/internal/types"
 )
 
@@ -113,14 +114,90 @@ func (w WindowInfo) IsExcluded(exclusions config.WindowExclusion) bool {
 }
 
 // FilterTileable returns windows that are tileable and not excluded.
+// Logs each excluded window with the reason for exclusion.
 func (s *Snapshot) FilterTileable(exclusions config.WindowExclusion) []WindowInfo {
 	var result []WindowInfo
 	for _, w := range s.Windows {
-		if w.IsTileable() && !w.IsExcluded(exclusions) {
-			result = append(result, w)
+		// Check tileable first
+		if !w.IsTileable() {
+			reason := w.exclusionReason()
+			if reason != "" {
+				jsonlog.Log("win.exclude", jsonlog.WithData(map[string]any{
+					"wid":    w.ID,
+					"app":    w.AppName,
+					"title":  truncate(w.Title, 30),
+					"reason": reason,
+				}))
+			}
+			continue
 		}
+
+		// Check config exclusions
+		if w.IsExcluded(exclusions) {
+			reason := w.configExclusionReason(exclusions)
+			jsonlog.Log("win.exclude", jsonlog.WithData(map[string]any{
+				"wid":    w.ID,
+				"app":    w.AppName,
+				"title":  truncate(w.Title, 30),
+				"reason": reason,
+			}))
+			continue
+		}
+
+		result = append(result, w)
 	}
 	return result
+}
+
+// exclusionReason returns a human-readable reason why this window is not tileable.
+func (w WindowInfo) exclusionReason() string {
+	if w.IsMinimized {
+		return "minimized"
+	}
+	if w.IsHidden {
+		return "hidden"
+	}
+	if w.Level != 0 {
+		return fmt.Sprintf("level=%d", w.Level)
+	}
+	if w.Frame.Height < MinTileableDimension || w.Frame.Width < MinTileableDimension {
+		return fmt.Sprintf("small_size:%.0fx%.0f", w.Frame.Width, w.Frame.Height)
+	}
+	if w.Subrole != "" && w.Subrole != "AXStandardWindow" {
+		return fmt.Sprintf("subrole=%s", w.Subrole)
+	}
+	if w.Role != "AXWindow" {
+		return fmt.Sprintf("role=%s", w.Role)
+	}
+	return ""
+}
+
+// configExclusionReason returns why this window was excluded by config rules.
+func (w WindowInfo) configExclusionReason(exclusions config.WindowExclusion) string {
+	for _, role := range exclusions.Roles {
+		if w.Role == role {
+			return fmt.Sprintf("config_role=%s", role)
+		}
+	}
+	for _, subrole := range exclusions.Subroles {
+		if w.Subrole == subrole {
+			return fmt.Sprintf("config_subrole=%s", subrole)
+		}
+	}
+	for _, app := range exclusions.Apps {
+		if w.AppName == app {
+			return fmt.Sprintf("config_app=%s", app)
+		}
+	}
+	return "config_unknown"
+}
+
+// truncate shortens a string to max length with ellipsis.
+func truncate(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max-3] + "..."
 }
 
 // GetWindowByID returns the WindowInfo for the given window ID, or nil if not found.
