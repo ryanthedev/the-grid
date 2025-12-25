@@ -46,12 +46,6 @@ func CycleFocus(
 
 	// Calculate next window index
 	idx := spaceState.FocusedWindow
-	jsonlog.Log("dbg.cycle", jsonlog.WithData(map[string]any{
-		"step":         "before_cycle",
-		"idx_before":   idx,
-		"cell_windows": cell.Windows,
-		"cell_id":      cellID,
-	}))
 	if idx < 0 || idx >= len(cell.Windows) {
 		idx = 0
 	}
@@ -78,11 +72,6 @@ func CycleFocus(
 	}
 
 	windowID := cell.Windows[idx]
-	jsonlog.Log("dbg.cycle", jsonlog.WithData(map[string]any{
-		"step":       "after_cycle",
-		"idx_after":  idx,
-		"target_wid": windowID,
-	}))
 
 	// Focus via server
 	if err := FocusWindow(ctx, c, windowID); err != nil {
@@ -166,20 +155,9 @@ func MoveFocus(
 	adjacentMap := layout.GetAdjacentCells(currentCell, calculated.CellBounds)
 	candidates := adjacentMap[direction]
 
-	jsonlog.Log("dbg.move_focus", jsonlog.WithData(map[string]any{
-		"dir":         direction.String(),
-		"currentCell": currentCell,
-		"spaceID":     snap.SpaceID,
-		"candidates":  len(candidates),
-		"extend":      opts.Extend,
-	}))
-
 	if len(candidates) == 0 {
 		// No adjacent cell on current display - try cross-monitor if extend is enabled
 		if opts.Extend {
-			jsonlog.Log("dbg.cross_display_attempt", jsonlog.WithData(map[string]any{
-				"dir": direction.String(),
-			}))
 			windowID, err := moveFocusCrossDisplay(ctx, c, snap, cfg, rs, direction, currentCell, calculated.CellBounds, opts.WrapAround)
 			if err == nil {
 				return windowID, nil
@@ -202,6 +180,13 @@ func MoveFocus(
 
 	// Pick closest candidate
 	targetCell := PickClosestCell(currentCell, candidates, calculated.CellBounds)
+
+	jsonlog.Log("focus.move", jsonlog.WithData(map[string]any{
+		"dir":    direction.String(),
+		"from":   currentCell,
+		"to":     targetCell,
+		"method": "adjacent",
+	}))
 
 	// Focus the target cell
 	return focusCellByID(ctx, c, rs, snap.SpaceID, targetCell)
@@ -247,13 +232,6 @@ func moveFocusCrossDisplay(
 		return 0, fmt.Errorf("could not determine current display")
 	}
 
-	jsonlog.Log("dbg.cross_display_start", jsonlog.WithData(map[string]any{
-		"snapSpaceID":        snap.SpaceID,
-		"currentDisplayUUID": currentDisplayUUID[:8],
-		"direction":          direction.String(),
-		"numDisplays":        len(snap.AllDisplays),
-	}))
-
 	// Find adjacent display in direction
 	adjacentDisplay := FindAdjacentDisplay(currentDisplayUUID, direction, snap.AllDisplays)
 	if adjacentDisplay == nil {
@@ -266,35 +244,15 @@ func moveFocusCrossDisplay(
 		}
 	}
 
-	jsonlog.Log("dbg.adjacent_display_found", jsonlog.WithData(map[string]any{
-		"adjacentUUID":  adjacentDisplay.UUID[:8],
-		"adjacentSpace": adjacentDisplay.CurrentSpaceID,
-	}))
-
 	// Get cells on the target display
 	targetCellBounds, targetSpaceID, err := GetDisplayCells(*adjacentDisplay, cfg, rs)
 	if err != nil {
-		jsonlog.Log("dbg.get_display_cells_error", jsonlog.WithMsg(err.Error()), jsonlog.WithData(map[string]any{
-			"adjacentUUID":  adjacentDisplay.UUID[:8],
-			"adjacentSpace": adjacentDisplay.CurrentSpaceID,
-		}))
 		return 0, fmt.Errorf("failed to get cells on adjacent display: %w", err)
 	}
 
 	// Get target space state for last-focused-cell lookup
 	targetSpaceIDStr := fmt.Sprintf("%v", targetSpaceID)
 	targetSpaceState := rs.GetSpaceReadOnly(targetSpaceIDStr)
-
-	// Log what we got from GetDisplayCells
-	cellNames := make([]string, 0, len(targetCellBounds))
-	for name := range targetCellBounds {
-		cellNames = append(cellNames, name)
-	}
-	jsonlog.Log("dbg.get_display_cells_ok", jsonlog.WithData(map[string]any{
-		"targetSpaceID": targetSpaceIDStr,
-		"cellNames":     cellNames,
-		"hasSpaceState": targetSpaceState != nil,
-	}))
 
 	// Get current display bounds for position mapping (used in fallback)
 	var currentDisplayBounds types.Rect
@@ -324,21 +282,19 @@ func moveFocusCrossDisplay(
 		targetDisplayBounds,
 	)
 
-	jsonlog.Log("dbg.select_target_cell", jsonlog.WithData(map[string]any{
-		"targetCell":    targetCell,
-		"targetSpaceID": targetSpaceIDStr,
-		"currentCell":   currentCell,
-	}))
-
 	if targetCell == "" {
 		return 0, fmt.Errorf("no cells on adjacent display")
 	}
 
-	// Focus the cell on the target space
-	jsonlog.Log("dbg.focus_cell_start", jsonlog.WithData(map[string]any{
-		"spaceID": targetSpaceIDStr,
-		"cellID":  targetCell,
+	jsonlog.Log("focus.cross_display", jsonlog.WithData(map[string]any{
+		"dir":         direction.String(),
+		"fromDisplay": currentDisplayUUID,
+		"toDisplay":   adjacentDisplay.UUID,
+		"toCell":      targetCell,
+		"toSpace":     targetSpaceIDStr,
 	}))
+
+	// Focus the cell on the target space
 	windowID, err := focusCellByID(ctx, c, rs, targetSpaceIDStr, targetCell)
 	if err != nil {
 		return 0, err
@@ -644,13 +600,6 @@ func FindAdjacentDisplay(currentDisplayUUID string, direction types.Direction, a
 		return nil
 	}
 
-	jsonlog.Log("dbg.find_adjacent_start", jsonlog.WithData(map[string]any{
-		"currentUUID": currentDisplayUUID[:8],
-		"currentY":    currentFrame.Y,
-		"currentH":    currentFrame.Height,
-		"direction":   direction.String(),
-	}))
-
 	// Find adjacent displays based on direction
 	for i := range allDisplays {
 		if allDisplays[i].UUID == currentDisplayUUID {
@@ -686,17 +635,6 @@ func FindAdjacentDisplay(currentDisplayUUID string, direction types.Direction, a
 			edgesAlign := edgeDiff <= edgeTolerance
 			horizontalOverlap := overlapsHorizontally(currentFrame, candidateFrame)
 			isAdjacent = edgesAlign && horizontalOverlap
-			jsonlog.Log("dbg.up_candidate", jsonlog.WithData(map[string]any{
-				"candidateUUID": allDisplays[i].UUID[:8],
-				"candidateY":    candidateFrame.Y,
-				"candidateH":    candidateFrame.Height,
-				"bottomEdge":    candidateFrame.Y + candidateFrame.Height,
-				"currentTopY":   currentFrame.Y,
-				"edgeDiff":      edgeDiff,
-				"edgesAlign":    edgesAlign,
-				"hOverlap":      horizontalOverlap,
-				"isAdjacent":    isAdjacent,
-			}))
 
 		case types.DirDown:
 			// B is below: A.Y + A.Height ≈ B.Y AND horizontal overlap

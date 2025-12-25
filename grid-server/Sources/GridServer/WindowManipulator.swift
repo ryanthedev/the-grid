@@ -305,8 +305,7 @@ class WindowManipulator {
         let currentSpace = getWindowSpace(windowID: windowID)
 
         if currentSpace == spaceID {
-            Task { JSONLogger.shared.log("dbg.space", data: ["reason": "already_there", "wid": windowID]) }
-            return true
+return true
         }
 
         // Determine method based on macOS version and MSS availability

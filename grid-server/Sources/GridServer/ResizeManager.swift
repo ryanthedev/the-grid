@@ -246,8 +246,7 @@ class ResizeManager {
 
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
             if let output = String(data: data, encoding: .utf8), !output.isEmpty {
-                Task { JSONLogger.shared.log("dbg.resize.output", data: ["output": output]) }
-            }
+}
 
             if process.terminationStatus != 0 {
                 Task { JSONLogger.shared.log("warn.resize.exec_failed", data: ["status": process.terminationStatus]) }

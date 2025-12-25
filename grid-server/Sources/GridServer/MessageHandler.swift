@@ -795,14 +795,7 @@ class MessageHandler {
             // Warp the mouse cursor to the center
             let result = CGWarpMouseCursorPosition(center)
             if result == .success {
-                Task {
-                    JSONLogger.shared.log("dbg.mouse_warp", data: [
-                        "wid": wid,
-                        "x": center.x,
-                        "y": center.y
-                    ])
-                }
-                completion(Response(id: request.id, result: AnyCodable([
+completion(Response(id: request.id, result: AnyCodable([
                     "success": true,
                     "windowId": wid,
                     "position": ["x": center.x, "y": center.y]
@@ -835,16 +828,7 @@ class MessageHandler {
 
             // Update the shared border configuration
             BorderConfigManager.shared.update(from: configDict)
-
-            Task {
-                JSONLogger.shared.log("dbg.border_config", data: [
-                    "enabled": BorderConfigManager.shared.enabled,
-                    "activeWidth": BorderConfigManager.shared.activeStyle.width,
-                    "padding": BorderConfigManager.shared.padding
-                ])
-            }
-
-            completion(Response(id: request.id, result: AnyCodable(["success": true])))
+completion(Response(id: request.id, result: AnyCodable(["success": true])))
         }
 
         // Set cell assignments
@@ -898,14 +882,7 @@ class MessageHandler {
                     simpleBorderManager.setCellBounds(cellBounds, forDisplay: displayUUID)
                 }
             }
-
-            Task {
-                JSONLogger.shared.log("dbg.cell_assign", data: [
-                    "display": displayUUID,
-                    "count": cellAssignments.count
-                ])
-            }
-            completion(Response(id: request.id, result: AnyCodable(["success": true])))
+completion(Response(id: request.id, result: AnyCodable(["success": true])))
         }
 
         // Query border info for a window

@@ -28,69 +28,13 @@ func Sync(ctx context.Context, c *client.Client, snap *server.Snapshot, rs *stat
 	changed := false
 	for cellID, cell := range spaceState.Cells {
 		var valid []uint32
-		var removed []uint32
 		for _, wid := range cell.Windows {
 			if snap.WindowIDs[wid] {
 				valid = append(valid, wid)
-			} else {
-				removed = append(removed, wid)
 			}
 		}
 
 		if len(valid) != len(cell.Windows) {
-			// [OBERDEBUG] Log detailed info about each removed window
-			for _, wid := range removed {
-				// Check why window isn't in WindowIDs
-				reason := "unknown"
-				windowInfo := snap.GetWindowByID(wid)
-				if windowInfo == nil {
-					reason = "not_in_space_windows"
-				} else {
-					// Window exists in space but failed IsTileable
-					reason = "failed_istileable"
-				}
-
-				logData := map[string]any{
-					"wid":            wid,
-					"cell":           cellID,
-					"space":          snap.SpaceID,
-					"reason":         reason,
-					"cell_before":    cell.Windows,
-					"cell_after":     valid,
-					"snap_window_ct": len(snap.Windows),
-					"snap_wid_ct":    len(snap.WindowIDs),
-				}
-
-				// If window exists in space, log why IsTileable failed
-				if windowInfo != nil {
-					logData["win_title"] = windowInfo.Title
-					logData["win_app"] = windowInfo.AppName
-					logData["win_role"] = windowInfo.Role
-					logData["win_subrole"] = windowInfo.Subrole
-					logData["win_level"] = windowInfo.Level
-					logData["win_minimized"] = windowInfo.IsMinimized
-					logData["win_hidden"] = windowInfo.IsHidden
-					logData["win_frame_w"] = windowInfo.Frame.Width
-					logData["win_frame_h"] = windowInfo.Frame.Height
-					logData["win_tileable"] = windowInfo.IsTileable()
-
-					// Detailed IsTileable failure reason
-					if windowInfo.Title == "" {
-						logData["tileable_fail"] = "empty_title"
-					} else if windowInfo.IsMinimized || windowInfo.IsHidden || windowInfo.Level != 0 {
-						logData["tileable_fail"] = "state_check"
-					} else if windowInfo.Frame.Height < server.MinTileableDimension || windowInfo.Frame.Width < server.MinTileableDimension {
-						logData["tileable_fail"] = "dimension_check"
-					} else if windowInfo.Subrole != "" && windowInfo.Subrole != "AXStandardWindow" {
-						logData["tileable_fail"] = "subrole_check"
-					} else if windowInfo.Role != "AXWindow" {
-						logData["tileable_fail"] = "role_check"
-					}
-				}
-
-				jsonlog.Log("dbg.reconcile.window_removed", jsonlog.WithData(logData))
-			}
-
 			// Windows were removed, update cell
 			mutableCell := rs.GetSpace(snap.SpaceID).GetCell(cellID)
 			mutableCell.Windows = valid
@@ -156,13 +100,6 @@ func syncFocus(snap *server.Snapshot, rs *state.RuntimeState) bool {
 	}
 
 	// Update focus
-	jsonlog.Log("dbg.sync_focus", jsonlog.WithData(map[string]any{
-		"snap_focused_wid": snap.FocusedWindowID,
-		"old_cell":         spaceState.FocusedCell,
-		"old_idx":          spaceState.FocusedWindow,
-		"new_cell":         focusedCell,
-		"new_idx":          windowIndex,
-	}))
 	rs.GetSpace(snap.SpaceID).SetFocus(focusedCell, windowIndex)
 	return true
 }

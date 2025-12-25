@@ -80,7 +80,6 @@ class MouseHandler {
     /// Start capturing mouse events
     func start() -> Bool {
         guard eventTap == nil else {
-            Task { JSONLogger.shared.log("dbg.mouse.already_started", data: [:]) }
             return true
         }
 

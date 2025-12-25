@@ -126,10 +126,7 @@ class StateManager: StateEventHandler {
             handleWindowTitleChanged(windowID, title: title)
 
         case .windowSpaceAssignmentChanged(let windowID, let spaces):
-            JSONLogger.shared.log("dbg.spaces", msg: "space assignment changed", data: [
-                "wid": windowID,
-                "spaces": spaces
-            ])
+            handleWindowSpaceAssignmentChanged(windowID, spaces: spaces)
 
         case .focusChanged(let state):
             if let windowID = state.windowID {
@@ -163,62 +160,40 @@ class StateManager: StateEventHandler {
             handleDisplayConfigurationChanged()
 
         case .spaceCreated(let spaceID, let displayUUID):
-            JSONLogger.shared.log("dbg.space", msg: "space created", data: [
-                "sid": spaceID,
-                "display": displayUUID
-            ])
+            handleSpaceCreated(spaceID, displayUUID: displayUUID)
 
         case .spaceDestroyed(let spaceID):
-            JSONLogger.shared.log("dbg.space", msg: "space destroyed", data: [
-                "sid": spaceID
-            ])
+            handleSpaceDestroyed(spaceID)
 
         case .displayConnected(let displayUUID):
-            JSONLogger.shared.log("dbg.display", msg: "display connected", data: [
-                "display": displayUUID
-            ])
+            handleDisplayConnected(displayUUID)
 
         case .displayDisconnected(let displayUUID):
-            JSONLogger.shared.log("dbg.display", msg: "display disconnected", data: [
-                "display": displayUUID
-            ])
+            handleDisplayDisconnected(displayUUID)
 
-        case .commandFocusWindow(let windowID, let requestID):
-            JSONLogger.shared.log("dbg.cmd", msg: "focus command", data: [
-                "wid": windowID,
-                "req": requestID
-            ])
+        case .commandFocusWindow(_, _):
+            // Handled by MessageHandler directly
+            break
 
-        case .commandMoveWindow(let windowID, let frame, let requestID):
-            JSONLogger.shared.log("dbg.cmd", msg: "move command", data: [
-                "wid": windowID,
-                "req": requestID
-            ])
+        case .commandMoveWindow(_, _, _):
+            // Handled by MessageHandler directly
+            break
 
-        case .commandResizeWindow(let windowID, let frame, let requestID):
-            JSONLogger.shared.log("dbg.cmd", msg: "resize command", data: [
-                "wid": windowID,
-                "req": requestID
-            ])
+        case .commandResizeWindow(_, _, _):
+            // Handled by MessageHandler directly
+            break
 
-        case .commandMinimizeWindow(let windowID, let requestID):
-            JSONLogger.shared.log("dbg.cmd", msg: "minimize command", data: [
-                "wid": windowID,
-                "req": requestID
-            ])
+        case .commandMinimizeWindow(_, _):
+            // Handled by MessageHandler directly
+            break
 
-        case .commandCloseWindow(let windowID, let requestID):
-            JSONLogger.shared.log("dbg.cmd", msg: "close command", data: [
-                "wid": windowID,
-                "req": requestID
-            ])
+        case .commandCloseWindow(_, _):
+            // Handled by MessageHandler directly
+            break
 
-        case .commandMoveWindowToSpace(let windowID, let spaceID, let requestID):
-            JSONLogger.shared.log("dbg.cmd", msg: "move to space command", data: [
-                "wid": windowID,
-                "sid": spaceID,
-                "req": requestID
-            ])
+        case .commandMoveWindowToSpace(_, _, _):
+            // Handled by MessageHandler directly
+            break
         }
     }
 
@@ -581,8 +556,6 @@ class StateManager: StateEventHandler {
         let windowKey = String(windowID)
         var displayStr: String?
         var method = "geometric"
-
-        // [OBERDEBUG-003] Debug: trace display detection
         let window = state.windows[windowKey]
         let foundWindow = window != nil
         let isMinimized = window?.isMinimized ?? false
@@ -599,19 +572,7 @@ class StateManager: StateEventHandler {
             displayStr = displayUUID as String
             method = "fallback"
         }
-
-        // [OBERDEBUG-003] Log the decision
-        JSONLogger.shared.log("dbg.dsp.update", data: [
-            "wid": windowID,
-            "foundWindow": foundWindow,
-            "isMinimized": isMinimized,
-            "foundDisplay": foundDisplay?.uuid ?? "nil",
-            "result": displayStr ?? "nil",
-            "method": method,
-            "oldActiveDisplay": state.metadata.activeDisplayUUID ?? "nil"
-        ])
-
-        if let displayStr = displayStr {
+if let displayStr = displayStr {
             if logChanges && state.metadata.activeDisplayUUID != displayStr {
                 JSONLogger.shared.log("dsp.change", data: [
                     "display": displayStr,
@@ -648,18 +609,7 @@ class StateManager: StateEventHandler {
                 method = "fallback"
             }
         }
-
-        // [OBERDEBUG-004] Log space update decision
-        JSONLogger.shared.log("dbg.spc.update", data: [
-            "wid": windowID,
-            "foundWindow": window != nil,
-            "windowSpaces": windowSpaces.map { Int($0) },
-            "result": spaceID.map { Int($0) } ?? 0,
-            "method": method,
-            "oldActiveSpace": state.metadata.activeSpaceID.map { Int($0) } ?? 0
-        ])
-
-        if let spaceID = spaceID {
+if let spaceID = spaceID {
             state.metadata.activeSpaceID = spaceID
             if trackLastFocused {
                 let spaceKey = String(spaceID)
@@ -851,6 +801,37 @@ class StateManager: StateEventHandler {
         return displayContainingPoint(CGPoint(x: centerX, y: centerY))
     }
 
+    /// Check if a window is clearly off-screen (way outside all display bounds)
+    /// Used to suppress warnings for Chrome's phantom/helper windows positioned off-screen
+    private func isWindowGeometricallyOffScreen(_ frame: CGRect) -> Bool {
+        guard !state.displays.isEmpty else { return false }
+
+        // Compute combined display bounding box
+        var minX = CGFloat.greatestFiniteMagnitude
+        var minY = CGFloat.greatestFiniteMagnitude
+        var maxX = -CGFloat.greatestFiniteMagnitude
+        var maxY = -CGFloat.greatestFiniteMagnitude
+
+        for display in state.displays {
+            guard let displayFrame = display.frame else { continue }
+            minX = min(minX, displayFrame.origin.x)
+            minY = min(minY, displayFrame.origin.y)
+            maxX = max(maxX, displayFrame.origin.x + displayFrame.size.width)
+            maxY = max(maxY, displayFrame.origin.y + displayFrame.size.height)
+        }
+
+        // If no display frames available, can't determine off-screen status
+        guard minX != .greatestFiniteMagnitude else { return false }
+
+        // Check if window center is way outside combined bounds
+        let offScreenMargin: CGFloat = 200
+        let centerX = frame.origin.x + frame.size.width / 2
+        let centerY = frame.origin.y + frame.size.height / 2
+
+        return centerX < minX - offScreenMargin || centerX > maxX + offScreenMargin ||
+               centerY < minY - offScreenMargin || centerY > maxY + offScreenMargin
+    }
+
     /// Compute displayUUID for a window based on its frame
     /// For non-minimized windows, uses geometric detection (center point)
     /// For minimized windows, retains existing displayUUID (doesn't recompute)
@@ -878,9 +859,12 @@ class StateManager: StateEventHandler {
         } else {
             // Fallback: keep original macOS-reported spaces
             window.spaces = originalSpaces
-            // Only warn for real windows, not menu bar items (small height, off-screen)
+            // Only warn for real windows, not:
+            // - Menu bar items (small height, no display)
+            // - Off-screen helper windows (Chrome phantom windows, system panels)
             let isMenuBarItem = window.frame.size.height <= 30 && window.displayUUID == nil
-            if originalSpaces.isEmpty && !isMenuBarItem {
+            let isOffScreen = isWindowGeometricallyOffScreen(window.frame)
+            if originalSpaces.isEmpty && !isMenuBarItem && !isOffScreen {
                 jlog("warn.spaces", msg: "both geometric and macOS space detection failed", data: [
                     "wid": window.id,
                     "app": window.appName ?? "unknown",
@@ -926,8 +910,6 @@ class StateManager: StateEventHandler {
     }
 
     private func refreshWindows() {
-        jlog("dbg.refreshWindows_START", msg: "entering refreshWindows")
-
         // Use public CGWindowListCopyWindowInfo API instead of private SkyLight API
         // This is safer and won't crash, though it provides slightly different data
         // Use .optionAll to get windows from all spaces, not just the active space
@@ -936,9 +918,7 @@ class StateManager: StateEventHandler {
             jlog("warn.win", msg: "failed to get window list")
             return
         }
-        jlog("dbg.refreshWindows_count", data: ["windowCount": windowList.count])
-
-        var windows: [String: WindowState] = [:]
+var windows: [String: WindowState] = [:]
 
         // Process each window from CGWindowList
         for windowInfo in windowList {
@@ -1323,14 +1303,22 @@ class StateManager: StateEventHandler {
 
             self.state.metadata.update()
 
-            // EventRouter handles logging
+            JSONLogger.shared.log("win.created", data: [
+                "wid": windowID,
+                "app": window.appName ?? "unknown",
+                "title": window.title ?? "",
+                "role": window.role ?? "nil",
+                "subrole": window.subrole ?? "nil",
+                "display": window.displayUUID ?? "nil"
+            ])
         }
     }
 
     private func handleWindowDestroyed(_ windowID: UInt32) {
         executeOnQueue {
-            // Get PID before removing window
-            let pid = self.state.windows[String(windowID)]?.pid
+            // Get window info before removing
+            let window = self.state.windows[String(windowID)]
+            let pid = window?.pid
 
             // Clear focus if destroyed window was focused
             if self.state.metadata.focusedWindowID == windowID {
@@ -1356,7 +1344,11 @@ class StateManager: StateEventHandler {
 
             self.state.metadata.update()
 
-            // EventRouter handles logging and BorderEvents notification
+            JSONLogger.shared.log("win.destroyed", data: [
+                "wid": windowID,
+                "app": window?.appName ?? "unknown",
+                "wasFocused": self.state.metadata.focusedWindowID == nil && pid != nil
+            ])
         }
     }
 
@@ -1398,10 +1390,20 @@ class StateManager: StateEventHandler {
         executeOnQueue {
             let stateSpan = await CurrentSpan.current?.startChild("state", data: ["wid": Int(windowID)])
 
+            let prevFocused = self.state.metadata.focusedWindowID
+            let window = self.state.windows[String(windowID)]
+
             // Apply focus using shared helper
             await self.applyWindowFocus(windowID)
 
-            // EventRouter handles logging
+            JSONLogger.shared.log("win.focus", data: [
+                "wid": windowID,
+                "app": window?.appName ?? "unknown",
+                "title": window?.title ?? "",
+                "prev": prevFocused ?? 0,
+                "display": self.state.metadata.activeDisplayUUID ?? "nil",
+                "sid": self.state.metadata.activeSpaceID ?? 0
+            ])
 
             if let stateSpan = stateSpan {
                 await stateSpan.end()
@@ -1411,21 +1413,29 @@ class StateManager: StateEventHandler {
 
     private func handleWindowMinimized(_ windowID: UInt32) {
         executeOnQueue {
+            let window = self.state.windows[String(windowID)]
             await self.updateWindow(windowID, logEvent: nil) {
                 $0.isMinimized = true
                 $0.isHidden = true
             }
-            // EventRouter handles logging
+            JSONLogger.shared.log("win.minimized", data: [
+                "wid": windowID,
+                "app": window?.appName ?? "unknown"
+            ])
         }
     }
 
     private func handleWindowDeminimized(_ windowID: UInt32) {
         executeOnQueue {
+            let window = self.state.windows[String(windowID)]
             await self.updateWindow(windowID, logEvent: nil) {
                 $0.isMinimized = false
                 $0.isHidden = false
             }
-            // EventRouter handles logging
+            JSONLogger.shared.log("win.deminimized", data: [
+                "wid": windowID,
+                "app": window?.appName ?? "unknown"
+            ])
         }
     }
 
@@ -1433,6 +1443,77 @@ class StateManager: StateEventHandler {
         // Use sync version to prevent race conditions from rapid title updates
         executeOnQueueSync {
             self.updateWindowSync(windowID) { $0.title = title }
+        }
+    }
+
+    private func handleWindowSpaceAssignmentChanged(_ windowID: UInt32, spaces: [UInt64]) {
+        executeOnQueue {
+            let windowKey = String(windowID)
+            guard var window = self.state.windows[windowKey] else { return }
+
+            let oldSpaces = window.spaces
+            window.spaces = spaces
+            window.lastUpdated = Date()
+            self.state.windows[windowKey] = window
+
+            JSONLogger.shared.log("win.spaces", data: [
+                "wid": windowID,
+                "old": oldSpaces,
+                "new": spaces,
+                "app": window.appName ?? "unknown"
+            ])
+        }
+    }
+
+    private func handleSpaceCreated(_ spaceID: UInt64, displayUUID: String) {
+        executeOnQueue {
+            JSONLogger.shared.log("spc.created", data: [
+                "sid": spaceID,
+                "display": displayUUID
+            ])
+            self.refreshSpaces()
+            self.state.metadata.update()
+        }
+    }
+
+    private func handleSpaceDestroyed(_ spaceID: UInt64) {
+        executeOnQueue {
+            JSONLogger.shared.log("spc.destroyed", data: ["sid": spaceID])
+
+            // Remove from state
+            self.state.spaces.removeValue(forKey: String(spaceID))
+
+            // Clear activeSpaceID if it was the destroyed space
+            if self.state.metadata.activeSpaceID == spaceID {
+                self.updateActiveDisplayFromSpaces()
+            }
+
+            self.state.metadata.update()
+        }
+    }
+
+    private func handleDisplayConnected(_ displayUUID: String) {
+        executeOnQueue {
+            JSONLogger.shared.log("dsp.connected", data: ["uuid": displayUUID])
+            self.refreshDisplays()
+            self.refreshSpaces()
+            self.state.metadata.update()
+        }
+    }
+
+    private func handleDisplayDisconnected(_ displayUUID: String) {
+        executeOnQueue {
+            JSONLogger.shared.log("dsp.disconnected", data: ["uuid": displayUUID])
+
+            // Clear activeDisplayUUID if it was the disconnected display
+            if self.state.metadata.activeDisplayUUID == displayUUID {
+                self.state.metadata.activeDisplayUUID = nil
+                self.updateActiveDisplayFromSpaces()
+            }
+
+            self.refreshDisplays()
+            self.refreshSpaces()
+            self.state.metadata.update()
         }
     }
 
@@ -1462,7 +1543,11 @@ class StateManager: StateEventHandler {
                     newSpaceID = display.currentSpaceID
                     foundChangedDisplay = true
 
-                    // EventRouter handles logging
+                    JSONLogger.shared.log("spc.changed", data: [
+                        "oldSid": oldSpaceID,
+                        "newSid": display.currentSpaceID,
+                        "display": display.uuid
+                    ])
                     break
                 }
             }
@@ -1527,22 +1612,13 @@ class StateManager: StateEventHandler {
         let spaceKey = String(spaceID)
         guard let space = state.spaces[spaceKey],
               let windowID = space.lastFocusedWindowID else {
-            Task {
-                JSONLogger.shared.log("dbg.focus", msg: "no last focused window", data: ["sid": spaceID])
-            }
-            return
+return
         }
 
         // Check if window still exists in our state
         guard let window = state.windows[String(windowID)],
               !window.isHidden && !window.isMinimized else {
-            Task {
-                JSONLogger.shared.log("dbg.focus", msg: "window unavailable", data: [
-                    "sid": spaceID,
-                    "wid": windowID
-                ])
-            }
-            return
+return
         }
 
         Task {
@@ -1616,8 +1692,7 @@ class StateManager: StateEventHandler {
             if let focusedID = self.state.metadata.focusedWindowID,
                let focusedWindow = self.state.windows[String(focusedID)],
                focusedWindow.pid == pid {
-                JSONLogger.shared.log("dbg.focus", msg: "clearing focus (app terminated)", data: ["pid": pid])
-                self.state.metadata.focusedWindowID = nil
+self.state.metadata.focusedWindowID = nil
             }
 
             // Remove application state
@@ -1666,8 +1741,7 @@ class StateManager: StateEventHandler {
 
         guard result == .success,
               let windowElement = focusedWindow else {
-            JSONLogger.shared.log("dbg.ax", msg: "could not get focused window", data: ["pid": pid])
-            return
+return
         }
 
         // Get CGWindowID from AX element
@@ -1675,8 +1749,7 @@ class StateManager: StateEventHandler {
         let windowResult = _AXUIElementGetWindow(windowElement as! AXUIElement, &windowID)
 
         guard windowResult == .success, windowID != 0 else {
-            JSONLogger.shared.log("dbg.ax", msg: "could not get window ID", data: ["pid": pid])
-            return
+return
         }
 
         JSONLogger.shared.log("win.focus.app", data: ["wid": windowID, "pid": pid])

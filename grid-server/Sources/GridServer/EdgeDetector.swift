@@ -50,14 +50,12 @@ struct EdgeDetector {
     private func detectCellBoundary(point: CGPoint, state: WindowManagerState) -> EdgeHit? {
         // Get the active space
         guard let activeSpaceID = state.metadata.activeSpaceID else {
-            Task { JSONLogger.shared.log("dbg.edge.no_active_space", data: [:]) }
             return nil
         }
 
         // Get windows on this space to build cell boundaries
         let spaceKey = String(activeSpaceID)
         guard let space = state.spaces[spaceKey] else {
-            Task { JSONLogger.shared.log("dbg.edge.space_not_found", data: ["space": spaceKey]) }
             return nil
         }
 

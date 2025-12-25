@@ -147,8 +147,6 @@ class ResizeOverlay {
 
         self.window = window
         self.textField = textField
-
-        Task { JSONLogger.shared.log("dbg.resize.overlay.created", data: [:]) }
     }
 
     private func positionWindow() {
