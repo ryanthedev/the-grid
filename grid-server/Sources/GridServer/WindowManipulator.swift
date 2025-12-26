@@ -26,8 +26,8 @@ struct ManipulationContext {
     }
 
     /// Create context from window state lookup
-    static func from(windowID: UInt32) -> ManipulationContext? {
-        let state = StateManager.shared.getState()
+    static func from(windowID: UInt32) async -> ManipulationContext? {
+        let state = await StateManager.shared.getState()
         guard let windowState = state.windows[String(windowID)] else {
             return nil
         }
@@ -134,7 +134,7 @@ class WindowManipulator {
     // MARK: - Context-Based Frame Manipulation
 
     /// Move window to position using context - updates state immediately on success
-    func moveWindow(context: ManipulationContext, to point: CGPoint) -> Bool {
+    func moveWindow(context: ManipulationContext, to point: CGPoint) async -> Bool {
         guard let element = getAXElement(pid: context.pid, windowID: context.windowID) else {
             return false
         }
@@ -142,13 +142,13 @@ class WindowManipulator {
         if result {
             let currentSize = context.frame?.size ?? CGSize(width: 100, height: 100)
             let newFrame = CGRect(origin: point, size: currentSize)
-            context.stateManager.setWindowFrame(context.windowID, frame: newFrame)
+            await context.stateManager.setWindowFrame(context.windowID, frame: newFrame)
         }
         return result
     }
 
     /// Resize window using context - updates state immediately on success
-    func resizeWindow(context: ManipulationContext, to size: CGSize) -> Bool {
+    func resizeWindow(context: ManipulationContext, to size: CGSize) async -> Bool {
         guard let element = getAXElement(pid: context.pid, windowID: context.windowID) else {
             return false
         }
@@ -156,37 +156,37 @@ class WindowManipulator {
         if result {
             let currentOrigin = context.frame?.origin ?? CGPoint.zero
             let newFrame = CGRect(origin: currentOrigin, size: size)
-            context.stateManager.setWindowFrame(context.windowID, frame: newFrame)
+            await context.stateManager.setWindowFrame(context.windowID, frame: newFrame)
         }
         return result
     }
 
     /// Set window frame using context - updates state immediately on success
-    func setWindowFrame(context: ManipulationContext, frame: CGRect) -> Bool {
+    func setWindowFrame(context: ManipulationContext, frame: CGRect) async -> Bool {
         guard let element = getAXElement(pid: context.pid, windowID: context.windowID) else {
             return false
         }
         let result = setWindowFrame(element: element, frame: frame)
         if result {
-            context.stateManager.setWindowFrame(context.windowID, frame: frame)
+            await context.stateManager.setWindowFrame(context.windowID, frame: frame)
         }
         return result
     }
 
     /// Minimize window using context - updates state immediately on success
-    func minimizeWindow(context: ManipulationContext) -> Bool {
+    func minimizeWindow(context: ManipulationContext) async -> Bool {
         let result = mssClient.minimizeWindow(context.windowID)
         if result {
-            context.stateManager.setWindowMinimized(context.windowID, minimized: true)
+            await context.stateManager.setWindowMinimized(context.windowID, minimized: true)
         }
         return result
     }
 
     /// Unminimize window using context - updates state immediately on success
-    func unminimizeWindow(context: ManipulationContext) -> Bool {
+    func unminimizeWindow(context: ManipulationContext) async -> Bool {
         let result = mssClient.unminimizeWindow(context.windowID)
         if result {
-            context.stateManager.setWindowMinimized(context.windowID, minimized: false)
+            await context.stateManager.setWindowMinimized(context.windowID, minimized: false)
         }
         return result
     }
@@ -450,10 +450,10 @@ return true
     }
 
     /// Focus a window using context - updates state immediately on success
-    func focusWindow(context: ManipulationContext) -> Bool {
+    func focusWindow(context: ManipulationContext) async -> Bool {
         let result = focusWindow(pid: context.pid, windowID: context.windowID)
         if result {
-            context.stateManager.setFocusedWindow(context.windowID)
+            await context.stateManager.setFocusedWindow(context.windowID)
         }
         return result
     }
@@ -461,9 +461,10 @@ return true
     // MARK: - Display Manipulation
 
     /// Move window to a specific display (and optionally position it)
-    func moveWindowToDisplay(windowID: UInt32, displayUUID: String, position: CGPoint?, stateManager: StateManager) -> Bool {
+    func moveWindowToDisplay(windowID: UInt32, displayUUID: String, position: CGPoint?, stateManager: StateManager) async -> Bool {
         // Find a space on the target display
-        guard let targetSpace = stateManager.getState().spaces.values.first(where: { $0.displayUUID == displayUUID }) else {
+        let state = await stateManager.getState()
+        guard let targetSpace = state.spaces.values.first(where: { $0.displayUUID == displayUUID }) else {
             Task { JSONLogger.shared.log("err.display", data: ["reason": "no_space", "uuid": displayUUID]) }
             return false
         }
@@ -478,7 +479,7 @@ return true
         // If a position was specified, set it
         if let position = position {
             // Get the window from state to find its PID
-            guard let windowState = stateManager.getState().windows[String(windowID)],
+            guard let windowState = state.windows[String(windowID)],
                   let element = getAXElement(pid: windowState.pid, windowID: windowID) else {
                 Task { JSONLogger.shared.log("err.ax", data: ["op": "get_element", "wid": windowID]) }
                 return false
@@ -492,7 +493,7 @@ return true
         }
 
         // Re-query space assignment after successful move
-        stateManager.updateWindowSpacesPublic(windowID)
+        await stateManager.updateWindowSpacesPublic(windowID)
 
         return true
     }

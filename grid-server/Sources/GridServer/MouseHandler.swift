@@ -55,6 +55,17 @@ class MouseHandler {
     /// Edge detector for hit testing
     private let edgeDetector: EdgeDetector
 
+    /// Cached state for synchronous access in CGEvent callbacks
+    ///
+    /// CGEvent tap callbacks are synchronous and cannot use async/await.
+    /// This cache provides window state for edge hit detection. Call refreshState()
+    /// before enabling the event tap to populate.
+    ///
+    /// Limitation: This cache becomes stale as windows are created/moved/destroyed.
+    /// Edge detection may use outdated coordinates until the cache is refreshed.
+    /// For resize mode (which is typically short-lived), this staleness is acceptable.
+    private var cachedState: WindowManagerState?
+
     /// Callback for resize events
     var onResize: ((ResizeType, String, ResizeEdge, CGFloat) -> Void)?
 
@@ -69,6 +80,11 @@ class MouseHandler {
     init() {
         self.edgeDetector = EdgeDetector(threshold: 10.0)
         Task { JSONLogger.shared.log("mouse.init", data: [:]) }
+    }
+
+    /// Refresh cached state from StateManager (call before enabling event tap)
+    func refreshState() async {
+        cachedState = await StateManager.shared.getState()
     }
 
     deinit {
@@ -195,8 +211,10 @@ class MouseHandler {
 
         Task { JSONLogger.shared.log("mouse.down", data: ["x": point.x, "y": point.y]) }
 
-        // Get current state and check for edge hit
-        let state = StateManager.shared.getState()
+        // Use cached state for edge hit detection (can't use async in event callback)
+        guard let state = cachedState else {
+            return Unmanaged.passRetained(event)
+        }
 
         if let hit = edgeDetector.detectEdge(point: point, state: state) {
             // Start drag operation
