@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"sort"
 
 	"github.com/ryanthedev/grid-cli/internal/client"
 	"github.com/ryanthedev/grid-cli/internal/config"
@@ -65,6 +66,7 @@ func CycleFocus(
 	}
 
 	// Cycle to next/prev window
+	prevIdx := idx
 	if forward {
 		idx = (idx + 1) % len(cell.Windows)
 	} else {
@@ -72,6 +74,16 @@ func CycleFocus(
 	}
 
 	windowID := cell.Windows[idx]
+
+	jsonlog.Log("focus.cycle", jsonlog.WithData(map[string]any{
+		"cell_id":      cellID,
+		"forward":      forward,
+		"prev_idx":     prevIdx,
+		"new_idx":      idx,
+		"window_count": len(cell.Windows),
+		"windows":      cell.Windows,
+		"selected_wid": windowID,
+	}))
 
 	// Focus via server
 	if err := FocusWindow(ctx, c, windowID); err != nil {
@@ -88,9 +100,23 @@ func CycleFocus(
 }
 
 // findFirstCellWithWindows returns the first cell ID that has windows.
+// Uses deterministic ordering (sorted by cell ID) to ensure consistent behavior.
 func findFirstCellWithWindows(spaceState *state.SpaceState) string {
-	for cellID, cell := range spaceState.Cells {
+	// Sort cell IDs for deterministic ordering
+	cellIDs := make([]string, 0, len(spaceState.Cells))
+	for cellID := range spaceState.Cells {
+		cellIDs = append(cellIDs, cellID)
+	}
+	sort.Strings(cellIDs)
+
+	for _, cellID := range cellIDs {
+		cell := spaceState.Cells[cellID]
 		if len(cell.Windows) > 0 {
+			jsonlog.Log("focus.auto_select", jsonlog.WithData(map[string]any{
+				"reason":   "no_focused_cell",
+				"selected": cellID,
+				"count":    len(spaceState.Cells),
+			}))
 			return cellID
 		}
 	}
@@ -154,6 +180,18 @@ func MoveFocus(
 	// Find adjacent cells on current display
 	adjacentMap := layout.GetAdjacentCells(currentCell, calculated.CellBounds)
 	candidates := adjacentMap[direction]
+
+	jsonlog.Log("focus.candidates", jsonlog.WithData(map[string]any{
+		"dir":        direction.String(),
+		"from":       currentCell,
+		"candidates": candidates,
+		"all_dirs": map[string][]string{
+			"left":  adjacentMap[types.DirLeft],
+			"right": adjacentMap[types.DirRight],
+			"up":    adjacentMap[types.DirUp],
+			"down":  adjacentMap[types.DirDown],
+		},
+	}))
 
 	if len(candidates) == 0 {
 		// No adjacent cell on current display - try cross-monitor if extend is enabled
@@ -404,6 +442,10 @@ func focusCellByID(ctx context.Context, c *client.Client, rs *state.RuntimeState
 	mutableSpace := rs.GetSpace(spaceID)
 	cell := mutableSpace.Cells[cellID]
 	if cell == nil || len(cell.Windows) == 0 {
+		jsonlog.Log("focus.cell.empty", jsonlog.WithData(map[string]any{
+			"cell_id":  cellID,
+			"space_id": spaceID,
+		}))
 		return 0, fmt.Errorf("no windows in cell %s", cellID)
 	}
 
@@ -414,6 +456,16 @@ func focusCellByID(ctx context.Context, c *client.Client, rs *state.RuntimeState
 	}
 
 	windowID := cell.Windows[idx]
+
+	jsonlog.Log("focus.cell", jsonlog.WithData(map[string]any{
+		"cell_id":        cellID,
+		"window_count":   len(cell.Windows),
+		"windows":        cell.Windows,
+		"last_focused":   cell.LastFocusedIdx,
+		"selected_idx":   idx,
+		"selected_wid":   windowID,
+	}))
+
 	if err := FocusWindow(ctx, c, windowID); err != nil {
 		return 0, err
 	}
@@ -527,6 +579,7 @@ func filterByEdge(cells []string, cellBounds map[string]types.Rect, better func(
 }
 
 // PickClosestCell picks the cell closest to the current cell's center.
+// Uses cell ID as tie-breaker for deterministic ordering when distances are equal.
 func PickClosestCell(currentCell string, candidates []string, cellBounds map[string]types.Rect) string {
 	if len(candidates) == 0 {
 		return ""
@@ -548,11 +601,19 @@ func PickClosestCell(currentCell string, candidates []string, cellBounds map[str
 		bounds := cellBounds[cellID]
 		center := bounds.Center()
 		dist := math.Sqrt(math.Pow(center.X-currentCenter.X, 2) + math.Pow(center.Y-currentCenter.Y, 2))
-		if dist < closestDist {
+		// Use cell ID as tie-breaker for deterministic ordering
+		if dist < closestDist || (dist == closestDist && cellID < closest) {
 			closestDist = dist
 			closest = cellID
 		}
 	}
+
+	jsonlog.Log("focus.pick_closest", jsonlog.WithData(map[string]any{
+		"from":       currentCell,
+		"candidates": candidates,
+		"selected":   closest,
+		"distance":   closestDist,
+	}))
 
 	return closest
 }
@@ -669,6 +730,7 @@ func MatchVisualPosition(sourceCell types.Rect, sourceDisplay, targetDisplay typ
 }
 
 // FindClosestCellToPoint finds the cell whose center is closest to the given point.
+// Uses cell ID as tie-breaker for deterministic ordering when distances are equal.
 // Returns empty string if cellBounds is empty.
 func FindClosestCellToPoint(point types.Point, cellBounds map[string]types.Rect) string {
 	if len(cellBounds) == 0 {
@@ -684,7 +746,8 @@ func FindClosestCellToPoint(point types.Point, cellBounds map[string]types.Rect)
 		dy := center.Y - point.Y
 		dist := math.Sqrt(dx*dx + dy*dy)
 
-		if dist < closestDist {
+		// Use cell ID as tie-breaker for deterministic ordering
+		if dist < closestDist || (dist == closestDist && cellID < closestCell) {
 			closestDist = dist
 			closestCell = cellID
 		}
