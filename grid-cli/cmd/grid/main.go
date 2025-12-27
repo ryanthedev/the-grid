@@ -2301,6 +2301,10 @@ var resizeAdjustCmd = &cobra.Command{
 		}
 
 		successColor.Printf("✓ Resized window (%s)\n", action)
+
+		// Sync borders after resize (bounds changed)
+		gridReconcile.SyncBorders(ctx, c, snap, runtimeState, cfg)
+
 		return nil
 	},
 }
@@ -2358,6 +2362,9 @@ var resizeResetCmd = &cobra.Command{
 			}
 			successColor.Println("✓ Reset focused cell window splits to equal")
 		}
+
+		// Sync borders after resize reset (bounds changed)
+		gridReconcile.SyncBorders(ctx, c, snap, runtimeState, cfg)
 
 		return nil
 	},
@@ -2482,6 +2489,10 @@ var cellSendCmd = &cobra.Command{
 		}
 
 		successColor.Printf("✓ Sent window %s\n", direction.String())
+
+		// Sync borders after cell send (assignments changed)
+		gridReconcile.SyncBorders(ctx, c, snap, runtimeState, cfg)
+
 		return nil
 	},
 }
@@ -2540,6 +2551,10 @@ Valid modes: vertical, horizontal, tabs`,
 		}
 
 		successColor.Printf("✓ Cell %q mode: %s\n", cellID, newMode)
+
+		// Sync borders after cell mode change (tabs render differently)
+		gridReconcile.SyncBorders(ctx, c, snap, runtimeState, cfg)
+
 		return nil
 	},
 }
