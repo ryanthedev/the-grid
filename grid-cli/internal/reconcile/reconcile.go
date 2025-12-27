@@ -21,7 +21,7 @@ func Sync(ctx context.Context, c *client.Client, snap *server.Snapshot, rs *stat
 	spaceState := rs.GetSpaceReadOnly(snap.SpaceID)
 	if spaceState == nil {
 		// Still try to sync borders even with no local state
-		syncBorders(ctx, c, snap, rs, cfg)
+		SyncBorders(ctx, c, snap, rs, cfg)
 		return nil
 	}
 
@@ -58,7 +58,7 @@ func Sync(ctx context.Context, c *client.Client, snap *server.Snapshot, rs *stat
 	}
 
 	// Sync borders to server (errors logged but don't fail reconcile)
-	syncBorders(ctx, c, snap, rs, cfg)
+	SyncBorders(ctx, c, snap, rs, cfg)
 
 	return nil
 }
@@ -166,10 +166,10 @@ func buildCellAssignments(spaceState *state.SpaceState) []client.CellAssignment 
 	return assignments
 }
 
-// syncBorders sends cell assignments and bounds to the server for border rendering.
-// This is called after reconcile to keep server border state in sync with CLI state.
-// Errors are logged but don't fail the reconcile - borders are a visual enhancement.
-func syncBorders(ctx context.Context, c *client.Client, snap *server.Snapshot, rs *state.RuntimeState, cfg *config.Config) {
+// SyncBorders sends cell assignments and bounds to the server for border rendering.
+// Call this after operations that change cell assignments or bounds.
+// Errors are logged but don't fail - borders are a visual enhancement.
+func SyncBorders(ctx context.Context, c *client.Client, snap *server.Snapshot, rs *state.RuntimeState, cfg *config.Config) {
 	// 1. Check if borders are configured
 	if cfg == nil || cfg.Borders == nil || !cfg.Borders.GetEnabled() {
 		return
