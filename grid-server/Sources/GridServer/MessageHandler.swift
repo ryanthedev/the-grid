@@ -127,57 +127,46 @@ class MessageHandler {
         }
 
         // Dump - returns complete window manager state
-        register(method: "dump") { [weak self] request, completion in
-            do {
-                // Get state from StateManager (Codable type preserves all type information)
-                var state = try StateManager.shared.getStateDictionary()
+        register(method: "dump") { request, completion in
+            Task {
+                do {
+                    // Get state from StateManager (Codable type preserves all type information)
+                    var state = try await StateManager.shared.getStateDictionary()
 
-                // Add server version info directly to state (avoids JSONSerialization type coercion)
-                state.serverVersion = GridServerVersion
-                state.serverCommit = GridServerCommit
+                    // Add server version info directly to state (avoids JSONSerialization type coercion)
+                    state.serverVersion = GridServerVersion
+                    state.serverCommit = GridServerCommit
 
-                let response = Response(
-                    id: request.id,
-                    result: AnyCodable(state)
-                )
-                completion(response)
-            } catch {
-                Task {
-                    JSONLogger.shared.log("err.state", data: ["op": "dump", "error": "\(error)"])
-                }
-                let response = Response(
-                    id: request.id,
-                    error: ErrorInfo(
-                        code: -32603,
-                        message: "Internal error: \(error.localizedDescription)"
+                    let response = Response(
+                        id: request.id,
+                        result: AnyCodable(state)
                     )
-                )
-                completion(response)
+                    completion(response)
+                } catch {
+                    JSONLogger.shared.log("err.state", data: ["op": "dump", "error": "\(error)"])
+                    let response = Response(
+                        id: request.id,
+                        error: ErrorInfo(
+                            code: -32603,
+                            message: "Internal error: \(error.localizedDescription)"
+                        )
+                    )
+                    completion(response)
+                }
             }
         }
 
         // UpdateWindow - manipulate window position, size, space, or display
-        register(method: "updateWindow") { [weak self] request, completion in
-            guard let self = self else {
-                completion(Response(id: request.id, error: ErrorInfo(code: -32603, message: "Handler not available")))
-                return
-            }
-
-            // Extract parameters
+        register(method: "updateWindow") { request, completion in
+            // Extract parameters synchronously
             guard let params = request.params,
                   let windowIdWrapper = params["windowId"],
                   let windowId = windowIdWrapper.value as? Int else {
-                let response = Response(
-                    id: request.id,
-                    error: ErrorInfo(code: -32602, message: "Invalid params: windowId is required")
-                )
-                completion(response)
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params: windowId is required")))
                 return
             }
 
             let windowID = UInt32(windowId)
-
-            // Optional parameters
             let x = (params["x"]?.value as? NSNumber)?.doubleValue
             let y = (params["y"]?.value as? NSNumber)?.doubleValue
             let width = (params["width"]?.value as? NSNumber)?.doubleValue
@@ -185,162 +174,124 @@ class MessageHandler {
             let spaceId = params["spaceId"]?.value as? String
             let displayUuid = params["displayUuid"]?.value as? String
 
-            // Create context from window state
-            guard var context = ManipulationContext.from(windowID: windowID) else {
-                let response = Response(
-                    id: request.id,
-                    error: ErrorInfo(code: -32001, message: "Window not found: \(windowID)")
-                )
-
-                // Log error event
-                Task {
+            Task {
+                // Create context from window state
+                guard var context = await ManipulationContext.from(windowID: windowID) else {
                     JSONLogger.shared.log("err.window", data: [
                         "op": "updateWindow",
                         "msg": "not_found",
                         "wid": windowID,
                         "id": request.id
                     ])
+                    completion(Response(id: request.id, error: ErrorInfo(code: -32001, message: "Window not found: \(windowID)")))
+                    return
                 }
 
-                completion(response)
-                return
-            }
+                // Create WindowManipulator
+                let state = await StateManager.shared.getState()
+                let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
 
-            // Create WindowManipulator
-            let state = StateManager.shared.getState()
-            let manipulator = WindowManipulator(
-                connectionID: state.metadata.connectionID
-            )
+                var updatesApplied: [String] = []
+                var errors: [String] = []
+                let requestID = UUID().uuidString
 
-            var updatesApplied: [String] = []
-            var errors: [String] = []
-
-            // Generate requestID for event correlation
-            let requestID = UUID().uuidString
-
-            // Handle display move first (if specified)
-            if let displayUuid = displayUuid {
-                let position = (x != nil && y != nil) ? CGPoint(x: x!, y: y!) : nil
-                if manipulator.moveWindowToDisplay(
-                    windowID: windowID,
-                    displayUUID: displayUuid,
-                    position: position,
-                    stateManager: StateManager.shared
-                ) {
-                    updatesApplied.append("display")
-                    if position != nil {
-                        updatesApplied.append("position")
+                // Handle display move first (if specified)
+                if let displayUuid = displayUuid {
+                    let position = (x != nil && y != nil) ? CGPoint(x: x!, y: y!) : nil
+                    if await manipulator.moveWindowToDisplay(
+                        windowID: windowID,
+                        displayUUID: displayUuid,
+                        position: position,
+                        stateManager: StateManager.shared
+                    ) {
+                        updatesApplied.append("display")
+                        if position != nil {
+                            updatesApplied.append("position")
+                        }
+                    } else {
+                        errors.append("Failed to move window to display")
                     }
-                } else {
-                    errors.append("Failed to move window to display")
                 }
-            }
-            // Handle space move (if no display specified)
-            else if let spaceIdStr = spaceId, let spaceID = UInt64(spaceIdStr) {
-                // Emit command event before executing
-                Task {
+                // Handle space move (if no display specified)
+                else if let spaceIdStr = spaceId, let spaceID = UInt64(spaceIdStr) {
                     await EventRouter.shared.route(
                         .commandMoveWindowToSpace(windowID: windowID, spaceID: spaceID, requestID: requestID),
                         from: .manual(reason: "cli")
                     )
+                    if manipulator.moveWindowToSpace(windowID: windowID, spaceID: spaceID) {
+                        updatesApplied.append("space")
+                    } else {
+                        errors.append("Failed to move window to space")
+                    }
                 }
 
-                if manipulator.moveWindowToSpace(windowID: windowID, spaceID: spaceID) {
-                    updatesApplied.append("space")
-                } else {
-                    errors.append("Failed to move window to space")
-                }
-            }
+                // Handle frame updates (if display wasn't moved, or if only size is being updated)
+                if displayUuid == nil || (width != nil || height != nil) {
+                    // Update position (if specified and display wasn't moved)
+                    if let x = x, let y = y, displayUuid == nil {
+                        let targetPoint = CGPoint(x: x, y: y)
+                        let currentSize = context.frame?.size ?? CGSize(width: 100, height: 100)
+                        let targetFrame = CGRect(origin: targetPoint, size: currentSize)
 
-            // Handle frame updates (if display wasn't moved, or if only size is being updated)
-            if displayUuid == nil || (width != nil || height != nil) {
-                // Update position (if specified and display wasn't moved)
-                if let x = x, let y = y, displayUuid == nil {
-                    let targetPoint = CGPoint(x: x, y: y)
-                    let currentSize = context.frame?.size ?? CGSize(width: 100, height: 100)
-                    let targetFrame = CGRect(origin: targetPoint, size: currentSize)
-
-                    // Emit command event before executing
-                    Task {
                         await EventRouter.shared.route(
                             .commandMoveWindow(windowID: windowID, frame: targetFrame, requestID: requestID),
                             from: .manual(reason: "cli")
                         )
+
+                        if await manipulator.moveWindow(context: context, to: targetPoint) {
+                            context.frame = targetFrame
+                            updatesApplied.append("position")
+                        } else {
+                            errors.append("Failed to set window position")
+                        }
                     }
 
-                    // Context-based move updates state automatically on success
-                    if manipulator.moveWindow(context: context, to: targetPoint) {
-                        // Update context frame for subsequent operations
-                        context.frame = targetFrame
-                        updatesApplied.append("position")
-                    } else {
-                        errors.append("Failed to set window position")
-                    }
-                }
+                    // Update size (if specified)
+                    if let width = width, let height = height {
+                        let targetSize = CGSize(width: width, height: height)
+                        let currentOrigin = context.frame?.origin ?? CGPoint.zero
+                        let targetFrame = CGRect(origin: currentOrigin, size: targetSize)
 
-                // Update size (if specified)
-                if let width = width, let height = height {
-                    let targetSize = CGSize(width: width, height: height)
-                    let currentOrigin = context.frame?.origin ?? CGPoint.zero
-                    let targetFrame = CGRect(origin: currentOrigin, size: targetSize)
-
-                    // Emit command event before executing
-                    Task {
                         await EventRouter.shared.route(
                             .commandResizeWindow(windowID: windowID, frame: targetFrame, requestID: requestID),
                             from: .manual(reason: "cli")
                         )
-                    }
 
-                    // Context-based resize updates state automatically on success
-                    if manipulator.resizeWindow(context: context, to: targetSize) {
-                        context.frame = targetFrame
-                        updatesApplied.append("size")
-                    } else {
-                        errors.append("Failed to set window size")
+                        if await manipulator.resizeWindow(context: context, to: targetSize) {
+                            context.frame = targetFrame
+                            updatesApplied.append("size")
+                        } else {
+                            errors.append("Failed to set window size")
+                        }
                     }
                 }
-            }
 
-            // Build response
-            if errors.isEmpty {
-                let response = Response(
-                    id: request.id,
-                    result: AnyCodable([
+                // Build response
+                if errors.isEmpty {
+                    completion(Response(id: request.id, result: AnyCodable([
                         "success": true,
                         "windowId": windowId,
                         "updatesApplied": updatesApplied
-                    ])
-                )
-                completion(response)
-            } else {
-                let response = Response(
-                    id: request.id,
-                    error: ErrorInfo(
-                        code: -32003,
-                        message: "Window update partially failed: \(errors.joined(separator: ", "))"
-                    )
-                )
-
-                // Log error event
-                Task {
+                    ])))
+                } else {
                     JSONLogger.shared.log("err.window", data: [
                         "op": "updateWindow",
                         "msg": errors.joined(separator: ", "),
                         "wid": windowID,
                         "id": request.id
                     ])
+                    completion(Response(id: request.id, error: ErrorInfo(
+                        code: -32003,
+                        message: "Window update partially failed: \(errors.joined(separator: ", "))"
+                    )))
                 }
-
-                completion(response)
             }
         }
 
         // MARK: - Window Opacity Methods (MSS)
 
         // Set window opacity
-        register(method: "window.setOpacity") { [weak self] request, completion in
-            guard let self = self else { return }
+        register(method: "window.setOpacity") { request, completion in
             guard let params = request.params else {
                 completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
                 return
@@ -353,19 +304,20 @@ class MessageHandler {
                 return
             }
 
-            let state = StateManager.shared.getState()
-            let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
+            Task {
+                let state = await StateManager.shared.getState()
+                let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
 
-            if manipulator.mssClient.setWindowOpacity(windowID: windowID, opacity: opacity) {
-                completion(Response(id: request.id, result: AnyCodable(["success": true, "windowId": windowId, "opacity": opacity])))
-            } else {
-                completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to set window opacity. MSS may not be available.")))
+                if manipulator.mssClient.setWindowOpacity(windowID: windowID, opacity: opacity) {
+                    completion(Response(id: request.id, result: AnyCodable(["success": true, "windowId": windowId, "opacity": opacity])))
+                } else {
+                    completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to set window opacity. MSS may not be available.")))
+                }
             }
         }
 
         // Fade window opacity
-        register(method: "window.fadeOpacity") { [weak self] request, completion in
-            guard let self = self else { return }
+        register(method: "window.fadeOpacity") { request, completion in
             guard let params = request.params else {
                 completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
                 return
@@ -379,19 +331,20 @@ class MessageHandler {
                 return
             }
 
-            let state = StateManager.shared.getState()
-            let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
+            Task {
+                let state = await StateManager.shared.getState()
+                let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
 
-            if manipulator.mssClient.fadeWindowOpacity(windowID: windowID, opacity: opacity, duration: duration) {
-                completion(Response(id: request.id, result: AnyCodable(["success": true, "windowId": windowId, "opacity": opacity, "duration": duration])))
-            } else {
-                completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to fade window opacity. MSS may not be available.")))
+                if manipulator.mssClient.fadeWindowOpacity(windowID: windowID, opacity: opacity, duration: duration) {
+                    completion(Response(id: request.id, result: AnyCodable(["success": true, "windowId": windowId, "opacity": opacity, "duration": duration])))
+                } else {
+                    completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to fade window opacity. MSS may not be available.")))
+                }
             }
         }
 
         // Get window opacity
-        register(method: "window.getOpacity") { [weak self] request, completion in
-            guard let self = self else { return }
+        register(method: "window.getOpacity") { request, completion in
             guard let params = request.params else {
                 completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
                 return
@@ -403,21 +356,22 @@ class MessageHandler {
                 return
             }
 
-            let state = StateManager.shared.getState()
-            let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
+            Task {
+                let state = await StateManager.shared.getState()
+                let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
 
-            if let opacity = manipulator.mssClient.getWindowOpacity(windowID) {
-                completion(Response(id: request.id, result: AnyCodable(["windowId": windowId, "opacity": opacity])))
-            } else {
-                completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to get window opacity")))
+                if let opacity = manipulator.mssClient.getWindowOpacity(windowID) {
+                    completion(Response(id: request.id, result: AnyCodable(["windowId": windowId, "opacity": opacity])))
+                } else {
+                    completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to get window opacity")))
+                }
             }
         }
 
         // MARK: - Window Layer Methods (MSS)
 
         // Set window layer
-        register(method: "window.setLayer") { [weak self] request, completion in
-            guard let self = self else { return }
+        register(method: "window.setLayer") { request, completion in
             guard let params = request.params else {
                 completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
                 return
@@ -435,19 +389,20 @@ class MessageHandler {
                 return
             }
 
-            let state = StateManager.shared.getState()
-            let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
+            Task {
+                let state = await StateManager.shared.getState()
+                let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
 
-            if manipulator.mssClient.setWindowLayer(windowID: windowID, layer: layer) {
-                completion(Response(id: request.id, result: AnyCodable(["success": true, "windowId": windowId, "layer": layer.description])))
-            } else {
-                completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to set window layer. MSS may not be available.")))
+                if manipulator.mssClient.setWindowLayer(windowID: windowID, layer: layer) {
+                    completion(Response(id: request.id, result: AnyCodable(["success": true, "windowId": windowId, "layer": layer.description])))
+                } else {
+                    completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to set window layer. MSS may not be available.")))
+                }
             }
         }
 
         // Get window layer
-        register(method: "window.getLayer") { [weak self] request, completion in
-            guard let self = self else { return }
+        register(method: "window.getLayer") { request, completion in
             guard let params = request.params else {
                 completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
                 return
@@ -459,22 +414,23 @@ class MessageHandler {
                 return
             }
 
-            let state = StateManager.shared.getState()
-            let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
+            Task {
+                let state = await StateManager.shared.getState()
+                let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
 
-            if let layer = manipulator.mssClient.getWindowLayer(windowID) {
-                let layerStr = layer.description
-                completion(Response(id: request.id, result: AnyCodable(["windowId": windowId, "layer": layerStr])))
-            } else {
-                completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to get window layer")))
+                if let layer = manipulator.mssClient.getWindowLayer(windowID) {
+                    let layerStr = layer.description
+                    completion(Response(id: request.id, result: AnyCodable(["windowId": windowId, "layer": layerStr])))
+                } else {
+                    completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to get window layer")))
+                }
             }
         }
 
         // MARK: - Window Sticky/Minimize Methods (MSS)
 
         // Set window sticky
-        register(method: "window.setSticky") { [weak self] request, completion in
-            guard let self = self else { return }
+        register(method: "window.setSticky") { request, completion in
             guard let params = request.params else {
                 completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
                 return
@@ -487,19 +443,20 @@ class MessageHandler {
                 return
             }
 
-            let state = StateManager.shared.getState()
-            let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
+            Task {
+                let state = await StateManager.shared.getState()
+                let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
 
-            if manipulator.mssClient.setWindowSticky(windowID: windowID, sticky: sticky) {
-                completion(Response(id: request.id, result: AnyCodable(["success": true, "windowId": windowId, "sticky": sticky])))
-            } else {
-                completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to set window sticky. MSS may not be available.")))
+                if manipulator.mssClient.setWindowSticky(windowID: windowID, sticky: sticky) {
+                    completion(Response(id: request.id, result: AnyCodable(["success": true, "windowId": windowId, "sticky": sticky])))
+                } else {
+                    completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to set window sticky. MSS may not be available.")))
+                }
             }
         }
 
         // Get window sticky status
-        register(method: "window.isSticky") { [weak self] request, completion in
-            guard let self = self else { return }
+        register(method: "window.isSticky") { request, completion in
             guard let params = request.params else {
                 completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
                 return
@@ -511,19 +468,20 @@ class MessageHandler {
                 return
             }
 
-            let state = StateManager.shared.getState()
-            let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
+            Task {
+                let state = await StateManager.shared.getState()
+                let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
 
-            if let sticky = manipulator.mssClient.isWindowSticky(windowID) {
-                completion(Response(id: request.id, result: AnyCodable(["windowId": windowId, "sticky": sticky])))
-            } else {
-                completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to get window sticky status")))
+                if let sticky = manipulator.mssClient.isWindowSticky(windowID) {
+                    completion(Response(id: request.id, result: AnyCodable(["windowId": windowId, "sticky": sticky])))
+                } else {
+                    completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to get window sticky status")))
+                }
             }
         }
 
         // Minimize window
-        register(method: "window.minimize") { [weak self] request, completion in
-            guard let self = self else { return }
+        register(method: "window.minimize") { request, completion in
             guard let params = request.params else {
                 completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
                 return
@@ -535,35 +493,34 @@ class MessageHandler {
                 return
             }
 
-            // Create context from window state
-            guard let context = ManipulationContext.from(windowID: windowID) else {
-                completion(Response(id: request.id, error: ErrorInfo(code: -32001, message: "Window not found: \(windowID)")))
-                return
-            }
-
-            // Emit command event before executing
-            let requestID = UUID().uuidString
             Task {
+                // Create context from window state
+                guard let context = await ManipulationContext.from(windowID: windowID) else {
+                    completion(Response(id: request.id, error: ErrorInfo(code: -32001, message: "Window not found: \(windowID)")))
+                    return
+                }
+
+                // Emit command event before executing
+                let requestID = UUID().uuidString
                 await EventRouter.shared.route(
                     .commandMinimizeWindow(windowID: windowID, requestID: requestID),
                     from: .manual(reason: "cli")
                 )
-            }
 
-            let state = StateManager.shared.getState()
-            let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
+                let state = await StateManager.shared.getState()
+                let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
 
-            // Context-based minimize updates state automatically on success
-            if manipulator.minimizeWindow(context: context) {
-                completion(Response(id: request.id, result: AnyCodable(["success": true, "windowId": windowId])))
-            } else {
-                completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to minimize window. MSS may not be available.")))
+                // Context-based minimize updates state automatically on success
+                if await manipulator.minimizeWindow(context: context) {
+                    completion(Response(id: request.id, result: AnyCodable(["success": true, "windowId": windowId])))
+                } else {
+                    completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to minimize window. MSS may not be available.")))
+                }
             }
         }
 
         // Unminimize window
-        register(method: "window.unminimize") { [weak self] request, completion in
-            guard let self = self else { return }
+        register(method: "window.unminimize") { request, completion in
             guard let params = request.params else {
                 completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
                 return
@@ -575,26 +532,27 @@ class MessageHandler {
                 return
             }
 
-            // Create context from window state
-            guard let context = ManipulationContext.from(windowID: windowID) else {
-                completion(Response(id: request.id, error: ErrorInfo(code: -32001, message: "Window not found: \(windowID)")))
-                return
-            }
+            Task {
+                // Create context from window state
+                guard let context = await ManipulationContext.from(windowID: windowID) else {
+                    completion(Response(id: request.id, error: ErrorInfo(code: -32001, message: "Window not found: \(windowID)")))
+                    return
+                }
 
-            let state = StateManager.shared.getState()
-            let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
+                let state = await StateManager.shared.getState()
+                let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
 
-            // Context-based unminimize updates state automatically on success
-            if manipulator.unminimizeWindow(context: context) {
-                completion(Response(id: request.id, result: AnyCodable(["success": true, "windowId": windowId])))
-            } else {
-                completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to unminimize window. MSS may not be available.")))
+                // Context-based unminimize updates state automatically on success
+                if await manipulator.unminimizeWindow(context: context) {
+                    completion(Response(id: request.id, result: AnyCodable(["success": true, "windowId": windowId])))
+                } else {
+                    completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to unminimize window. MSS may not be available.")))
+                }
             }
         }
 
         // Check if window is minimized
-        register(method: "window.isMinimized") { [weak self] request, completion in
-            guard let self = self else { return }
+        register(method: "window.isMinimized") { request, completion in
             guard let params = request.params else {
                 completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
                 return
@@ -606,21 +564,22 @@ class MessageHandler {
                 return
             }
 
-            let state = StateManager.shared.getState()
-            let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
+            Task {
+                let state = await StateManager.shared.getState()
+                let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
 
-            if let minimized = manipulator.mssClient.isWindowMinimized(windowID) {
-                completion(Response(id: request.id, result: AnyCodable(["windowId": windowId, "minimized": minimized])))
-            } else {
-                completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to get window minimized status")))
+                if let minimized = manipulator.mssClient.isWindowMinimized(windowID) {
+                    completion(Response(id: request.id, result: AnyCodable(["windowId": windowId, "minimized": minimized])))
+                } else {
+                    completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to get window minimized status")))
+                }
             }
         }
 
         // MARK: - Window Focus Methods
 
         // Focus window (raise and activate)
-        register(method: "window.focus") { [weak self] request, completion in
-            guard let self = self else { return }
+        register(method: "window.focus") { request, completion in
             guard let params = request.params else {
                 completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
                 return
@@ -640,54 +599,48 @@ class MessageHandler {
                 return
             }
 
-            // Create context from window state
-            guard let context = ManipulationContext.from(windowID: wid) else {
-                Task {
+            Task {
+                // Create context from window state
+                guard let context = await ManipulationContext.from(windowID: wid) else {
                     JSONLogger.shared.log("err.window", data: [
                         "op": "window.focus",
                         "msg": "not_found",
                         "wid": wid,
                         "id": request.id
                     ])
+                    completion(Response(id: request.id, error: ErrorInfo(code: -32001, message: "Window not found: \(wid)")))
+                    return
                 }
-                completion(Response(id: request.id, error: ErrorInfo(code: -32001, message: "Window not found: \(wid)")))
-                return
-            }
 
-            // Emit command event before executing
-            let requestID = UUID().uuidString
-            Task {
+                // Emit command event before executing
+                let requestID = UUID().uuidString
                 await EventRouter.shared.route(
                     .commandFocusWindow(windowID: wid, requestID: requestID),
                     from: .manual(reason: "cli")
                 )
-            }
 
-            let state = StateManager.shared.getState()
-            let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
+                let state = await StateManager.shared.getState()
+                let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
 
-            // Context-based focus updates state automatically on success
-            if manipulator.focusWindow(context: context) {
-                completion(Response(id: request.id, result: AnyCodable(["success": true, "windowId": wid])))
-            } else {
-                // Log error event
-                Task {
+                // Context-based focus updates state automatically on success
+                if await manipulator.focusWindow(context: context) {
+                    completion(Response(id: request.id, result: AnyCodable(["success": true, "windowId": wid])))
+                } else {
                     JSONLogger.shared.log("err.window", data: [
                         "op": "window.focus",
                         "msg": "failed",
                         "wid": wid,
                         "id": request.id
                     ])
+                    completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to focus window")))
                 }
-                completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to focus window")))
             }
         }
 
         // MARK: - Space Management Methods (MSS)
 
         // Create space
-        register(method: "space.create") { [weak self] request, completion in
-            guard let self = self else { return }
+        register(method: "space.create") { request, completion in
             guard let params = request.params else {
                 completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
                 return
@@ -699,19 +652,20 @@ class MessageHandler {
                 return
             }
 
-            let state = StateManager.shared.getState()
-            let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
+            Task {
+                let state = await StateManager.shared.getState()
+                let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
 
-            if manipulator.mssClient.createSpace(on: displaySpaceID) {
-                completion(Response(id: request.id, result: AnyCodable(["success": true, "displaySpaceId": spaceIdStr])))
-            } else {
-                completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to create space. MSS may not be available.")))
+                if manipulator.mssClient.createSpace(on: displaySpaceID) {
+                    completion(Response(id: request.id, result: AnyCodable(["success": true, "displaySpaceId": spaceIdStr])))
+                } else {
+                    completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to create space. MSS may not be available.")))
+                }
             }
         }
 
         // Destroy space
-        register(method: "space.destroy") { [weak self] request, completion in
-            guard let self = self else { return }
+        register(method: "space.destroy") { request, completion in
             guard let params = request.params else {
                 completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
                 return
@@ -723,19 +677,20 @@ class MessageHandler {
                 return
             }
 
-            let state = StateManager.shared.getState()
-            let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
+            Task {
+                let state = await StateManager.shared.getState()
+                let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
 
-            if manipulator.mssClient.destroySpace(spaceID) {
-                completion(Response(id: request.id, result: AnyCodable(["success": true, "spaceId": spaceIdStr])))
-            } else {
-                completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to destroy space. MSS may not be available.")))
+                if manipulator.mssClient.destroySpace(spaceID) {
+                    completion(Response(id: request.id, result: AnyCodable(["success": true, "spaceId": spaceIdStr])))
+                } else {
+                    completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to destroy space. MSS may not be available.")))
+                }
             }
         }
 
         // Focus space
-        register(method: "space.focus") { [weak self] request, completion in
-            guard let self = self else { return }
+        register(method: "space.focus") { request, completion in
             guard let params = request.params else {
                 completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
                 return
@@ -747,21 +702,22 @@ class MessageHandler {
                 return
             }
 
-            let state = StateManager.shared.getState()
-            let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
+            Task {
+                let state = await StateManager.shared.getState()
+                let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
 
-            if manipulator.mssClient.focusSpace(spaceID) {
-                completion(Response(id: request.id, result: AnyCodable(["success": true, "spaceId": spaceIdStr])))
-            } else {
-                completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to focus space. MSS may not be available.")))
+                if manipulator.mssClient.focusSpace(spaceID) {
+                    completion(Response(id: request.id, result: AnyCodable(["success": true, "spaceId": spaceIdStr])))
+                } else {
+                    completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to focus space. MSS may not be available.")))
+                }
             }
         }
 
         // MARK: - Mouse Methods
 
         // Warp mouse cursor to center of a window
-        register(method: "mouse.warp") { [weak self] request, completion in
-            guard let self = self else { return }
+        register(method: "mouse.warp") { request, completion in
             guard let params = request.params else {
                 completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
                 return
@@ -781,30 +737,30 @@ class MessageHandler {
                 return
             }
 
-            // Get window state to find frame
-            let state = StateManager.shared.getState()
-            guard let windowState = state.windows[String(wid)] else {
-                completion(Response(id: request.id, error: ErrorInfo(code: -32001, message: "Window not found: \(wid)")))
-                return
-            }
-
-            // Calculate center of window
-            let frame = windowState.frame
-            let center = CGPoint(x: frame.midX, y: frame.midY)
-
-            // Warp the mouse cursor to the center
-            let result = CGWarpMouseCursorPosition(center)
-            if result == .success {
-completion(Response(id: request.id, result: AnyCodable([
-                    "success": true,
-                    "windowId": wid,
-                    "position": ["x": center.x, "y": center.y]
-                ])))
-            } else {
-                Task {
-                    JSONLogger.shared.log("err.mouse", data: ["op": "warp", "result": result.rawValue])
+            Task {
+                // Get window state to find frame
+                let state = await StateManager.shared.getState()
+                guard let windowState = state.windows[String(wid)] else {
+                    completion(Response(id: request.id, error: ErrorInfo(code: -32001, message: "Window not found: \(wid)")))
+                    return
                 }
-                completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to warp mouse cursor")))
+
+                // Calculate center of window
+                let frame = windowState.frame
+                let center = CGPoint(x: frame.midX, y: frame.midY)
+
+                // Warp the mouse cursor to the center
+                let result = CGWarpMouseCursorPosition(center)
+                if result == .success {
+                    completion(Response(id: request.id, result: AnyCodable([
+                        "success": true,
+                        "windowId": wid,
+                        "position": ["x": center.x, "y": center.y]
+                    ])))
+                } else {
+                    JSONLogger.shared.log("err.mouse", data: ["op": "warp", "result": result.rawValue])
+                    completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to warp mouse cursor")))
+                }
             }
         }
 

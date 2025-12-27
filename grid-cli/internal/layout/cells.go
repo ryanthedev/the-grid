@@ -78,6 +78,7 @@ func GetCellAtPoint(cellBounds map[string]types.Rect, point types.Point) string 
 
 // GetAdjacentCells returns cells adjacent to the given cell in each direction.
 // Adjacency is determined by visual overlap in the perpendicular axis.
+// Results are sorted by cell ID for deterministic ordering.
 func GetAdjacentCells(
 	cellID string,
 	cellBounds map[string]types.Rect,
@@ -120,6 +121,11 @@ func GetAdjacentCells(
 		if dy > 0 && overlapsHorizontally(current, bounds) {
 			result[types.DirDown] = append(result[types.DirDown], id)
 		}
+	}
+
+	// Sort each direction's candidates for deterministic ordering
+	for dir := range result {
+		sort.Strings(result[dir])
 	}
 
 	return result

@@ -95,18 +95,20 @@ struct GridServerCommand: ParsableCommand {
             _ = NSApplication.shared
             NSApplication.shared.setActivationPolicy(.prohibited)
 
-            // Initialize StateManager
-            StateManager.shared.start()
-            jlog("state.init")
-
             // Initialize border system
             let connectionID = SLSMainConnectionID()
             let simpleBorderManager = SimpleBorderManager(connectionID: connectionID)
             let borderEvents = BorderEvents()
             borderEvents.setup(simpleBorderManager: simpleBorderManager)
-            StateManager.shared.borderEvents = borderEvents
             messageHandler.simpleBorderManager = simpleBorderManager
             jlog("bdr.init")
+
+            // Initialize StateManager (async) and connect border events
+            Task {
+                await StateManager.shared.start()
+                await StateManager.shared.setBorderEvents(borderEvents)
+                jlog("state.init")
+            }
 
             // Initialize BFD hotkey daemon
             let bfdManager = BFDManager()
