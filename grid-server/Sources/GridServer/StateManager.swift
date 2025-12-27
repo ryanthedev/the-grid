@@ -616,7 +616,8 @@ actor StateManager: StateEventHandler {
 
     /// Public method to set focused window (for MessageHandler focus commands)
     /// This updates state immediately rather than waiting for AX callback which may not fire
-    func setFocusedWindow(_ windowID: UInt32) async {
+    /// Note: Does NOT emit focusChanged event - observers will handle that when they fire
+    func setFocusedWindow(_ windowID: UInt32) {
         state.metadata.focusedWindowID = windowID
 
         // Update active display
@@ -645,15 +646,6 @@ actor StateManager: StateEventHandler {
         }
 
         state.metadata.update()
-
-        // Emit focusChanged event
-        let focusState = FocusState(
-            windowID: windowID,
-            spaceID: state.metadata.activeSpaceID ?? 0,
-            displayUUID: state.metadata.activeDisplayUUID ?? "",
-            trigger: .manual
-        )
-        await EventRouter.shared.route(.focusChanged(focusState), from: .manual(reason: "cli-focus"))
     }
 
     /// Public method to update window frame (for MessageHandler move/resize commands)
