@@ -1778,7 +1778,7 @@ func moveWindowDirectionHelper(direction gridTypes.Direction, wrapAround bool, e
 		return fmt.Errorf("failed to fetch server state: %w", err)
 	}
 
-	// 2. Reconcile local state with server (includes border sync)
+	// 2. Reconcile local state with server
 	if err := gridReconcile.Sync(ctx, c, snap, runtimeState, cfg); err != nil {
 		return fmt.Errorf("failed to reconcile state: %w", err)
 	}
@@ -1801,6 +1801,9 @@ func moveWindowDirectionHelper(direction gridTypes.Direction, wrapAround bool, e
 		successColor.Printf("Moved window %d: %s -> %s\n",
 			result.WindowID, result.SourceCell, result.TargetCell)
 	}
+
+	// Sync borders after window move (cell assignments changed)
+	gridReconcile.SyncBorders(ctx, c, snap, runtimeState, cfg)
 
 	// Optionally warp mouse to moved window
 	if mouse && result.WindowID != 0 {
@@ -1835,7 +1838,7 @@ func swapWindowDirectionHelper(direction gridTypes.Direction, mouse bool) error 
 		return fmt.Errorf("failed to fetch server state: %w", err)
 	}
 
-	// 2. Reconcile local state with server (includes border sync)
+	// 2. Reconcile local state with server
 	if err := gridReconcile.Sync(ctx, c, snap, runtimeState, cfg); err != nil {
 		return fmt.Errorf("failed to reconcile state: %w", err)
 	}
@@ -1846,6 +1849,9 @@ func swapWindowDirectionHelper(direction gridTypes.Direction, mouse bool) error 
 	}
 
 	successColor.Printf("Swapped window %s\n", direction.String())
+
+	// Sync borders after window swap (cell assignments changed)
+	gridReconcile.SyncBorders(ctx, c, snap, runtimeState, cfg)
 
 	// Optionally warp mouse to focused window
 	if mouse && snap.FocusedWindowID != 0 {
