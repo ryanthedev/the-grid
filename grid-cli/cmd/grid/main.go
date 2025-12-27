@@ -2432,6 +2432,10 @@ Examples:
 		}
 
 		successColor.Printf("✓ Resized cell (%s)\n", direction)
+
+		// Sync borders after cell resize (bounds changed)
+		gridReconcile.SyncBorders(ctx, c, snap, runtimeState, cfg)
+
 		return nil
 	},
 }
