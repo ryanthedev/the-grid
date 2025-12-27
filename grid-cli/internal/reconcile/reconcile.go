@@ -17,11 +17,12 @@ import (
 // and syncs the focused cell to match the OS-focused window.
 // This should be called before any command execution to ensure
 // local state is accurate.
+//
+// NOTE: This does NOT sync borders. Call SyncBorders explicitly after
+// operations that change cell assignments or bounds.
 func Sync(ctx context.Context, c *client.Client, snap *server.Snapshot, rs *state.RuntimeState, cfg *config.Config) error {
 	spaceState := rs.GetSpaceReadOnly(snap.SpaceID)
 	if spaceState == nil {
-		// Still try to sync borders even with no local state
-		SyncBorders(ctx, c, snap, rs, cfg)
 		return nil
 	}
 
@@ -56,9 +57,6 @@ func Sync(ctx context.Context, c *client.Client, snap *server.Snapshot, rs *stat
 			return err
 		}
 	}
-
-	// Sync borders to server (errors logged but don't fail reconcile)
-	SyncBorders(ctx, c, snap, rs, cfg)
 
 	return nil
 }
