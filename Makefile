@@ -14,7 +14,8 @@ COMMIT  := $(shell git rev-parse HEAD 2>/dev/null || echo "unknown")
 #   6. Click Create
 # This gives stable signatures so TCC remembers accessibility permissions.
 CODESIGN_IDENTITY ?= thegrid-dev
-ENTITLEMENTS := grid-server/thegrid.entitlements
+# Use absolute path so it works from worktrees too
+ENTITLEMENTS := /Users/r/repos/theGrid/grid-server/thegrid.entitlements
 
 # Default target - build everything
 all: build
@@ -197,8 +198,8 @@ help:
 # Debug app bundle (for development - required for Accessibility permissions)
 APP_BUNDLE := grid-server/.build/debug/GridServer.app
 
-# Where launchd expects the server (main repo location)
-DEPLOY_LOCATION := /Users/r/repos/theGrid/grid-server/.build/debug/GridServer.app
+# Where launchd expects the server (central location for all worktrees)
+DEPLOY_LOCATION := $(HOME)/.local/state/thegrid/GridServer.app
 
 # Build debug app bundle
 dev: server cli
@@ -210,17 +211,17 @@ dev: server cli
 	@echo "Signing with identity '$(CODESIGN_IDENTITY)'..."
 	@codesign -fs "$(CODESIGN_IDENTITY)" --entitlements $(ENTITLEMENTS) $(APP_BUNDLE)/Contents/MacOS/grid-server
 	@codesign -fs "$(CODESIGN_IDENTITY)" --entitlements $(ENTITLEMENTS) $(APP_BUNDLE)
-	@echo "✓ Debug GridServer.app created at $(APP_BUNDLE)"
+	@echo "✓ Debug GridServer.app built"
 	@echo "Deploying to $(DEPLOY_LOCATION)..."
-	@mkdir -p $(dir $(DEPLOY_LOCATION))
+	@mkdir -p $$(dirname $(DEPLOY_LOCATION))
 	@rm -rf $(DEPLOY_LOCATION)
 	@cp -R $(APP_BUNDLE) $(DEPLOY_LOCATION)
 	@echo "✓ Server deployed to $(DEPLOY_LOCATION)"
 
 # Build and restart thegrid service
 run: dev install-dev
-	@echo "Clearing state directory..."
-	@rm -rf ~/.local/state/thegrid/*
+	@echo "Clearing state and logs..."
+	@rm -f ~/.local/state/thegrid/*.json
 	@echo "Restarting thegrid-dev service..."
 	@services restart thegrid-dev
 	@echo "✓ Service restarted"
