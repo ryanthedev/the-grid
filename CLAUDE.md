@@ -43,12 +43,12 @@ jsonlog.Log("err.focus", jsonlog.WithMsg("window not found"), jsonlog.WithData(m
 
 Server (Swift):
 ```swift
-// Sync context (convenience wrapper)
+// Convenience wrapper (uses TaskLocal trace context)
 jlog("srv.init")
 
-// Async context (most server code)
-await JSONLogger.shared.log("win.focus", data: ["wid": 123])
-await JSONLogger.shared.log("err.bounds", msg: "failed to get bounds", data: ["wid": 456])
+// With explicit data
+JSONLogger.shared.log("win.focus", data: ["wid": 123])
+JSONLogger.shared.log("err.bounds", msg: "failed to get bounds", data: ["wid": 456])
 ```
 
 ### Span-Based Logging
@@ -71,9 +71,9 @@ span.EndWithError("window not found")
 
 Server (Swift):
 ```swift
-let span = await JSONLogger.shared.startSpan("srv", tid: tid, parentSid: parentSid, data: ["method": method])
+let span = JSONLogger.shared.startSpan("srv", tid: tid, parentSid: parentSid, data: ["method": method])
 
-// Child span
+// Child span (async)
 let child = await span.startChild("border", data: ["wid": 123])
 await child.end()
 
@@ -90,10 +90,11 @@ Output format:
 
 Both CLI and server follow the XDG Base Directory Specification:
 
-- **Log files**: `$XDG_STATE_HOME/thegrid/` (default: `~/.local/state/thegrid/`)
+- **State**: `$XDG_STATE_HOME/thegrid/` (default: `~/.local/state/thegrid/`)
   - `thegrid-cli.json` - CLI logs (JSONL)
   - `thegrid-server.json` - Server logs (JSONL)
   - `state.json` - Runtime state
+  - `GridServer.app/` - Server app bundle (deployed by `make dev`)
 - **Config**: `$XDG_CONFIG_HOME/thegrid/` (default: `~/.config/thegrid/`)
   - `config.yaml` - CLI configuration
   - `config.local.yaml` - Local overrides
@@ -191,17 +192,17 @@ Supports `.local.yaml` overrides like CLI config.
 # Server process start time (confirms restart)
 ps -o lstart= -p $(pgrep -f "grid-server" | head -1) 2>/dev/null
 
-# Server binary modification time (confirms rebuild)
-stat -f "%Sm" grid-server/.build/debug/grid-server
+# Deployed server binary modification time
+stat -f "%Sm" ~/.local/state/thegrid/GridServer.app/Contents/MacOS/grid-server
 
 # Quick ping to verify server is responding
-./grid-cli/bin/thegrid ping
+thegrid ping
 ```
 
 ### Check recent server events
 ```bash
 # Last 5 server startup events
-grep -E '"ev":"srv\.start"|"ev":"state\.init"' ~/.local/state/thegrid/thegrid-server.json | tail -5
+grep '"ev":"srv.start"' ~/.local/state/thegrid/thegrid-server.json | tail -5
 ```
 
 ### Full rebuild and restart
