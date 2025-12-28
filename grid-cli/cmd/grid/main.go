@@ -1680,6 +1680,9 @@ func focusDirectionHelper(direction gridTypes.Direction, wrapAround bool, extend
 		warnColor.Printf("⚠ Focus unchanged - runtime state may be stale. Try: thegrid layout reapply\n")
 	}
 
+	// Sync borders after focus change (cell assignments may have changed)
+	gridReconcile.SyncBorders(ctx, c, snap, runtimeState, cfg)
+
 	// 4. Optionally warp mouse to focused window
 	if mouse && windowID != 0 {
 		if err := gridMouse.WarpToWindow(ctx, c, windowID); err != nil {
@@ -2045,6 +2048,9 @@ var focusNextCmd = &cobra.Command{
 			jsonlog.Log("focus.next.done", jsonlog.WithData(map[string]any{"wid": windowID}))
 			successColor.Printf("✓ Focused window: %d\n", windowID)
 
+			// Sync borders after focus change
+			gridReconcile.SyncBorders(ctx, c, snap, runtimeState, cfg)
+
 			// 4. Optionally warp mouse to focused window
 			if mouse {
 				if err := gridMouse.WarpToWindow(ctx, c, windowID); err != nil {
@@ -2107,6 +2113,9 @@ var focusPrevCmd = &cobra.Command{
 			jsonlog.Log("focus.prev.done", jsonlog.WithData(map[string]any{"wid": windowID}))
 			successColor.Printf("✓ Focused window: %d\n", windowID)
 
+			// Sync borders after focus change
+			gridReconcile.SyncBorders(ctx, c, snap, runtimeState, cfg)
+
 			// 4. Optionally warp mouse to focused window
 			if mouse {
 				if err := gridMouse.WarpToWindow(ctx, c, windowID); err != nil {
@@ -2159,6 +2168,9 @@ var focusCellCmd = &cobra.Command{
 		}
 
 		successColor.Printf("✓ Focused cell %s (window: %d)\n", cellID, windowID)
+
+		// Sync borders after focus change
+		gridReconcile.SyncBorders(ctx, c, snap, runtimeState, cfg)
 
 		// 4. Optionally warp mouse to focused window
 		if mouse && windowID != 0 {
@@ -2552,6 +2564,11 @@ Valid modes: vertical, horizontal, tabs`,
 		cellID, newMode, err := gridCell.SetMode(ctx, c, snap, cfg, runtimeState, targetMode)
 		if err != nil {
 			return fmt.Errorf("failed to set mode: %w", err)
+		}
+
+		// Save state to persist the mode change
+		if err := runtimeState.Save(); err != nil {
+			return fmt.Errorf("failed to save state: %w", err)
 		}
 
 		successColor.Printf("✓ Cell %q mode: %s\n", cellID, newMode)
