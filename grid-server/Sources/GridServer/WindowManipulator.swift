@@ -439,7 +439,7 @@ return true
     /// Focus a window by raising it and activating its app
     /// Uses yabai-style event synthesis for reliable same-app window focus
     func focusWindow(pid: pid_t, windowID: UInt32) -> Bool {
-        Task { JSONLogger.shared.log("win.focus", data: ["pid": pid, "wid": windowID]) }
+        Task { JSONLogger.shared.log("ax.focus", data: ["pid": pid, "wid": windowID]) }
 
         let result = focusWindowWithRaise(pid: pid, windowID: windowID)
 
