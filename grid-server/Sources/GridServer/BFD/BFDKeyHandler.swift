@@ -85,7 +85,7 @@ class BFDKeyHandler {
             },
             userInfo: Unmanaged.passUnretained(self).toOpaque()
         ) else {
-            Task { JSONLogger.shared.log("bfd.err.tap", data: [:]) }
+            JSONLogger.shared.log("bfd.err.tap", data: [:])
             return false
         }
 
@@ -102,7 +102,7 @@ class BFDKeyHandler {
         CGEvent.tapEnable(tap: tap, enable: true)
 
         isEnabled = true
-        Task { JSONLogger.shared.log("bfd.start", data: [:]) }
+        JSONLogger.shared.log("bfd.start", data: [:])
 
         return true
     }
@@ -122,7 +122,7 @@ class BFDKeyHandler {
         eventTap = nil
         isEnabled = false
 
-        Task { JSONLogger.shared.log("bfd.stop", data: [:]) }
+        JSONLogger.shared.log("bfd.stop", data: [:])
     }
 
     // MARK: - Private

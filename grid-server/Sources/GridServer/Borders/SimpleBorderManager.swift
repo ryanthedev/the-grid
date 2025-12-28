@@ -651,7 +651,7 @@ class SimpleBorderManager {
 
         // Verify this is actually an AXUIElement by comparing CFTypeIDs
         guard CFGetTypeID(ref as CFTypeRef) == AXUIElementGetTypeID() else {
-            Task { JSONLogger.shared.log("err.ax.cast", data: ["pid": pid]) }
+            JSONLogger.shared.log("err.ax.cast", data: ["pid": pid])
             return nil
         }
         let axElement = ref as! AXUIElement

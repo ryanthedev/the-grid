@@ -54,7 +54,7 @@ class ResizeOverlay {
         // Show the window
         window?.orderFront(nil)
 
-        Task { JSONLogger.shared.log("resize.overlay.show", data: ["mode": mode]) }
+        JSONLogger.shared.log("resize.overlay.show", data: ["mode": mode])
     }
 
     /// Hide the overlay
@@ -67,7 +67,7 @@ class ResizeOverlay {
         }
 
         window?.orderOut(nil)
-        Task { JSONLogger.shared.log("resize.overlay.hide", data: [:]) }
+        JSONLogger.shared.log("resize.overlay.hide", data: [:])
     }
 
     /// Update the overlay position (e.g., to follow cursor)
