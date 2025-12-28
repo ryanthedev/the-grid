@@ -160,12 +160,22 @@ class SimpleBorderManager {
             }
         }
 
-        Task {
-            JSONLogger.shared.log("bdr.assignments", data: [
-                "display": displayUUID,
-                "count": assignments.count
-            ])
+        // Convert UInt32 keys to String for JSON serialization
+        let assignmentsStr = Dictionary(uniqueKeysWithValues: assignments.map { (String($0.key), $0.value) })
+        let prevStr: [String: String]? = oldAssignments.map {
+            Dictionary(uniqueKeysWithValues: $0.map { (String($0.key), $0.value) })
         }
+
+        // Collect unique cells for context
+        let cells = Array(Set(assignments.values)).sorted()
+
+        JSONLogger.shared.log("bdr.assignments", data: [
+            "display": displayUUID,
+            "cells": cells,
+            "count": assignments.count,
+            "assignments": assignmentsStr,
+            "prev": prevStr as Any
+        ])
     }
 
     /// Find which display has an assignment for a window
