@@ -768,7 +768,7 @@ class MessageHandler {
 
         // Configure border settings (from CLI config)
         register(method: "borders.configure") { [weak self] request, completion in
-            guard let self = self else {
+            guard self != nil else {
                 completion(Response(id: request.id, error: ErrorInfo(code: -32603, message: "Internal error")))
                 return
             }
