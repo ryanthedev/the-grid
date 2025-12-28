@@ -14,8 +14,8 @@ COMMIT  := $(shell git rev-parse HEAD 2>/dev/null || echo "unknown")
 #   6. Click Create
 # This gives stable signatures so TCC remembers accessibility permissions.
 CODESIGN_IDENTITY ?= thegrid-dev
-# Use absolute path so it works from worktrees too
-ENTITLEMENTS := /Users/r/repos/theGrid/grid-server/thegrid.entitlements
+# Use $(CURDIR) so it works from worktrees and CI
+ENTITLEMENTS := $(CURDIR)/grid-server/thegrid.entitlements
 
 # Default target - build everything
 all: build
