@@ -20,10 +20,33 @@ func LoadConfig(path string) (*Config, error) {
 	return loadWithXDG()
 }
 
-// loadWithXDG implements full XDG config resolution with layered merging
+// loadWithXDG implements full XDG config resolution with layered merging and caching
 func loadWithXDG() (*Config, error) {
-	files := xdg.FindConfigFiles("thegrid", "config.yaml")
+	// Check cache freshness (single call to avoid TOCTOU)
+	fresh, reason := isCacheFresh()
+	if fresh {
+		merged, err := loadCache()
+		if err == nil {
+			jsonlog.Log("cfg.cache.hit")
+			cfg, err := mapToConfig(merged)
+			if err != nil {
+				return nil, fmt.Errorf("failed to unmarshal cached config: %w", err)
+			}
+			if err := cfg.Validate(); err != nil {
+				// Cache is corrupt or schema changed - rebuild
+				jsonlog.Log("cfg.cache.miss", jsonlog.WithData(map[string]any{"reason": "validation_failed"}))
+			} else {
+				return cfg, nil
+			}
+		} else {
+			jsonlog.Log("cfg.cache.miss", jsonlog.WithData(map[string]any{"reason": "read_error"}))
+		}
+	} else {
+		jsonlog.Log("cfg.cache.miss", jsonlog.WithData(map[string]any{"reason": reason}))
+	}
 
+	// Cache miss - do full resolution
+	files := xdg.FindConfigFiles("thegrid", "config.yaml")
 	merged := builtinDefaults()
 
 	jsonlog.Log("cfg.resolve", jsonlog.WithData(map[string]any{
@@ -57,6 +80,12 @@ func loadWithXDG() (*Config, error) {
 			return nil, fmt.Errorf("no config found; searched:\n  - %s/thegrid/config.yaml\n  - %s",
 				xdg.ConfigHome(), formatSearchedDirs(xdg.ConfigDirs()))
 		}
+	}
+
+	// Write cache using getSourceFiles() for consistency (ignore errors - best-effort)
+	if err := writeCache(merged, getSourceFiles()); err != nil {
+		jsonlog.Log("cfg.cache.error", jsonlog.WithMsg("failed to write cache"),
+			jsonlog.WithData(map[string]any{"err": err.Error()}))
 	}
 
 	cfg, err := mapToConfig(merged)
@@ -112,6 +141,98 @@ func builtinDefaults() map[string]any {
 			"baseSpacing": 8,
 		},
 	}
+}
+
+// cachePath returns the path to the merged config cache file
+func cachePath() string {
+	return filepath.Join(xdg.CacheHome(), "thegrid", "config.merged.yaml")
+}
+
+// getSourceFiles returns all config source files that contribute to merged config
+func getSourceFiles() []string {
+	files := xdg.FindConfigFiles("thegrid", "config.yaml")
+	localPath := filepath.Join(xdg.ConfigHome(), "thegrid", "config.local.yaml")
+	if info, err := os.Stat(localPath); err == nil && !info.IsDir() {
+		files = append(files, localPath)
+	}
+	return files
+}
+
+// isCacheFresh checks if cache exists and is newer than all source files.
+// Returns (isFresh, reason) where reason explains why cache is stale.
+func isCacheFresh() (bool, string) {
+	cache := cachePath()
+	cacheInfo, err := os.Stat(cache)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, "missing"
+		}
+		return false, "stat_error"
+	}
+	cacheMtime := cacheInfo.ModTime()
+
+	sources := getSourceFiles()
+	if len(sources) == 0 {
+		return false, "no_sources"
+	}
+
+	for _, src := range sources {
+		srcInfo, err := os.Stat(src)
+		if err != nil {
+			return false, "source_deleted"
+		}
+		if srcInfo.ModTime().After(cacheMtime) {
+			return false, "stale"
+		}
+	}
+
+	return true, ""
+}
+
+// writeCache writes the merged config map to cache file atomically
+func writeCache(merged map[string]any, sources []string) error {
+	cache := cachePath()
+	dir := filepath.Dir(cache)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("failed to create cache dir: %w", err)
+	}
+
+	data, err := yaml.Marshal(merged)
+	if err != nil {
+		return fmt.Errorf("failed to marshal config: %w", err)
+	}
+
+	// Atomic write: write to temp file, then rename
+	tmp := cache + ".tmp"
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
+		return fmt.Errorf("failed to write cache: %w", err)
+	}
+	if err := os.Rename(tmp, cache); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("failed to rename cache: %w", err)
+	}
+
+	jsonlog.Log("cfg.cache.write", jsonlog.WithData(map[string]any{
+		"path":    cache,
+		"sources": sources,
+	}))
+
+	return nil
+}
+
+// loadCache reads the cached merged config
+func loadCache() (map[string]any, error) {
+	data, err := os.ReadFile(cachePath())
+	if err != nil {
+		return nil, err
+	}
+
+	var m map[string]any
+	if err := yaml.Unmarshal(data, &m); err != nil {
+		return nil, err
+	}
+
+	return m, nil
 }
 
 // deepMerge merges override into base recursively.

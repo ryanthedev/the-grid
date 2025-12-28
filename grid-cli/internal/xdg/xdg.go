@@ -53,6 +53,15 @@ func StateHome() string {
 	return filepath.Join(home, ".local", "state")
 }
 
+// CacheHome returns $XDG_CACHE_HOME or ~/.cache
+func CacheHome() string {
+	if env := os.Getenv("XDG_CACHE_HOME"); env != "" {
+		return env
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".cache")
+}
+
 // FindConfigFiles returns existing config files in merge order (system -> user).
 // Logs warnings for permission errors, silently skips missing files.
 func FindConfigFiles(appName, filename string) []string {

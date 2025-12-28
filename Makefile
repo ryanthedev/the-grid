@@ -220,8 +220,9 @@ dev: server cli
 
 # Build and restart thegrid service
 run: dev install-dev
-	@echo "Clearing state and logs..."
+	@echo "Clearing state, logs, and config cache..."
 	@rm -f ~/.local/state/thegrid/*.json
+	@rm -f ~/.cache/thegrid/config.merged.yaml
 	@echo "Restarting thegrid-dev service..."
 	@services restart thegrid-dev
 	@echo "✓ Service restarted"
