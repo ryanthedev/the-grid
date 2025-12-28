@@ -1217,6 +1217,11 @@ var windows: [String: WindowState] = [:]
     // MARK: - AX Event Handlers (Per-Window Events)
 
     private func handleWindowCreated(_ windowID: UInt32, pid: pid_t) async {
+        // Skip windows from untracked/blacklisted apps
+        guard shouldTrackWindow(pid: pid) else {
+            return
+        }
+
         // Create new window state
         var window = WindowState(id: windowID)
         window.pid = pid
