@@ -904,6 +904,11 @@ var windows: [String: WindowState] = [:]
 
             // Get window owner PID
             if let pid = windowInfo[kCGWindowOwnerPID as String] as? pid_t {
+                // Skip windows from untracked/blacklisted apps
+                guard shouldTrackWindow(pid: pid) else {
+                    continue
+                }
+
                 windowState.pid = pid
 
                 // Get app name from PID
