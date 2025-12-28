@@ -1683,6 +1683,9 @@ func focusDirectionHelper(direction gridTypes.Direction, wrapAround bool, extend
 	// Sync borders after focus change (cell assignments may have changed)
 	gridReconcile.SyncBorders(ctx, c, snap, runtimeState, cfg)
 
+	// Sync border focus so borders update even if assignments didn't change
+	gridReconcile.SyncBorderFocus(ctx, c, snap.GetCurrentDisplayUUID(), windowID, cfg)
+
 	// 4. Optionally warp mouse to focused window
 	if mouse && windowID != 0 {
 		if err := gridMouse.WarpToWindow(ctx, c, windowID); err != nil {
@@ -2051,6 +2054,9 @@ var focusNextCmd = &cobra.Command{
 			// Sync borders after focus change
 			gridReconcile.SyncBorders(ctx, c, snap, runtimeState, cfg)
 
+			// Sync border focus so borders update even if assignments didn't change
+			gridReconcile.SyncBorderFocus(ctx, c, snap.GetCurrentDisplayUUID(), windowID, cfg)
+
 			// 4. Optionally warp mouse to focused window
 			if mouse {
 				if err := gridMouse.WarpToWindow(ctx, c, windowID); err != nil {
@@ -2116,6 +2122,9 @@ var focusPrevCmd = &cobra.Command{
 			// Sync borders after focus change
 			gridReconcile.SyncBorders(ctx, c, snap, runtimeState, cfg)
 
+			// Sync border focus so borders update even if assignments didn't change
+			gridReconcile.SyncBorderFocus(ctx, c, snap.GetCurrentDisplayUUID(), windowID, cfg)
+
 			// 4. Optionally warp mouse to focused window
 			if mouse {
 				if err := gridMouse.WarpToWindow(ctx, c, windowID); err != nil {
@@ -2171,6 +2180,9 @@ var focusCellCmd = &cobra.Command{
 
 		// Sync borders after focus change
 		gridReconcile.SyncBorders(ctx, c, snap, runtimeState, cfg)
+
+		// Sync border focus so borders update even if assignments didn't change
+		gridReconcile.SyncBorderFocus(ctx, c, snap.GetCurrentDisplayUUID(), windowID, cfg)
 
 		// 4. Optionally warp mouse to focused window
 		if mouse && windowID != 0 {

@@ -821,6 +821,39 @@ completion(Response(id: request.id, result: AnyCodable(["success": true])))
 completion(Response(id: request.id, result: AnyCodable(["success": true])))
         }
 
+        // Update border focus (called after window.focus)
+        register(method: "borders.updateFocus") { [weak self] request, completion in
+            guard let self = self else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32603, message: "Internal error")))
+                return
+            }
+            guard let params = request.params else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
+                return
+            }
+
+            // Accept windowId as either string or int
+            var windowID: UInt32?
+            if let windowIdInt = params["windowId"]?.value as? Int {
+                windowID = UInt32(windowIdInt)
+            } else if let windowIdStr = params["windowId"]?.value as? String,
+                      let parsed = UInt32(windowIdStr) {
+                windowID = parsed
+            }
+
+            guard let wid = windowID else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Missing or invalid windowId")))
+                return
+            }
+
+            // Update border focus (server looks up display from cached assignments)
+            if let borderManager = self.simpleBorderManager {
+                borderManager.updateFocus(newFocusedWindow: wid)
+            }
+
+            completion(Response(id: request.id, result: AnyCodable(["success": true, "windowId": wid])))
+        }
+
         // Query border info for a window
         register(method: "borders.query") { [weak self] request, completion in
             guard let self = self else {

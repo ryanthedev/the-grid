@@ -185,3 +185,24 @@ func (c *Client) SendCellAssignments(ctx context.Context, displayUUID string, as
 
 	return nil
 }
+
+// SendBorderFocus notifies the server which window is now focused.
+// This triggers border updates for focus changes within a cell.
+// displayUUID is required so server knows which display's borders to update.
+func (c *Client) SendBorderFocus(ctx context.Context, displayUUID string, windowID uint32) error {
+	params := map[string]interface{}{
+		"windowId":    windowID,
+		"displayUUID": displayUUID,
+	}
+
+	resp, err := c.request(ctx, "borders.updateFocus", params)
+	if err != nil {
+		return fmt.Errorf("failed to send border focus: %w", err)
+	}
+
+	if resp.IsError() {
+		return fmt.Errorf("server error: %s", resp.GetError())
+	}
+
+	return nil
+}

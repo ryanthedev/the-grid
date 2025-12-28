@@ -351,6 +351,9 @@ func moveFocusCrossDisplay(
 	// Sync borders for target display so border appears immediately
 	reconcile.SyncBordersForDisplay(ctx, c, *adjacentDisplay, targetSpaceIDStr, rs, cfg)
 
+	// Sync border focus for target display
+	reconcile.SyncBorderFocus(ctx, c, adjacentDisplay.UUID, windowID, cfg)
+
 	return windowID, nil
 }
 

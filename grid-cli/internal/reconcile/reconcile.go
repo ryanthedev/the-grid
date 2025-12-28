@@ -273,3 +273,23 @@ func SyncBordersForDisplay(ctx context.Context, c *client.Client, displayInfo se
 		return
 	}
 }
+
+// SyncBorderFocus notifies the server of the currently focused window.
+// Call this after FocusWindow() to ensure borders update correctly.
+// displayUUID should be the display where the window is located.
+// Errors are logged but don't fail - borders are a visual enhancement.
+func SyncBorderFocus(ctx context.Context, c *client.Client, displayUUID string, windowID uint32, cfg *config.Config) {
+	if cfg == nil || cfg.Borders == nil || !cfg.Borders.GetEnabled() {
+		return
+	}
+
+	if displayUUID == "" {
+		jsonlog.Log("warn.sync_border_focus", jsonlog.WithMsg("missing display UUID"))
+		return
+	}
+
+	if err := c.SendBorderFocus(ctx, displayUUID, windowID); err != nil {
+		jsonlog.Log("warn.sync_border_focus", jsonlog.WithData(map[string]any{"err": err.Error()}))
+		return
+	}
+}
