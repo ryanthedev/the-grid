@@ -317,6 +317,120 @@ func ReapplyLayout(
 	return ApplyLayout(ctx, c, snap, cfg, rs, spaceState.CurrentLayoutID, opts)
 }
 
+// ApplyCellLayout applies layout changes to a single cell's windows only.
+// More efficient than ReapplyLayout when only one cell needs updating.
+// Does not save state - caller is responsible for state management.
+func ApplyCellLayout(
+	ctx context.Context,
+	c *client.Client,
+	snap *server.Snapshot,
+	cfg *config.Config,
+	rs *state.RuntimeState,
+	cellID string,
+	opts ApplyLayoutOptions,
+) error {
+	jsonlog.Log("layout.cell.start", jsonlog.WithData(map[string]any{"cellID": cellID, "spaceID": snap.SpaceID}))
+
+	spaceState := rs.GetSpaceReadOnly(snap.SpaceID)
+	if spaceState == nil || spaceState.CurrentLayoutID == "" {
+		return fmt.Errorf("no layout currently applied")
+	}
+
+	// 1. Get layout definition
+	layout, err := cfg.GetLayout(spaceState.CurrentLayoutID)
+	if err != nil {
+		return fmt.Errorf("layout not found: %w", err)
+	}
+
+	// 2. Calculate full layout (needed for cell bounds with track ratios)
+	calculatedLayout := CalculateLayoutWithRatios(
+		layout, snap.DisplayBounds, 0,
+		spaceState.ColumnRatios, spaceState.RowRatios,
+	)
+
+	// 3. Get target cell's windows
+	cellState, ok := spaceState.Cells[cellID]
+	if !ok {
+		jsonlog.Log("layout.cell.skip", jsonlog.WithData(map[string]any{"reason": "cell not found", "cellID": cellID}))
+		return nil
+	}
+	if len(cellState.Windows) == 0 {
+		jsonlog.Log("layout.cell.skip", jsonlog.WithData(map[string]any{"reason": "no windows", "cellID": cellID}))
+		return nil
+	}
+	jsonlog.Log("layout.cell.found", jsonlog.WithData(map[string]any{
+		"cellID": cellID, "windows": cellState.Windows, "mode": cellState.StackMode,
+	}))
+
+	// 4. Build single-cell assignment
+	singleCellAssignment := map[string][]uint32{
+		cellID: cellState.Windows,
+	}
+
+	// 5. Build cell modes map
+	cellModes := make(map[string]types.StackMode)
+	if cellState.StackMode != "" {
+		cellModes[cellID] = cellState.StackMode
+	}
+
+	// 6. Build cell ratios map
+	cellRatios := make(map[string][]float64)
+	if len(cellState.SplitRatios) > 0 {
+		cellRatios[cellID] = cellState.SplitRatios
+	}
+
+	// 7. Build focused indices for tab positioning
+	focusedIndices := map[string]int{
+		cellID: cellState.LastFocusedIdx,
+	}
+
+	// 8. Resolve tab indicator inset
+	tabIndicatorInset := opts.BaseSpacing
+	if insetVal := cfg.GetTabIndicatorInset(); insetVal != nil {
+		tabIndicatorInset = insetVal.Resolve(opts.BaseSpacing)
+	}
+
+	// 9. Calculate placements for this cell only
+	placements := CalculateAllWindowPlacements(
+		calculatedLayout,
+		layout,
+		singleCellAssignment,
+		cellModes,
+		cellRatios,
+		cfg.Settings.DefaultStackMode,
+		opts.BaseSpacing,
+		opts.SettingsPadding,
+		opts.SettingsWindowSpacing,
+		focusedIndices,
+		tabIndicatorInset,
+	)
+
+	// 10. Apply placements
+	jsonlog.Log("layout.cell.placements", jsonlog.WithData(map[string]any{
+		"count": len(placements), "cellID": cellID,
+	}))
+	if err := ApplyPlacements(ctx, c, placements); err != nil {
+		return fmt.Errorf("failed to apply placements: %w", err)
+	}
+
+	// 11. Send border updates for this cell
+	if opts.SendBorders {
+		if err := sendBorderConfig(ctx, c, cfg); err != nil {
+			jsonlog.Log("warn.border_config", jsonlog.WithData(map[string]any{"err": err.Error()}))
+		}
+
+		displayUUID := snap.GetCurrentDisplayUUID()
+		if displayUUID == "" {
+			jsonlog.Log("warn.display_uuid", jsonlog.WithMsg("could not determine display UUID"))
+		} else if err := sendCellAssignments(ctx, c, displayUUID, layout, singleCellAssignment,
+			calculatedLayout.CellBounds, opts.BaseSpacing, opts.SettingsPadding); err != nil {
+			jsonlog.Log("warn.cell_assignments", jsonlog.WithData(map[string]any{"err": err.Error()}))
+		}
+	}
+
+	return nil
+}
+
 // sendBorderConfig sends the border configuration to the server.
 func sendBorderConfig(ctx context.Context, c *client.Client, cfg *config.Config) error {
 	if cfg.Borders == nil || !cfg.Borders.GetEnabled() {

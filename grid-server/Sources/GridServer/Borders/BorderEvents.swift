@@ -30,29 +30,7 @@ class BorderEvents: StateEventHandler {
     // MARK: - StateEventHandler Protocol
 
     func handle(_ event: StateEvent, context: EventContext) async throws {
-        // Allow focusChanged from CLI commands (cli-focus), filter other manual events
-        if case .manual(let reason) = context.source, reason != "cli-focus" { return }
-
-        switch event {
-        case .windowDestroyed(let windowID):
-            simpleBorderManager?.handleWindowDestroyed(windowID: windowID)
-
-        case .windowMoved(let windowID, let frame):
-            simpleBorderManager?.handleWindowMoved(windowID: windowID, newFrame: frame)
-
-        case .windowResized(let windowID, let frame):
-            simpleBorderManager?.handleWindowMoved(windowID: windowID, newFrame: frame)
-
-        case .focusChanged(let state):
-            if let windowID = state.windowID {
-                simpleBorderManager?.updateFocus(newFocusedWindow: windowID)
-            }
-
-        case .displayDisconnected(let displayUUID):
-            simpleBorderManager?.handleDisplayDisconnected(displayUUID: displayUUID)
-
-        default:
-            break
-        }
+        // TEMP: Disable AX event handling - borders now sync via CLI only
+        _ = (event, context)
     }
 }
