@@ -39,6 +39,9 @@ actor StateManager: StateEventHandler {
     // Border event handler
     private var borderEvents: BorderEvents?
 
+    // Window blacklist (runtime Set for O(1) lookup)
+    private var windowBlacklist: Set<String> = []
+
     func setBorderEvents(_ events: BorderEvents) {
         self.borderEvents = events
     }
@@ -59,7 +62,16 @@ actor StateManager: StateEventHandler {
     // MARK: - Public Interface
 
     func start() async {
-        // Build initial state
+        // Load server config for window blacklist FIRST (before state refresh)
+        do {
+            let config = try await ServerConfig.load()
+            windowBlacklist = Set(config.windowBlacklist)
+            JSONLogger.shared.log("srv.cfg.loaded", data: ["blacklist_count": windowBlacklist.count])
+        } catch {
+            JSONLogger.shared.log("srv.cfg.error", msg: "failed to load server config", data: ["error": "\(error)"])
+        }
+
+        // Build initial state (now uses blacklist filtering)
         await refreshCompleteState()
 
         // Register with EventRouter (must complete before observers start)
@@ -459,6 +471,33 @@ actor StateManager: StateEventHandler {
         }
 
         return AXWindowProperties()
+    }
+
+    /// Check if a window from the given PID should be tracked
+    /// Returns false if:
+    /// 1. The app is not tracked (non-.regular activation policy)
+    /// 2. The app is in the user's window blacklist (only applies to .regular apps)
+    private func shouldTrackWindow(pid: pid_t) -> Bool {
+        let pidKey = String(pid)
+        guard let app = state.applications[pidKey] else {
+            // App not tracked (non-.regular activation policy)
+            return false
+        }
+
+        // Fast path: no blacklist configured
+        if windowBlacklist.isEmpty {
+            return true
+        }
+
+        // Check blacklist by bundle ID or app name
+        if let bundleID = app.bundleIdentifier, windowBlacklist.contains(bundleID) {
+            return false
+        }
+        if let name = app.localizedName, windowBlacklist.contains(name) {
+            return false
+        }
+
+        return true
     }
 
     /// Extract AX properties from a window element
