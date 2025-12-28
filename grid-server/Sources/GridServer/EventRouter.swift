@@ -218,6 +218,9 @@ actor EventRouter {
     // MARK: - Logging
 
     private func logEvent(_ event: StateEvent, context: EventContext) async {
+        // Skip noisy events that don't provide diagnostic value
+        if case .windowTitleChanged = event { return }
+
         let (eventName, data) = event.logInfo
         var logData = data
         logData["src"] = context.source.description
