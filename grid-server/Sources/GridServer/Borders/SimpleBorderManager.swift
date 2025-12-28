@@ -28,10 +28,6 @@ class SimpleBorderManager {
 
     // MARK: - State from CLI (via IPC) - Per-Display Storage
 
-    /// Cell bounds received from CLI, keyed by display UUID
-    /// displayUUID → (cellID → CGRect)
-    private var cellBoundsPerDisplay: [String: [String: CGRect]] = [:]
-
     /// Cell assignments received from CLI, keyed by display UUID
     /// displayUUID → (windowID → cellID)
     private var cellAssignmentsPerDisplay: [String: [UInt32: String]] = [:]
@@ -93,23 +89,6 @@ class SimpleBorderManager {
     }
 
     // MARK: - IPC Handlers (receive data from CLI)
-
-    /// Set cell bounds received from CLI for a specific display
-    func setCellBounds(_ bounds: [String: CGRect], forDisplay displayUUID: String) {
-        let span = CurrentSpan.current
-        DispatchQueue.main.async { [weak self, span] in
-            CurrentSpan.$current.withValue(span) {
-                self?.setCellBoundsImpl(bounds, forDisplay: displayUUID)
-            }
-        }
-    }
-
-    private func setCellBoundsImpl(_ bounds: [String: CGRect], forDisplay displayUUID: String) {
-        cellBoundsPerDisplay[displayUUID] = bounds
-
-        // Bounds updated, but we don't use them for positioning yet
-        // (borders are sized from window frames, not cell bounds)
-    }
 
     /// Set cell assignments received from CLI for a specific display
     func setCellAssignments(_ assignments: [UInt32: String], forDisplay displayUUID: String) {
@@ -325,7 +304,6 @@ class SimpleBorderManager {
     private func handleDisplayDisconnectedImpl(displayUUID: String) {
         // Remove cached assignments for this display
         cellAssignmentsPerDisplay.removeValue(forKey: displayUUID)
-        cellBoundsPerDisplay.removeValue(forKey: displayUUID)
 
         // If this was the active display, clear state and borders
         if currentDisplayUUID == displayUUID {

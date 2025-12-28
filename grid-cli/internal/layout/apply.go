@@ -459,53 +459,5 @@ func sendCellAssignments(ctx context.Context, c *client.Client, displayUUID stri
 		return nil // No assignments to send
 	}
 
-	// Build cell overrides from layout cells that have border config
-	overrides := make(map[string]client.CellOverride)
-	for _, cell := range layout.Cells {
-		if cell.Border != nil {
-			override := client.CellOverride{}
-			if cell.Border.ActiveCellColor != nil {
-				override.ActiveCellColor = *cell.Border.ActiveCellColor
-			}
-			if cell.Border.InactiveColor != nil {
-				override.InactiveColor = *cell.Border.InactiveColor
-			}
-			if cell.Border.Style != nil {
-				override.Style = *cell.Border.Style
-			}
-			// Only add if at least one field is set
-			if override.ActiveCellColor != "" || override.InactiveColor != "" || override.Style != "" {
-				overrides[cell.ID] = override
-			}
-		}
-	}
-
-	// Convert types.Rect to client.CellRect, applying padding to match window placement
-	convertedCellBounds := make(map[string]client.CellRect)
-	for cellID, rect := range cellBounds {
-		// Apply the same padding transformation used for window placement
-		// so cell highlights match the actual window bounds area
-		cellPadding := GetEffectivePadding(layout, cellID, settingsPadding)
-		paddedRect := rect
-		if cellPadding != nil {
-			resolved := cellPadding.Resolve(baseSpacing)
-			paddedRect = applyPaddingInset(rect, resolved)
-
-			// Warn if padding results in zero-size bounds
-			if paddedRect.Width == 0 || paddedRect.Height == 0 {
-				jsonlog.Log("warn.cell_padding_zero", jsonlog.WithData(map[string]any{
-					"cell": cellID, "origW": rect.Width, "origH": rect.Height,
-				}))
-			}
-		}
-
-		convertedCellBounds[cellID] = client.CellRect{
-			X:      paddedRect.X,
-			Y:      paddedRect.Y,
-			Width:  paddedRect.Width,
-			Height: paddedRect.Height,
-		}
-	}
-
-	return c.SendCellAssignments(ctx, displayUUID, cellAssignments, overrides, convertedCellBounds)
+	return c.SendCellAssignments(ctx, displayUUID, cellAssignments)
 }

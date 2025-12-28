@@ -204,12 +204,7 @@ func SyncBorders(ctx context.Context, c *client.Client, snap *server.Snapshot, r
 		return
 	}
 
-	// 7. Apply padding to cell bounds to match window placement
-	baseSpacing := cfg.GetBaseSpacing()
-	settingsPadding, _ := cfg.GetSettingsPadding()
-	paddedCellBounds := applyCellPadding(calculated, layoutDef, baseSpacing, settingsPadding)
-
-	// 8. Get display UUID for per-display caching
+	// 7. Get display UUID for per-display caching
 	displayUUID := snap.GetCurrentDisplayUUID()
 	if displayUUID == "" {
 		jsonlog.Log("warn.sync_borders", jsonlog.WithMsg("could not determine display UUID"))
@@ -217,7 +212,7 @@ func SyncBorders(ctx context.Context, c *client.Client, snap *server.Snapshot, r
 	}
 
 	// 9. Send to server
-	if err := c.SendCellAssignments(ctx, displayUUID, assignments, nil, paddedCellBounds); err != nil {
+	if err := c.SendCellAssignments(ctx, displayUUID, assignments); err != nil {
 		jsonlog.Log("warn.sync_borders", jsonlog.WithData(map[string]any{"err": err.Error()}))
 		return
 	}
@@ -273,47 +268,8 @@ func SyncBordersForDisplay(ctx context.Context, c *client.Client, displayInfo se
 		return
 	}
 
-	baseSpacing := cfg.GetBaseSpacing()
-	settingsPadding, _ := cfg.GetSettingsPadding()
-	paddedBounds := applyCellPadding(cellBounds, layoutDef, baseSpacing, settingsPadding)
-
-	if err := c.SendCellAssignments(ctx, displayInfo.UUID, assignments, nil, paddedBounds); err != nil {
+	if err := c.SendCellAssignments(ctx, displayInfo.UUID, assignments); err != nil {
 		jsonlog.Log("warn.sync_borders_display", jsonlog.WithData(map[string]any{"err": err.Error()}))
 		return
 	}
-}
-
-// applyCellPadding applies padding to cell bounds to match window placement areas.
-// Uses layout.GetEffectivePadding to ensure consistent padding resolution.
-func applyCellPadding(cellBounds map[string]client.CellRect, layoutDef *types.Layout, baseSpacing float64, settingsPadding *types.Padding) map[string]client.CellRect {
-	result := make(map[string]client.CellRect, len(cellBounds))
-
-	for cellID, rect := range cellBounds {
-		// Use the same padding resolution logic as window placement
-		effectivePadding := layout.GetEffectivePadding(layoutDef, cellID, settingsPadding)
-
-		if effectivePadding != nil {
-			resolved := effectivePadding.Resolve(baseSpacing)
-			width := max(0, rect.Width-resolved.Left-resolved.Right)
-			height := max(0, rect.Height-resolved.Top-resolved.Bottom)
-
-			// Warn if padding results in zero-size bounds
-			if width == 0 || height == 0 {
-				jsonlog.Log("warn.cell_padding_zero", jsonlog.WithData(map[string]any{
-					"cell": cellID, "origW": rect.Width, "origH": rect.Height,
-				}))
-			}
-
-			result[cellID] = client.CellRect{
-				X:      rect.X + resolved.Left,
-				Y:      rect.Y + resolved.Top,
-				Width:  width,
-				Height: height,
-			}
-		} else {
-			result[cellID] = rect
-		}
-	}
-
-	return result
 }

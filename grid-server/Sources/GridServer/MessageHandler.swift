@@ -814,29 +814,9 @@ completion(Response(id: request.id, result: AnyCodable(["success": true])))
                 }
             }
 
-            // Parse cellBounds if provided (new field for simplified border system)
-            var cellBounds: [String: CGRect] = [:]
-            if let cellBoundsDict = params["cellBounds"]?.value as? [String: [String: Any]] {
-                for (cellID, boundsDict) in cellBoundsDict {
-                    if let x = (boundsDict["x"] as? NSNumber)?.doubleValue,
-                       let y = (boundsDict["y"] as? NSNumber)?.doubleValue,
-                       let width = (boundsDict["width"] as? NSNumber)?.doubleValue,
-                       let height = (boundsDict["height"] as? NSNumber)?.doubleValue {
-                        cellBounds[cellID] = CGRect(x: x, y: y, width: width, height: height)
-                    } else {
-                        Task {
-                            JSONLogger.shared.log("warn.cell_bounds", data: ["op": "parse", "cell": cellID])
-                        }
-                    }
-                }
-            }
-
             // Update SimpleBorderManager with per-display data
             if let simpleBorderManager = self.simpleBorderManager {
                 simpleBorderManager.setCellAssignments(cellAssignments, forDisplay: displayUUID)
-                if !cellBounds.isEmpty {
-                    simpleBorderManager.setCellBounds(cellBounds, forDisplay: displayUUID)
-                }
             }
 completion(Response(id: request.id, result: AnyCodable(["success": true])))
         }
