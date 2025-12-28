@@ -200,6 +200,16 @@ func MoveFocus(
 			if err == nil {
 				return windowID, nil
 			}
+			// Log extend failure with context for debugging
+			displayUUIDs := make([]string, 0, len(snap.AllDisplays))
+			for _, d := range snap.AllDisplays {
+				displayUUIDs = append(displayUUIDs, d.UUID)
+			}
+			jsonlog.Log("focus.extend_failed", jsonlog.WithMsg(err.Error()), jsonlog.WithData(map[string]any{
+				"dir":         direction.String(),
+				"currentCell": currentCell,
+				"displays":    displayUUIDs,
+			}))
 			// If cross-display failed and wrap is not enabled, return the error
 			if !opts.WrapAround {
 				return 0, err
@@ -340,6 +350,9 @@ func moveFocusCrossDisplay(
 
 	// Sync borders for target display so border appears immediately
 	reconcile.SyncBordersForDisplay(ctx, c, *adjacentDisplay, targetSpaceIDStr, rs, cfg)
+
+	// Sync border focus for target display
+	reconcile.SyncBorderFocus(ctx, c, adjacentDisplay.UUID, windowID, cfg)
 
 	return windowID, nil
 }

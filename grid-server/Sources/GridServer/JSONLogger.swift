@@ -120,9 +120,11 @@ final class JSONLoggerImpl: @unchecked Sendable {
         let sid = parentSid.map { "\($0).\(name)" } ?? tid
         let span = Span(tid: tid, sid: sid, name: name, start: Date())
 
-        // Log start event
-        let line = formatLine(ev: "\(name).start", data: data, tid: tid, sid: sid)
-        JSONLogWriter.shared.enqueue(line)
+        // Skip srv span logging (too noisy)
+        if name != "srv" {
+            let line = formatLine(ev: "\(name).start", data: data, tid: tid, sid: sid)
+            JSONLogWriter.shared.enqueue(line)
+        }
 
         return span
     }
@@ -209,6 +211,8 @@ struct Span {
 
     /// End the span and log duration
     func end(err: String? = nil) async {
+        // Skip srv span logging (too noisy)
+        guard name != "srv" else { return }
         let dur = Int64(Date().timeIntervalSince(start) * 1000)
         JSONLogger.shared.logSpanEnd(self, dur: dur, err: err)
     }

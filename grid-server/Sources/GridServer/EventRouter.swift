@@ -218,6 +218,9 @@ actor EventRouter {
     // MARK: - Logging
 
     private func logEvent(_ event: StateEvent, context: EventContext) async {
+        // Skip noisy events that don't provide diagnostic value
+        if case .windowTitleChanged = event { return }
+
         let (eventName, data) = event.logInfo
         var logData = data
         logData["src"] = context.source.description
@@ -278,21 +281,13 @@ extension StateEvent {
         case .windowSpaceAssignmentChanged(let windowID, let spaces):
             return ("ev.win.spaces", ["wid": windowID, "spaces": spaces])
 
-        // Focus
+        // Focus - only log what we actually know at raw event time
+        // Display/space are resolved later by StateManager and logged in win.focus
         case .focusChanged(let state):
-            var data: [String: Any] = [
+            return ("ev.focus", [
                 "wid": state.windowID ?? 0,
-                "sid": state.spaceID,
-                "display": state.displayUUID,
                 "trigger": String(describing: state.trigger)
-            ]
-            if let prev = state.previousWindowID {
-                data["prev_wid"] = prev
-            }
-            if let prevSid = state.previousSpaceID {
-                data["prev_sid"] = prevSid
-            }
-            return ("ev.focus", data)
+            ])
 
         // Space lifecycle
         case .spaceCreated(let spaceID, let displayUUID):

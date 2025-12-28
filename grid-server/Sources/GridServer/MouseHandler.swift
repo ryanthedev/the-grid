@@ -79,7 +79,7 @@ class MouseHandler {
 
     init() {
         self.edgeDetector = EdgeDetector(threshold: 10.0)
-        Task { JSONLogger.shared.log("mouse.init", data: [:]) }
+        JSONLogger.shared.log("mouse.init", data: [:])
     }
 
     /// Refresh cached state from StateManager (call before enabling event tap)
@@ -119,7 +119,7 @@ class MouseHandler {
             },
             userInfo: Unmanaged.passUnretained(self).toOpaque()
         ) else {
-            Task { JSONLogger.shared.log("err.mouse.tap_failed", data: [:]) }
+            JSONLogger.shared.log("err.mouse.tap_failed", data: [:])
             return false
         }
 
@@ -129,7 +129,7 @@ class MouseHandler {
         runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
 
         guard let source = runLoopSource else {
-            Task { JSONLogger.shared.log("err.mouse.runloop_failed", data: [:]) }
+            JSONLogger.shared.log("err.mouse.runloop_failed", data: [:])
             CFMachPortInvalidate(tap)
             eventTap = nil
             return false
@@ -142,7 +142,7 @@ class MouseHandler {
         CGEvent.tapEnable(tap: tap, enable: true)
 
         isEnabled = true
-        Task { JSONLogger.shared.log("mouse.start", data: [:]) }
+        JSONLogger.shared.log("mouse.start", data: [:])
 
         return true
     }
@@ -167,7 +167,7 @@ class MouseHandler {
         isEnabled = false
         dragState = nil
 
-        Task { JSONLogger.shared.log("mouse.stop", data: [:]) }
+        JSONLogger.shared.log("mouse.stop", data: [:])
     }
 
     /// Check if mouse handling is active
@@ -187,7 +187,7 @@ class MouseHandler {
         case .tapDisabledByTimeout, .tapDisabledByUserInput:
             // Re-enable if disabled
             if let tap = eventTap {
-                Task { JSONLogger.shared.log("warn.mouse.tap_disabled", data: [:]) }
+                JSONLogger.shared.log("warn.mouse.tap_disabled", data: [:])
                 CGEvent.tapEnable(tap: tap, enable: true)
             }
             return Unmanaged.passRetained(event)
@@ -209,7 +209,7 @@ class MouseHandler {
     private func handleMouseDown(event: CGEvent) -> Unmanaged<CGEvent>? {
         let point = event.location
 
-        Task { JSONLogger.shared.log("mouse.down", data: ["x": point.x, "y": point.y]) }
+        JSONLogger.shared.log("mouse.down", data: ["x": point.x, "y": point.y])
 
         // Use cached state for edge hit detection (can't use async in event callback)
         guard let state = cachedState else {
@@ -225,13 +225,13 @@ class MouseHandler {
                 edge: hit.edge
             )
 
-            Task { JSONLogger.shared.log("resize.drag.start", data: [
+            JSONLogger.shared.log("resize.drag.start", data: [
                 "type": hit.resizeType.rawValue,
                 "target": hit.targetID,
                 "edge": hit.edge.rawValue,
                 "x": point.x,
                 "y": point.y
-            ]) }
+            ])
 
             // Notify callback
             onDragStart?(hit.resizeType, hit.targetID, hit.edge)
@@ -267,10 +267,10 @@ class MouseHandler {
 
         // Only trigger resize if delta is significant
         if abs(delta) > 1.0 {
-            Task { JSONLogger.shared.log("mouse.drag", data: [
+            JSONLogger.shared.log("mouse.drag", data: [
                 "delta": delta,
                 "edge": state.edge.rawValue
-            ]) }
+            ])
 
             // Notify callback
             onResize?(state.resizeType, state.targetID, state.edge, delta)
@@ -292,10 +292,10 @@ class MouseHandler {
 
         let point = event.location
 
-        Task { JSONLogger.shared.log("resize.drag.end", data: [
+        JSONLogger.shared.log("resize.drag.end", data: [
             "x": point.x,
             "y": point.y
-        ]) }
+        ])
 
         // Clear drag state
         dragState = nil

@@ -17,11 +17,12 @@ import (
 // and syncs the focused cell to match the OS-focused window.
 // This should be called before any command execution to ensure
 // local state is accurate.
+//
+// NOTE: This does NOT sync borders. Call SyncBorders explicitly after
+// operations that change cell assignments or bounds.
 func Sync(ctx context.Context, c *client.Client, snap *server.Snapshot, rs *state.RuntimeState, cfg *config.Config) error {
 	spaceState := rs.GetSpaceReadOnly(snap.SpaceID)
 	if spaceState == nil {
-		// Still try to sync borders even with no local state
-		syncBorders(ctx, c, snap, rs, cfg)
 		return nil
 	}
 
@@ -56,9 +57,6 @@ func Sync(ctx context.Context, c *client.Client, snap *server.Snapshot, rs *stat
 			return err
 		}
 	}
-
-	// Sync borders to server (errors logged but don't fail reconcile)
-	syncBorders(ctx, c, snap, rs, cfg)
 
 	return nil
 }
@@ -166,10 +164,10 @@ func buildCellAssignments(spaceState *state.SpaceState) []client.CellAssignment 
 	return assignments
 }
 
-// syncBorders sends cell assignments and bounds to the server for border rendering.
-// This is called after reconcile to keep server border state in sync with CLI state.
-// Errors are logged but don't fail the reconcile - borders are a visual enhancement.
-func syncBorders(ctx context.Context, c *client.Client, snap *server.Snapshot, rs *state.RuntimeState, cfg *config.Config) {
+// SyncBorders sends cell assignments and bounds to the server for border rendering.
+// Call this after operations that change cell assignments or bounds.
+// Errors are logged but don't fail - borders are a visual enhancement.
+func SyncBorders(ctx context.Context, c *client.Client, snap *server.Snapshot, rs *state.RuntimeState, cfg *config.Config) {
 	// 1. Check if borders are configured
 	if cfg == nil || cfg.Borders == nil || !cfg.Borders.GetEnabled() {
 		return
@@ -206,12 +204,7 @@ func syncBorders(ctx context.Context, c *client.Client, snap *server.Snapshot, r
 		return
 	}
 
-	// 7. Apply padding to cell bounds to match window placement
-	baseSpacing := cfg.GetBaseSpacing()
-	settingsPadding, _ := cfg.GetSettingsPadding()
-	paddedCellBounds := applyCellPadding(calculated, layoutDef, baseSpacing, settingsPadding)
-
-	// 8. Get display UUID for per-display caching
+	// 7. Get display UUID for per-display caching
 	displayUUID := snap.GetCurrentDisplayUUID()
 	if displayUUID == "" {
 		jsonlog.Log("warn.sync_borders", jsonlog.WithMsg("could not determine display UUID"))
@@ -219,7 +212,7 @@ func syncBorders(ctx context.Context, c *client.Client, snap *server.Snapshot, r
 	}
 
 	// 9. Send to server
-	if err := c.SendCellAssignments(ctx, displayUUID, assignments, nil, paddedCellBounds); err != nil {
+	if err := c.SendCellAssignments(ctx, displayUUID, assignments); err != nil {
 		jsonlog.Log("warn.sync_borders", jsonlog.WithData(map[string]any{"err": err.Error()}))
 		return
 	}
@@ -275,47 +268,28 @@ func SyncBordersForDisplay(ctx context.Context, c *client.Client, displayInfo se
 		return
 	}
 
-	baseSpacing := cfg.GetBaseSpacing()
-	settingsPadding, _ := cfg.GetSettingsPadding()
-	paddedBounds := applyCellPadding(cellBounds, layoutDef, baseSpacing, settingsPadding)
-
-	if err := c.SendCellAssignments(ctx, displayInfo.UUID, assignments, nil, paddedBounds); err != nil {
+	if err := c.SendCellAssignments(ctx, displayInfo.UUID, assignments); err != nil {
 		jsonlog.Log("warn.sync_borders_display", jsonlog.WithData(map[string]any{"err": err.Error()}))
 		return
 	}
 }
 
-// applyCellPadding applies padding to cell bounds to match window placement areas.
-// Uses layout.GetEffectivePadding to ensure consistent padding resolution.
-func applyCellPadding(cellBounds map[string]client.CellRect, layoutDef *types.Layout, baseSpacing float64, settingsPadding *types.Padding) map[string]client.CellRect {
-	result := make(map[string]client.CellRect, len(cellBounds))
-
-	for cellID, rect := range cellBounds {
-		// Use the same padding resolution logic as window placement
-		effectivePadding := layout.GetEffectivePadding(layoutDef, cellID, settingsPadding)
-
-		if effectivePadding != nil {
-			resolved := effectivePadding.Resolve(baseSpacing)
-			width := max(0, rect.Width-resolved.Left-resolved.Right)
-			height := max(0, rect.Height-resolved.Top-resolved.Bottom)
-
-			// Warn if padding results in zero-size bounds
-			if width == 0 || height == 0 {
-				jsonlog.Log("warn.cell_padding_zero", jsonlog.WithData(map[string]any{
-					"cell": cellID, "origW": rect.Width, "origH": rect.Height,
-				}))
-			}
-
-			result[cellID] = client.CellRect{
-				X:      rect.X + resolved.Left,
-				Y:      rect.Y + resolved.Top,
-				Width:  width,
-				Height: height,
-			}
-		} else {
-			result[cellID] = rect
-		}
+// SyncBorderFocus notifies the server of the currently focused window.
+// Call this after FocusWindow() to ensure borders update correctly.
+// displayUUID should be the display where the window is located.
+// Errors are logged but don't fail - borders are a visual enhancement.
+func SyncBorderFocus(ctx context.Context, c *client.Client, displayUUID string, windowID uint32, cfg *config.Config) {
+	if cfg == nil || cfg.Borders == nil || !cfg.Borders.GetEnabled() {
+		return
 	}
 
-	return result
+	if displayUUID == "" {
+		jsonlog.Log("warn.sync_border_focus", jsonlog.WithMsg("missing display UUID"))
+		return
+	}
+
+	if err := c.SendBorderFocus(ctx, displayUUID, windowID); err != nil {
+		jsonlog.Log("warn.sync_border_focus", jsonlog.WithData(map[string]any{"err": err.Error()}))
+		return
+	}
 }

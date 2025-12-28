@@ -13,9 +13,9 @@ class PermissionChecker {
         let trusted = AXIsProcessTrusted()
 
         if trusted {
-            Task { JSONLogger.shared.log("ax.permission.granted", data: [:]) }
+            JSONLogger.shared.log("ax.permission.granted", data: [:])
         } else {
-            Task { JSONLogger.shared.log("ax.permission.denied", data: ["msg": "add grid-server to System Settings > Privacy & Security > Accessibility"]) }
+            JSONLogger.shared.log("ax.permission.denied", data: ["msg": "add grid-server to System Settings > Privacy & Security > Accessibility"])
         }
 
         return trusted
@@ -26,7 +26,7 @@ class PermissionChecker {
         let trusted = AXIsProcessTrustedWithOptions(options)
 
         if !trusted {
-            Task { JSONLogger.shared.log("ax.permission.request", data: ["msg": "dialog should appear - grant permission and restart"]) }
+            JSONLogger.shared.log("ax.permission.request", data: ["msg": "dialog should appear - grant permission and restart"])
         }
     }
 }

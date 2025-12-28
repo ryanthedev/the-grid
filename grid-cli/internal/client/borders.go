@@ -160,16 +160,9 @@ type CellRect struct {
 	Height float64 `json:"height"`
 }
 
-// CellOverride represents per-cell border config
-type CellOverride struct {
-	ActiveCellColor string `json:"activeCellColor,omitempty"`
-	InactiveColor   string `json:"inactiveColor,omitempty"`
-	Style           string `json:"style,omitempty"`
-}
-
 // SendCellAssignments sends window-to-cell mappings to the server
 // displayUUID is required for per-display caching in the server
-func (c *Client) SendCellAssignments(ctx context.Context, displayUUID string, assignments []CellAssignment, overrides map[string]CellOverride, cellBounds map[string]CellRect) error {
+func (c *Client) SendCellAssignments(ctx context.Context, displayUUID string, assignments []CellAssignment) error {
 	// Build assignment map (windowID as string -> cellID)
 	assignmentMap := make(map[string]string)
 	for _, a := range assignments {
@@ -181,34 +174,30 @@ func (c *Client) SendCellAssignments(ctx context.Context, displayUUID string, as
 		"displayUUID": displayUUID,
 	}
 
-	// Add overrides if provided
-	if len(overrides) > 0 {
-		// Convert overrides to map[string]interface{} for JSON serialization
-		cellsMap := make(map[string]interface{})
-		for cellID, override := range overrides {
-			cellConfig := make(map[string]interface{})
-			if override.ActiveCellColor != "" {
-				cellConfig["activeCellColor"] = override.ActiveCellColor
-			}
-			if override.InactiveColor != "" {
-				cellConfig["inactiveColor"] = override.InactiveColor
-			}
-			if override.Style != "" {
-				cellConfig["style"] = override.Style
-			}
-			cellsMap[cellID] = cellConfig
-		}
-		params["cells"] = cellsMap
-	}
-
-	// Add cellBounds if provided
-	if len(cellBounds) > 0 {
-		params["cellBounds"] = cellBounds
-	}
-
 	resp, err := c.request(ctx, "borders.setCellAssignments", params)
 	if err != nil {
 		return fmt.Errorf("failed to send cell assignments: %w", err)
+	}
+
+	if resp.IsError() {
+		return fmt.Errorf("server error: %s", resp.GetError())
+	}
+
+	return nil
+}
+
+// SendBorderFocus notifies the server which window is now focused.
+// This triggers border updates for focus changes within a cell.
+// displayUUID is required so server knows which display's borders to update.
+func (c *Client) SendBorderFocus(ctx context.Context, displayUUID string, windowID uint32) error {
+	params := map[string]interface{}{
+		"windowId":    windowID,
+		"displayUUID": displayUUID,
+	}
+
+	resp, err := c.request(ctx, "borders.updateFocus", params)
+	if err != nil {
+		return fmt.Errorf("failed to send border focus: %w", err)
 	}
 
 	if resp.IsError() {

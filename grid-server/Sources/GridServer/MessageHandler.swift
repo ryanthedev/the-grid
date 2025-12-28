@@ -768,7 +768,7 @@ class MessageHandler {
 
         // Configure border settings (from CLI config)
         register(method: "borders.configure") { [weak self] request, completion in
-            guard let self = self else {
+            guard self != nil else {
                 completion(Response(id: request.id, error: ErrorInfo(code: -32603, message: "Internal error")))
                 return
             }
@@ -814,31 +814,44 @@ completion(Response(id: request.id, result: AnyCodable(["success": true])))
                 }
             }
 
-            // Parse cellBounds if provided (new field for simplified border system)
-            var cellBounds: [String: CGRect] = [:]
-            if let cellBoundsDict = params["cellBounds"]?.value as? [String: [String: Any]] {
-                for (cellID, boundsDict) in cellBoundsDict {
-                    if let x = (boundsDict["x"] as? NSNumber)?.doubleValue,
-                       let y = (boundsDict["y"] as? NSNumber)?.doubleValue,
-                       let width = (boundsDict["width"] as? NSNumber)?.doubleValue,
-                       let height = (boundsDict["height"] as? NSNumber)?.doubleValue {
-                        cellBounds[cellID] = CGRect(x: x, y: y, width: width, height: height)
-                    } else {
-                        Task {
-                            JSONLogger.shared.log("warn.cell_bounds", data: ["op": "parse", "cell": cellID])
-                        }
-                    }
-                }
-            }
-
             // Update SimpleBorderManager with per-display data
             if let simpleBorderManager = self.simpleBorderManager {
                 simpleBorderManager.setCellAssignments(cellAssignments, forDisplay: displayUUID)
-                if !cellBounds.isEmpty {
-                    simpleBorderManager.setCellBounds(cellBounds, forDisplay: displayUUID)
-                }
             }
 completion(Response(id: request.id, result: AnyCodable(["success": true])))
+        }
+
+        // Update border focus (called after window.focus)
+        register(method: "borders.updateFocus") { [weak self] request, completion in
+            guard let self = self else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32603, message: "Internal error")))
+                return
+            }
+            guard let params = request.params else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
+                return
+            }
+
+            // Accept windowId as either string or int
+            var windowID: UInt32?
+            if let windowIdInt = params["windowId"]?.value as? Int {
+                windowID = UInt32(windowIdInt)
+            } else if let windowIdStr = params["windowId"]?.value as? String,
+                      let parsed = UInt32(windowIdStr) {
+                windowID = parsed
+            }
+
+            guard let wid = windowID else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Missing or invalid windowId")))
+                return
+            }
+
+            // Update border focus (server looks up display from cached assignments)
+            if let borderManager = self.simpleBorderManager {
+                borderManager.updateFocus(newFocusedWindow: wid)
+            }
+
+            completion(Response(id: request.id, result: AnyCodable(["success": true, "windowId": wid])))
         }
 
         // Query border info for a window

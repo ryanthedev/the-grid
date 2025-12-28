@@ -39,6 +39,9 @@ actor StateManager: StateEventHandler {
     // Border event handler
     private var borderEvents: BorderEvents?
 
+    // Window blacklist (runtime Set for O(1) lookup)
+    private var windowBlacklist: Set<String> = []
+
     func setBorderEvents(_ events: BorderEvents) {
         self.borderEvents = events
     }
@@ -59,7 +62,16 @@ actor StateManager: StateEventHandler {
     // MARK: - Public Interface
 
     func start() async {
-        // Build initial state
+        // Load server config for window blacklist FIRST (before state refresh)
+        do {
+            let config = try await ServerConfig.load()
+            windowBlacklist = Set(config.windowBlacklist)
+            JSONLogger.shared.log("srv.cfg.loaded", data: ["blacklist_count": windowBlacklist.count])
+        } catch {
+            JSONLogger.shared.log("srv.cfg.error", msg: "failed to load server config", data: ["error": "\(error)"])
+        }
+
+        // Build initial state (now uses blacklist filtering)
         await refreshCompleteState()
 
         // Register with EventRouter (must complete before observers start)
@@ -459,6 +471,33 @@ actor StateManager: StateEventHandler {
         }
 
         return AXWindowProperties()
+    }
+
+    /// Check if a window from the given PID should be tracked
+    /// Returns false if:
+    /// 1. The app is not tracked (non-.regular activation policy)
+    /// 2. The app is in the user's window blacklist (only applies to .regular apps)
+    private func shouldTrackWindow(pid: pid_t) -> Bool {
+        let pidKey = String(pid)
+        guard let app = state.applications[pidKey] else {
+            // App not tracked (non-.regular activation policy)
+            return false
+        }
+
+        // Fast path: no blacklist configured
+        if windowBlacklist.isEmpty {
+            return true
+        }
+
+        // Check blacklist by bundle ID or app name
+        if let bundleID = app.bundleIdentifier, windowBlacklist.contains(bundleID) {
+            return false
+        }
+        if let name = app.localizedName, windowBlacklist.contains(name) {
+            return false
+        }
+
+        return true
     }
 
     /// Extract AX properties from a window element
@@ -865,6 +904,11 @@ var windows: [String: WindowState] = [:]
 
             // Get window owner PID
             if let pid = windowInfo[kCGWindowOwnerPID as String] as? pid_t {
+                // Skip windows from untracked/blacklisted apps
+                guard shouldTrackWindow(pid: pid) else {
+                    continue
+                }
+
                 windowState.pid = pid
 
                 // Get app name from PID
@@ -1114,6 +1158,11 @@ var windows: [String: WindowState] = [:]
         var window = WindowState(id: windowID)
 
         if let pid = windowInfo[kCGWindowOwnerPID as String] as? pid_t {
+            // Skip windows from untracked/blacklisted apps
+            guard shouldTrackWindow(pid: pid) else {
+                return
+            }
+
             window.pid = pid
             window.appName = getAppNameForPID(pid)
 
@@ -1168,6 +1217,11 @@ var windows: [String: WindowState] = [:]
     // MARK: - AX Event Handlers (Per-Window Events)
 
     private func handleWindowCreated(_ windowID: UInt32, pid: pid_t) async {
+        // Skip windows from untracked/blacklisted apps
+        guard shouldTrackWindow(pid: pid) else {
+            return
+        }
+
         // Create new window state
         var window = WindowState(id: windowID)
         window.pid = pid
@@ -1301,20 +1355,36 @@ var windows: [String: WindowState] = [:]
     private func handleWindowFocused(_ windowID: UInt32) async {
         let stateSpan = await CurrentSpan.current?.startChild("state", data: ["wid": Int(windowID)])
 
+        // Capture previous state BEFORE applyWindowFocus overwrites metadata
         let prevFocused = state.metadata.focusedWindowID
+        let prevDisplay = state.metadata.activeDisplayUUID
+        let prevSpace = state.metadata.activeSpaceID
+        let prevWindow = prevFocused.flatMap { state.windows[String($0)] }
+
         let window = state.windows[String(windowID)]
 
         // Apply focus using shared helper
         await applyWindowFocus(windowID)
 
-        JSONLogger.shared.log("win.focus", data: [
+        var logData: [String: Any] = [
             "wid": windowID,
             "app": window?.appName ?? "unknown",
             "title": window?.title ?? "",
-            "prev": prevFocused ?? 0,
             "display": state.metadata.activeDisplayUUID ?? "nil",
             "sid": state.metadata.activeSpaceID ?? 0
-        ])
+        ]
+
+        if let prevWid = prevFocused {
+            logData["prev"] = [
+                "wid": prevWid,
+                "app": prevWindow?.appName ?? "unknown",
+                "title": prevWindow?.title ?? "",
+                "display": prevDisplay as Any,
+                "sid": prevSpace as Any
+            ] as [String: Any]
+        }
+
+        JSONLogger.shared.log("win.focus", data: logData)
 
         if let stateSpan = stateSpan {
             await stateSpan.end()

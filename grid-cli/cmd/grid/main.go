@@ -1220,7 +1220,7 @@ var layoutApplyCmd = &cobra.Command{
 			return fmt.Errorf("failed to fetch server state: %w", err)
 		}
 
-		// 2. Reconcile local state with server (includes border sync)
+		// 2. Reconcile local state with server
 		if err := gridReconcile.Sync(ctx, c, snap, runtimeState, cfg); err != nil {
 			return fmt.Errorf("failed to reconcile state: %w", err)
 		}
@@ -1271,7 +1271,7 @@ var layoutCycleCmd = &cobra.Command{
 			return fmt.Errorf("failed to fetch server state: %w", err)
 		}
 
-		// 2. Reconcile local state with server (includes border sync)
+		// 2. Reconcile local state with server
 		if err := gridReconcile.Sync(ctx, c, snap, runtimeState, cfg); err != nil {
 			return fmt.Errorf("failed to reconcile state: %w", err)
 		}
@@ -1366,7 +1366,7 @@ var layoutReapplyCmd = &cobra.Command{
 			return fmt.Errorf("failed to fetch server state: %w", err)
 		}
 
-		// 2. Reconcile local state with server (includes border sync)
+		// 2. Reconcile local state with server
 		if err := gridReconcile.Sync(ctx, c, snap, runtimeState, cfg); err != nil {
 			return fmt.Errorf("failed to reconcile state: %w", err)
 		}
@@ -1657,7 +1657,7 @@ func focusDirectionHelper(direction gridTypes.Direction, wrapAround bool, extend
 		return fmt.Errorf("failed to fetch server state: %w", err)
 	}
 
-	// 2. Reconcile local state with server (includes border sync)
+	// 2. Reconcile local state with server
 	if err := gridReconcile.Sync(ctx, c, snap, runtimeState, cfg); err != nil {
 		return fmt.Errorf("failed to reconcile state: %w", err)
 	}
@@ -1679,6 +1679,12 @@ func focusDirectionHelper(direction gridTypes.Direction, wrapAround bool, extend
 	if windowID == previousFocusedID && previousFocusedID != 0 {
 		warnColor.Printf("⚠ Focus unchanged - runtime state may be stale. Try: thegrid layout reapply\n")
 	}
+
+	// Sync borders after focus change (cell assignments may have changed)
+	gridReconcile.SyncBorders(ctx, c, snap, runtimeState, cfg)
+
+	// Sync border focus so borders update even if assignments didn't change
+	gridReconcile.SyncBorderFocus(ctx, c, snap.GetCurrentDisplayUUID(), windowID, cfg)
 
 	// 4. Optionally warp mouse to focused window
 	if mouse && windowID != 0 {
@@ -1778,7 +1784,7 @@ func moveWindowDirectionHelper(direction gridTypes.Direction, wrapAround bool, e
 		return fmt.Errorf("failed to fetch server state: %w", err)
 	}
 
-	// 2. Reconcile local state with server (includes border sync)
+	// 2. Reconcile local state with server
 	if err := gridReconcile.Sync(ctx, c, snap, runtimeState, cfg); err != nil {
 		return fmt.Errorf("failed to reconcile state: %w", err)
 	}
@@ -1801,6 +1807,9 @@ func moveWindowDirectionHelper(direction gridTypes.Direction, wrapAround bool, e
 		successColor.Printf("Moved window %d: %s -> %s\n",
 			result.WindowID, result.SourceCell, result.TargetCell)
 	}
+
+	// Sync borders after window move (cell assignments changed)
+	gridReconcile.SyncBorders(ctx, c, snap, runtimeState, cfg)
 
 	// Optionally warp mouse to moved window
 	if mouse && result.WindowID != 0 {
@@ -1835,7 +1844,7 @@ func swapWindowDirectionHelper(direction gridTypes.Direction, mouse bool) error 
 		return fmt.Errorf("failed to fetch server state: %w", err)
 	}
 
-	// 2. Reconcile local state with server (includes border sync)
+	// 2. Reconcile local state with server
 	if err := gridReconcile.Sync(ctx, c, snap, runtimeState, cfg); err != nil {
 		return fmt.Errorf("failed to reconcile state: %w", err)
 	}
@@ -1846,6 +1855,9 @@ func swapWindowDirectionHelper(direction gridTypes.Direction, mouse bool) error 
 	}
 
 	successColor.Printf("Swapped window %s\n", direction.String())
+
+	// Sync borders after window swap (cell assignments changed)
+	gridReconcile.SyncBorders(ctx, c, snap, runtimeState, cfg)
 
 	// Optionally warp mouse to focused window
 	if mouse && snap.FocusedWindowID != 0 {
@@ -2019,7 +2031,7 @@ var focusNextCmd = &cobra.Command{
 		// 2. Load config for border sync
 		cfg, _ := gridConfig.LoadConfig("")
 
-		// 3. Reconcile local state with server (includes border sync)
+		// 3. Reconcile local state with server
 		if err := gridReconcile.Sync(ctx, c, snap, runtimeState, cfg); err != nil {
 			jsonlog.Log("err.focus_next", jsonlog.WithMsg("failed to reconcile"), jsonlog.WithData(map[string]any{"err": err.Error()}))
 			return fmt.Errorf("failed to reconcile state: %w", err)
@@ -2038,6 +2050,12 @@ var focusNextCmd = &cobra.Command{
 		} else {
 			jsonlog.Log("focus.next.done", jsonlog.WithData(map[string]any{"wid": windowID}))
 			successColor.Printf("✓ Focused window: %d\n", windowID)
+
+			// Sync borders after focus change
+			gridReconcile.SyncBorders(ctx, c, snap, runtimeState, cfg)
+
+			// Sync border focus so borders update even if assignments didn't change
+			gridReconcile.SyncBorderFocus(ctx, c, snap.GetCurrentDisplayUUID(), windowID, cfg)
 
 			// 4. Optionally warp mouse to focused window
 			if mouse {
@@ -2081,7 +2099,7 @@ var focusPrevCmd = &cobra.Command{
 		// 2. Load config for border sync
 		cfg, _ := gridConfig.LoadConfig("")
 
-		// 3. Reconcile local state with server (includes border sync)
+		// 3. Reconcile local state with server
 		if err := gridReconcile.Sync(ctx, c, snap, runtimeState, cfg); err != nil {
 			jsonlog.Log("err.focus_prev", jsonlog.WithMsg("failed to reconcile"), jsonlog.WithData(map[string]any{"err": err.Error()}))
 			return fmt.Errorf("failed to reconcile state: %w", err)
@@ -2100,6 +2118,12 @@ var focusPrevCmd = &cobra.Command{
 		} else {
 			jsonlog.Log("focus.prev.done", jsonlog.WithData(map[string]any{"wid": windowID}))
 			successColor.Printf("✓ Focused window: %d\n", windowID)
+
+			// Sync borders after focus change
+			gridReconcile.SyncBorders(ctx, c, snap, runtimeState, cfg)
+
+			// Sync border focus so borders update even if assignments didn't change
+			gridReconcile.SyncBorderFocus(ctx, c, snap.GetCurrentDisplayUUID(), windowID, cfg)
 
 			// 4. Optionally warp mouse to focused window
 			if mouse {
@@ -2141,7 +2165,7 @@ var focusCellCmd = &cobra.Command{
 		// 2. Load config for border sync
 		cfg, _ := gridConfig.LoadConfig("")
 
-		// 3. Reconcile local state with server (includes border sync)
+		// 3. Reconcile local state with server
 		if err := gridReconcile.Sync(ctx, c, snap, runtimeState, cfg); err != nil {
 			return fmt.Errorf("failed to reconcile state: %w", err)
 		}
@@ -2153,6 +2177,12 @@ var focusCellCmd = &cobra.Command{
 		}
 
 		successColor.Printf("✓ Focused cell %s (window: %d)\n", cellID, windowID)
+
+		// Sync borders after focus change
+		gridReconcile.SyncBorders(ctx, c, snap, runtimeState, cfg)
+
+		// Sync border focus so borders update even if assignments didn't change
+		gridReconcile.SyncBorderFocus(ctx, c, snap.GetCurrentDisplayUUID(), windowID, cfg)
 
 		// 4. Optionally warp mouse to focused window
 		if mouse && windowID != 0 {
@@ -2284,7 +2314,7 @@ var resizeAdjustCmd = &cobra.Command{
 			return fmt.Errorf("failed to fetch server state: %w", err)
 		}
 
-		// 2. Reconcile local state with server (includes border sync)
+		// 2. Reconcile local state with server
 		if err := gridReconcile.Sync(ctx, c, snap, runtimeState, cfg); err != nil {
 			return fmt.Errorf("failed to reconcile state: %w", err)
 		}
@@ -2295,6 +2325,10 @@ var resizeAdjustCmd = &cobra.Command{
 		}
 
 		successColor.Printf("✓ Resized window (%s)\n", action)
+
+		// Sync borders after resize (bounds changed)
+		gridReconcile.SyncBorders(ctx, c, snap, runtimeState, cfg)
+
 		return nil
 	},
 }
@@ -2326,7 +2360,7 @@ var resizeResetCmd = &cobra.Command{
 			return fmt.Errorf("failed to fetch server state: %w", err)
 		}
 
-		// 2. Reconcile local state with server (includes border sync)
+		// 2. Reconcile local state with server
 		if err := gridReconcile.Sync(ctx, c, snap, runtimeState, cfg); err != nil {
 			return fmt.Errorf("failed to reconcile state: %w", err)
 		}
@@ -2352,6 +2386,9 @@ var resizeResetCmd = &cobra.Command{
 			}
 			successColor.Println("✓ Reset focused cell window splits to equal")
 		}
+
+		// Sync borders after resize reset (bounds changed)
+		gridReconcile.SyncBorders(ctx, c, snap, runtimeState, cfg)
 
 		return nil
 	},
@@ -2408,7 +2445,7 @@ Examples:
 			return fmt.Errorf("failed to fetch server state: %w", err)
 		}
 
-		// 2. Reconcile local state with server (includes border sync)
+		// 2. Reconcile local state with server
 		if err := gridReconcile.Sync(ctx, c, snap, runtimeState, cfg); err != nil {
 			return fmt.Errorf("failed to reconcile state: %w", err)
 		}
@@ -2419,6 +2456,10 @@ Examples:
 		}
 
 		successColor.Printf("✓ Resized cell (%s)\n", direction)
+
+		// Sync borders after cell resize (bounds changed)
+		gridReconcile.SyncBorders(ctx, c, snap, runtimeState, cfg)
+
 		return nil
 	},
 }
@@ -2465,7 +2506,7 @@ var cellSendCmd = &cobra.Command{
 			return fmt.Errorf("failed to fetch server state: %w", err)
 		}
 
-		// 2. Reconcile local state with server (includes border sync)
+		// 2. Reconcile local state with server
 		if err := gridReconcile.Sync(ctx, c, snap, runtimeState, cfg); err != nil {
 			return fmt.Errorf("failed to reconcile state: %w", err)
 		}
@@ -2476,6 +2517,10 @@ var cellSendCmd = &cobra.Command{
 		}
 
 		successColor.Printf("✓ Sent window %s\n", direction.String())
+
+		// Sync borders after cell send (assignments changed)
+		gridReconcile.SyncBorders(ctx, c, snap, runtimeState, cfg)
+
 		return nil
 	},
 }
@@ -2533,7 +2578,16 @@ Valid modes: vertical, horizontal, tabs`,
 			return fmt.Errorf("failed to set mode: %w", err)
 		}
 
+		// Save state to persist the mode change
+		if err := runtimeState.Save(); err != nil {
+			return fmt.Errorf("failed to save state: %w", err)
+		}
+
 		successColor.Printf("✓ Cell %q mode: %s\n", cellID, newMode)
+
+		// Sync borders after cell mode change (tabs render differently)
+		gridReconcile.SyncBorders(ctx, c, snap, runtimeState, cfg)
+
 		return nil
 	},
 }

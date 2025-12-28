@@ -46,11 +46,12 @@ Configs are deep-merged in priority order (lowest to highest):
 Root structure:
 
 ```yaml
-settings: {}      # Global settings
-layouts: []       # Layout definitions
-spaces: {}        # Space-to-layout mappings
-appRules: []      # Application-specific rules
-borders: {}       # Window border configuration
+settings: {}          # Global settings
+layouts: []           # Layout definitions
+spaces: {}            # Space-to-layout mappings
+appRules: []          # Application-specific rules
+borders: {}           # Window border configuration
+window_blacklist: []  # Apps to exclude from window tracking (server-side)
 ```
 
 ---
@@ -224,6 +225,40 @@ Window border appearance configuration.
 | `type` | `string` | Animation type: `"none"`, `"pulse"`, `"breathe"`, `"fade"` |
 | `duration` | `float64` | Animation duration in seconds |
 | `intensity` | `float64` | Animation intensity (0.0-1.0) |
+
+---
+
+## window_blacklist
+
+Server-side window filtering by app name or bundle ID. Windows from blacklisted apps are not tracked by the server.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `window_blacklist` | `[]string` | `[]` | Apps to exclude from window tracking |
+
+### Usage
+
+```yaml
+# At root level of config.yaml
+window_blacklist:
+  - "Notes"                    # by app name
+  - "com.apple.Notes"          # or by bundle ID
+```
+
+### Behavior
+
+- **Activation policy filtering**: Windows from non-`.regular` apps (system helpers like "Open and Save Panel Service") are automatically filtered regardless of blacklist
+- **Blacklist applies only to `.regular` apps**: Apps with dock icons that you want to exclude from tiling
+- **No hot-reload**: Changes require server restart (`make run`)
+- **O(1) lookup**: Uses Set for efficient filtering
+
+### When to Use
+
+Use `window_blacklist` for apps with dock icons that you never want tiled:
+- Utility apps that should float (use `appRules` with `float: true` instead if you want them in state but not tiled)
+- Apps with problematic windows that cause issues
+
+For system helpers and background processes, no configuration is needed—they're filtered automatically by activation policy.
 
 ---
 

@@ -95,11 +95,11 @@ struct EdgeDetector {
                                 // Determine direction: cursor is on right of left window, or left of right window
                                 let edge: ResizeEdge = point.x < boundaryX ? .right : .left
 
-                                Task { JSONLogger.shared.log("edge.detect", data: [
+                                JSONLogger.shared.log("edge.detect", data: [
                                     "type": "cell",
                                     "edge": edge.rawValue,
                                     "distance": abs(point.x - boundaryX)
-                                ]) }
+                                ])
 
                                 return EdgeHit(
                                     resizeType: .cell,
@@ -135,11 +135,11 @@ struct EdgeDetector {
                                 // Determine direction
                                 let edge: ResizeEdge = point.y < boundaryY ? .bottom : .top
 
-                                Task { JSONLogger.shared.log("edge.detect", data: [
+                                JSONLogger.shared.log("edge.detect", data: [
                                     "type": "cell",
                                     "edge": edge.rawValue,
                                     "distance": abs(point.y - boundaryY)
-                                ]) }
+                                ])
 
                                 return EdgeHit(
                                     resizeType: .cell,
@@ -196,12 +196,12 @@ struct EdgeDetector {
                         if point.x >= window.frame.minX && point.x <= window.frame.maxX {
                             let edge: ResizeEdge = window.frame.maxY < other.frame.minY ? .bottom : .top
 
-                            Task { JSONLogger.shared.log("edge.detect", data: [
+                            JSONLogger.shared.log("edge.detect", data: [
                                 "type": "window",
                                 "window": window.id,
                                 "edge": edge.rawValue,
                                 "distance": abs(point.y - boundary)
-                            ]) }
+                            ])
 
                             return EdgeHit(
                                 resizeType: .window,
@@ -224,12 +224,12 @@ struct EdgeDetector {
                         if point.y >= window.frame.minY && point.y <= window.frame.maxY {
                             let edge: ResizeEdge = window.frame.maxX < other.frame.minX ? .right : .left
 
-                            Task { JSONLogger.shared.log("edge.detect", data: [
+                            JSONLogger.shared.log("edge.detect", data: [
                                 "type": "window",
                                 "window": window.id,
                                 "edge": edge.rawValue,
                                 "distance": abs(point.x - boundary)
-                            ]) }
+                            ])
 
                             return EdgeHit(
                                 resizeType: .window,

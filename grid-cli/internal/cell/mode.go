@@ -99,9 +99,8 @@ func SetMode(
 	// Update state
 	rs.SetCellStackMode(snap.SpaceID, cellID, newMode)
 
-	// Reapply layout
+	// Apply layout to target cell only (more efficient than full reapply)
 	opts := layout.DefaultApplyOptions()
-	opts.Strategy = types.AssignPreserve
 	opts.BaseSpacing = cfg.GetBaseSpacing()
 	if settingsPadding, err := cfg.GetSettingsPadding(); err == nil {
 		opts.SettingsPadding = settingsPadding
@@ -109,8 +108,8 @@ func SetMode(
 	if settingsWindowSpacing, err := cfg.GetSettingsWindowSpacing(); err == nil {
 		opts.SettingsWindowSpacing = settingsWindowSpacing
 	}
-	if err := layout.ReapplyLayout(ctx, c, snap, cfg, rs, opts); err != nil {
-		return "", "", fmt.Errorf("failed to reapply layout: %w", err)
+	if err := layout.ApplyCellLayout(ctx, c, snap, cfg, rs, cellID, opts); err != nil {
+		return "", "", fmt.Errorf("failed to apply cell layout: %w", err)
 	}
 
 	return cellID, newMode, nil
