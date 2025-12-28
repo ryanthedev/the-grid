@@ -155,16 +155,30 @@ class ApplicationObserver {
 
         let source = EventSource.axObserver(pid: pid, appName: appName ?? "Unknown")
 
-        // Handle focus notification specially - element is the app, not the window
+        // Handle focus notification - element is the window that gained focus
         if notifName == kAXFocusedWindowChangedNotification as String {
-            // Get the focused window from the app element
-            guard let focusedWindow = getFocusedWindow(from: element),
-                  let windowID = getWindowID(from: focusedWindow) else {
-                JSONLogger.shared.log("ax.fail", data: [
-                    "op": "get_focused_window",
-                    "notif": notifName,
-                    "app": appName ?? "unknown"
-                ])
+            // The callback element IS the focused window, get its ID directly
+            guard let windowID = getWindowID(from: element) else {
+                // Fallback: try querying the app element for focused window
+                let appElement = AXUIElementCreateApplication(pid)
+                let (focusedWindow, axError) = getFocusedWindowWithError(from: appElement)
+                guard let focusedWindow = focusedWindow,
+                      let fallbackWindowID = getWindowID(from: focusedWindow) else {
+                    JSONLogger.shared.log("ax.fail", data: [
+                        "op": "get_focused_window",
+                        "notif": notifName,
+                        "app": appName ?? "unknown",
+                        "axErr": axError?.rawValue ?? -1
+                    ])
+                    return
+                }
+                let focusState = FocusState(
+                    windowID: fallbackWindowID,
+                    spaceID: 0,
+                    displayUUID: "",
+                    trigger: .windowActivated
+                )
+                await EventRouter.shared.route(.focusChanged(focusState), from: source)
                 return
             }
 
@@ -231,16 +245,16 @@ class ApplicationObserver {
 
     // MARK: - AX Property Helpers
 
-    /// Get the focused window element from an application element
-    private func getFocusedWindow(from appElement: AXUIElement) -> AXUIElement? {
+    /// Get the focused window element from an application element (with error info)
+    private func getFocusedWindowWithError(from appElement: AXUIElement) -> (AXUIElement?, AXError?) {
         var focusedWindow: CFTypeRef?
         let error = AXUIElementCopyAttributeValue(
             appElement,
             kAXFocusedWindowAttribute as CFString,
             &focusedWindow
         )
-        guard error == .success else { return nil }
-        return (focusedWindow as! AXUIElement)
+        guard error == .success else { return (nil, error) }
+        return (focusedWindow as! AXUIElement, nil)
     }
 
     private func getWindowID(from element: AXUIElement) -> UInt32? {

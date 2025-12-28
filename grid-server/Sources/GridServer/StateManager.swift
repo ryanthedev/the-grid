@@ -1355,20 +1355,36 @@ var windows: [String: WindowState] = [:]
     private func handleWindowFocused(_ windowID: UInt32) async {
         let stateSpan = await CurrentSpan.current?.startChild("state", data: ["wid": Int(windowID)])
 
+        // Capture previous state BEFORE applyWindowFocus overwrites metadata
         let prevFocused = state.metadata.focusedWindowID
+        let prevDisplay = state.metadata.activeDisplayUUID
+        let prevSpace = state.metadata.activeSpaceID
+        let prevWindow = prevFocused.flatMap { state.windows[String($0)] }
+
         let window = state.windows[String(windowID)]
 
         // Apply focus using shared helper
         await applyWindowFocus(windowID)
 
-        JSONLogger.shared.log("win.focus", data: [
+        var logData: [String: Any] = [
             "wid": windowID,
             "app": window?.appName ?? "unknown",
             "title": window?.title ?? "",
-            "prev": prevFocused ?? 0,
             "display": state.metadata.activeDisplayUUID ?? "nil",
             "sid": state.metadata.activeSpaceID ?? 0
-        ])
+        ]
+
+        if let prevWid = prevFocused {
+            logData["prev"] = [
+                "wid": prevWid,
+                "app": prevWindow?.appName ?? "unknown",
+                "title": prevWindow?.title ?? "",
+                "display": prevDisplay as Any,
+                "sid": prevSpace as Any
+            ] as [String: Any]
+        }
+
+        JSONLogger.shared.log("win.focus", data: logData)
 
         if let stateSpan = stateSpan {
             await stateSpan.end()
