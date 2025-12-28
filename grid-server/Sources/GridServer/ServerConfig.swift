@@ -18,7 +18,7 @@ struct ServerConfig: Codable {
 
     /// Load config using XDG resolution with layered merging
     static func load() async throws -> ServerConfig {
-        let files = await XDG.findConfigFiles(app: "thegrid", filename: "server.yaml")
+        let files = await XDG.findConfigFiles(app: "thegrid", filename: "config.yaml")
 
         JSONLogger.shared.log("srv.cfg.resolve", data: [
             "xdg_config_home": XDG.configHome,
@@ -43,7 +43,7 @@ struct ServerConfig: Codable {
         }
 
         // Load local overlay
-        let localPath = "\(XDG.configHome)/thegrid/server.local.yaml"
+        let localPath = "\(XDG.configHome)/thegrid/config.local.yaml"
         if FileManager.default.fileExists(atPath: localPath) {
             do {
                 let data = try Data(contentsOf: URL(fileURLWithPath: localPath))
