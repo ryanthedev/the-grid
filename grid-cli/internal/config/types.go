@@ -11,17 +11,24 @@ type Config struct {
 	Borders  *BorderConfig          `yaml:"borders,omitempty" json:"borders,omitempty"`
 }
 
+// DisplayOffset defines X,Y offset for a display (for positioning workarounds)
+type DisplayOffset struct {
+	X float64 `yaml:"x" json:"x"`
+	Y float64 `yaml:"y" json:"y"`
+}
+
 // Settings contains global application settings
 type Settings struct {
-	DefaultStackMode  types.StackMode  `yaml:"defaultStackMode" json:"defaultStackMode"`
-	AnimationDuration float64          `yaml:"animationDuration" json:"animationDuration"`
-	BaseSpacing       float64          `yaml:"baseSpacing" json:"baseSpacing"`                         // Base unit for "Nx" padding syntax
-	Padding           interface{}      `yaml:"padding,omitempty" json:"padding,omitempty"`             // Global default padding (supports shorthand)
-	WindowSpacing     interface{}      `yaml:"windowSpacing,omitempty" json:"windowSpacing,omitempty"` // Gap between stacked windows (supports shorthand)
-	TabIndicatorInset interface{}      `yaml:"tabIndicatorInset,omitempty" json:"tabIndicatorInset,omitempty"` // Inset for tab stack indicators (supports "Nx" syntax)
-	FocusFollowsMouse bool             `yaml:"focusFollowsMouse" json:"focusFollowsMouse"`
-	Resize            ResizeSettings   `yaml:"resize,omitempty" json:"resize,omitempty"`
-	WindowExclusion   WindowExclusion  `yaml:"windowExclusion,omitempty" json:"windowExclusion,omitempty"`
+	DefaultStackMode  types.StackMode            `yaml:"defaultStackMode" json:"defaultStackMode"`
+	AnimationDuration float64                    `yaml:"animationDuration" json:"animationDuration"`
+	BaseSpacing       float64                    `yaml:"baseSpacing" json:"baseSpacing"`                         // Base unit for "Nx" padding syntax
+	Padding           interface{}                `yaml:"padding,omitempty" json:"padding,omitempty"`             // Global default padding (supports shorthand)
+	WindowSpacing     interface{}                `yaml:"windowSpacing,omitempty" json:"windowSpacing,omitempty"` // Gap between stacked windows (supports shorthand)
+	TabIndicatorInset interface{}                `yaml:"tabIndicatorInset,omitempty" json:"tabIndicatorInset,omitempty"` // Inset for tab stack indicators (supports "Nx" syntax)
+	FocusFollowsMouse bool                       `yaml:"focusFollowsMouse" json:"focusFollowsMouse"`
+	Resize            ResizeSettings             `yaml:"resize,omitempty" json:"resize,omitempty"`
+	WindowExclusion   WindowExclusion            `yaml:"windowExclusion,omitempty" json:"windowExclusion,omitempty"`
+	DisplayOffsets    map[string]DisplayOffset   `yaml:"displayOffsets,omitempty" json:"displayOffsets,omitempty"` // Per-display X,Y offsets by UUID or name
 }
 
 // ResizeSettings configures CLI resize behavior
