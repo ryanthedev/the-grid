@@ -152,6 +152,45 @@ func ApplyLayout(
 		tabIndicatorInset,
 	)
 
+	// 8b. Apply per-display offset if configured
+	displayUUID := snap.GetCurrentDisplayUUID()
+	displayName := snap.GetCurrentDisplayName()
+	offset := cfg.GetDisplayOffset(displayUUID, displayName)
+
+	// Log display diagnostics
+	jsonlog.Log("pos.display", jsonlog.WithData(map[string]any{
+		"uuid": displayUUID,
+		"name": displayName,
+		"bounds": map[string]float64{
+			"x": snap.DisplayBounds.X, "y": snap.DisplayBounds.Y,
+			"w": snap.DisplayBounds.Width, "h": snap.DisplayBounds.Height,
+		},
+		"offset": map[string]float64{"x": offset.X, "y": offset.Y},
+	}))
+
+	if offset.X != 0 || offset.Y != 0 {
+		for i := range placements {
+			placements[i].Bounds.X += offset.X
+			placements[i].Bounds.Y += offset.Y
+		}
+	}
+
+	// Log focused window placement only
+	if snap.FocusedWindowID != 0 {
+		for _, p := range placements {
+			if p.WindowID == snap.FocusedWindowID {
+				jsonlog.Log("pos.apply", jsonlog.WithData(map[string]any{
+					"wid": p.WindowID,
+					"bounds": map[string]float64{
+						"x": p.Bounds.X, "y": p.Bounds.Y,
+						"w": p.Bounds.Width, "h": p.Bounds.Height,
+					},
+				}))
+				break
+			}
+		}
+	}
+
 	// 9. Apply placements via server
 	if err := ApplyPlacements(ctx, c, placements); err != nil {
 		return fmt.Errorf("failed to apply placements: %w", err)
@@ -174,7 +213,6 @@ func ApplyLayout(
 			jsonlog.Log("warn.border_config", jsonlog.WithData(map[string]any{"err": err.Error()}))
 		}
 
-		displayUUID := snap.GetCurrentDisplayUUID()
 		if displayUUID == "" {
 			jsonlog.Log("warn.display_uuid", jsonlog.WithMsg("could not determine display UUID"))
 		} else if err := sendCellAssignments(ctx, c, displayUUID, layout, assignment.Assignments, calculatedLayout.CellBounds, opts.BaseSpacing, opts.SettingsPadding); err != nil {
@@ -405,6 +443,45 @@ func ApplyCellLayout(
 		tabIndicatorInset,
 	)
 
+	// 9b. Apply per-display offset if configured
+	displayUUID := snap.GetCurrentDisplayUUID()
+	displayName := snap.GetCurrentDisplayName()
+	offset := cfg.GetDisplayOffset(displayUUID, displayName)
+
+	// Log display diagnostics
+	jsonlog.Log("pos.display", jsonlog.WithData(map[string]any{
+		"uuid": displayUUID,
+		"name": displayName,
+		"bounds": map[string]float64{
+			"x": snap.DisplayBounds.X, "y": snap.DisplayBounds.Y,
+			"w": snap.DisplayBounds.Width, "h": snap.DisplayBounds.Height,
+		},
+		"offset": map[string]float64{"x": offset.X, "y": offset.Y},
+	}))
+
+	if offset.X != 0 || offset.Y != 0 {
+		for i := range placements {
+			placements[i].Bounds.X += offset.X
+			placements[i].Bounds.Y += offset.Y
+		}
+	}
+
+	// Log focused window placement only
+	if snap.FocusedWindowID != 0 {
+		for _, p := range placements {
+			if p.WindowID == snap.FocusedWindowID {
+				jsonlog.Log("pos.apply", jsonlog.WithData(map[string]any{
+					"wid": p.WindowID,
+					"bounds": map[string]float64{
+						"x": p.Bounds.X, "y": p.Bounds.Y,
+						"w": p.Bounds.Width, "h": p.Bounds.Height,
+					},
+				}))
+				break
+			}
+		}
+	}
+
 	// 10. Apply placements
 	jsonlog.Log("layout.cell.placements", jsonlog.WithData(map[string]any{
 		"count": len(placements), "cellID": cellID,
@@ -419,7 +496,6 @@ func ApplyCellLayout(
 			jsonlog.Log("warn.border_config", jsonlog.WithData(map[string]any{"err": err.Error()}))
 		}
 
-		displayUUID := snap.GetCurrentDisplayUUID()
 		if displayUUID == "" {
 			jsonlog.Log("warn.display_uuid", jsonlog.WithMsg("could not determine display UUID"))
 		} else if err := sendCellAssignments(ctx, c, displayUUID, layout, singleCellAssignment,

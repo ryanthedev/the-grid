@@ -50,6 +50,7 @@ struct ServerConfig: Codable {
                 if let yaml = String(data: data, encoding: .utf8),
                    let dict = try Yams.load(yaml: yaml) as? [String: Any] {
                     merged = deepMerge(merged, dict)
+                    JSONLogger.shared.log("srv.cfg.merge", data: ["path": localPath, "layer": "local"])
                 }
             } catch {
                 JSONLogger.shared.log("srv.cfg.skip", msg: "failed to read local", data: ["error": "\(error)"])

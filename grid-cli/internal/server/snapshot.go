@@ -18,6 +18,7 @@ const MinTileableDimension = 100
 // DisplayInfo contains display metadata for cross-monitor navigation
 type DisplayInfo struct {
 	UUID           string
+	Name           string      // Display name (e.g., "Built-in Retina Display")
 	Frame          types.Rect  // Full screen bounds in global Quartz coordinates
 	VisibleFrame   types.Rect  // Excludes menu bar/dock
 	CurrentSpaceID interface{} // Can be int, float64, or bool (for overflow)
@@ -237,6 +238,22 @@ func (s *Snapshot) GetCurrentDisplayUUID() string {
 	return ""
 }
 
+// GetCurrentDisplayName returns the name of the display for the current space.
+// Returns empty string if not found.
+func (s *Snapshot) GetCurrentDisplayName() string {
+	for _, display := range s.AllDisplays {
+		spaceIDStr := fmt.Sprintf("%v", interfaceToInt(display.CurrentSpaceID))
+		if spaceIDStr == s.SpaceID {
+			return display.Name
+		}
+	}
+	// Fallback: return first display's name if only one display
+	if len(s.AllDisplays) == 1 {
+		return s.AllDisplays[0].Name
+	}
+	return ""
+}
+
 // Fetch calls dump ONCE and parses into a Snapshot.
 func Fetch(ctx context.Context, c *client.Client) (*Snapshot, error) {
 	raw, err := c.Dump(ctx)
@@ -409,6 +426,7 @@ func parseAllDisplays(raw map[string]interface{}) []DisplayInfo {
 
 		displayInfo := DisplayInfo{
 			UUID:           uuid,
+			Name:           toString(display["name"]),
 			CurrentSpaceID: display["currentSpaceID"], // Keep as interface{} for overflow handling
 			IsMain:         toBool(display["isMain"]),
 		}

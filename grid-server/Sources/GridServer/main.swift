@@ -112,10 +112,12 @@ struct GridServerCommand: ParsableCommand {
 
             // Initialize BFD hotkey daemon
             let bfdManager = BFDManager()
-            if bfdManager.start() {
-                jlog("bfd.ready")
-            } else {
-                jlog("warn.bfd.init", msg: "Failed to start BFD")
+            Task {
+                if await bfdManager.start() {
+                    jlog("bfd.ready")
+                } else {
+                    jlog("warn.bfd.init", msg: "Failed to start BFD")
+                }
             }
 
             // Start heartbeat if requested

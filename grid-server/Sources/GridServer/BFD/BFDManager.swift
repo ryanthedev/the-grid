@@ -23,21 +23,16 @@ class BFDManager {
     }
 
     /// Start the hotkey daemon
-    func start() -> Bool {
-        // Load config
+    func start() async -> Bool {
+        // Load config using XDG resolution (supports .local.yaml overlays)
         do {
-            let loadedConfig = try BFDConfig.load(from: configPath)
+            let loadedConfig = try await BFDConfig.load()
             self.config = loadedConfig
             self.executor = BFDExecutor(config: loadedConfig)
             keyHandler.updateConfig(loadedConfig)
-
-            Task {
-                JSONLogger.shared.log("bfd.init", data: ["path": configPath])
-            }
+            JSONLogger.shared.log("bfd.init", data: ["path": configPath])
         } catch {
-            Task {
-                JSONLogger.shared.log("bfd.err.config", data: ["err": "\(error)", "path": configPath])
-            }
+            JSONLogger.shared.log("bfd.err.config", data: ["err": "\(error)", "path": configPath])
             // Start without config - will be loaded on reload
             self.config = BFDConfig()
             self.executor = BFDExecutor(config: BFDConfig())
@@ -68,20 +63,15 @@ class BFDManager {
     }
 
     /// Reload configuration
-    func reload() {
+    func reload() async {
         do {
-            let loadedConfig = try BFDConfig.load(from: configPath)
+            let loadedConfig = try await BFDConfig.load()
             self.config = loadedConfig
             self.executor = BFDExecutor(config: loadedConfig)
             keyHandler.updateConfig(loadedConfig)
-
-            Task {
-                JSONLogger.shared.log("bfd.reload", data: ["path": configPath])
-            }
+            JSONLogger.shared.log("bfd.reload", data: ["path": configPath])
         } catch {
-            Task {
-                JSONLogger.shared.log("bfd.err.reload", data: ["err": "\(error)"])
-            }
+            JSONLogger.shared.log("bfd.err.reload", data: ["err": "\(error)"])
         }
     }
 
@@ -106,7 +96,9 @@ class BFDManager {
 
             // Schedule new reload with debounce
             let workItem = DispatchWorkItem { [weak self] in
-                self?.reload()
+                Task {
+                    await self?.reload()
+                }
             }
             self.pendingReload = workItem
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: workItem)

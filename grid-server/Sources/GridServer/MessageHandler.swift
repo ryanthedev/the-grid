@@ -241,6 +241,11 @@ class MessageHandler {
                         if await manipulator.moveWindow(context: context, to: targetPoint) {
                             context.frame = targetFrame
                             updatesApplied.append("position")
+                            JSONLogger.shared.log("pos.result", data: [
+                                "wid": windowID,
+                                "req": ["x": x, "y": y],
+                                "ok": true
+                            ])
                         } else {
                             errors.append("Failed to set window position")
                         }

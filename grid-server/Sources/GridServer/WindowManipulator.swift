@@ -143,6 +143,26 @@ class WindowManipulator {
             let currentSize = context.frame?.size ?? CGSize(width: 100, height: 100)
             let newFrame = CGRect(origin: point, size: currentSize)
             await context.stateManager.setWindowFrame(context.windowID, frame: newFrame)
+
+            // Verify actual position vs requested (detect drift from display scaling)
+            let driftThreshold: CGFloat = 2.0
+            var actualPosition: CFTypeRef?
+            if AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &actualPosition) == .success,
+               let axValue = actualPosition {
+                var actualPoint = CGPoint.zero
+                if AXValueGetValue(axValue as! AXValue, .cgPoint, &actualPoint) {
+                    let driftX = abs(actualPoint.x - point.x)
+                    let driftY = abs(actualPoint.y - point.y)
+                    if driftX > driftThreshold || driftY > driftThreshold {
+                        JSONLogger.shared.log("pos.drift", data: [
+                            "wid": context.windowID,
+                            "req": ["x": point.x, "y": point.y],
+                            "actual": ["x": actualPoint.x, "y": actualPoint.y],
+                            "drift": ["x": driftX, "y": driftY]
+                        ])
+                    }
+                }
+            }
         }
         return result
     }

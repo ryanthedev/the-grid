@@ -310,3 +310,22 @@ func containsString(slice []string, s string) bool {
 	}
 	return false
 }
+
+// GetDisplayOffset returns offset for a display (checks UUID first, then name).
+// Returns zero offset if no match found.
+func (c *Config) GetDisplayOffset(uuid, name string) DisplayOffset {
+	if c.Settings.DisplayOffsets == nil {
+		return DisplayOffset{}
+	}
+	if uuid != "" {
+		if offset, ok := c.Settings.DisplayOffsets[uuid]; ok {
+			return offset
+		}
+	}
+	if name != "" {
+		if offset, ok := c.Settings.DisplayOffsets[name]; ok {
+			return offset
+		}
+	}
+	return DisplayOffset{}
+}
