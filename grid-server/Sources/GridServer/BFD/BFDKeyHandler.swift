@@ -18,6 +18,9 @@ class BFDKeyHandler {
     private let lastExecutionTimeLock = NSLock()
     private var config: BFDConfig?
 
+    // Health check timer
+    private var healthCheckTimer: Timer?
+
     // Callbacks
     var onHotkeyTriggered: ((String, BFDHotkeyDef) -> Void)?
 
@@ -104,11 +107,36 @@ class BFDKeyHandler {
         isEnabled = true
         JSONLogger.shared.log("bfd.start", data: [:])
 
+        // [OBERDEBUG-004] Periodic health check every 30 seconds
+        // Must dispatch to main thread to ensure timer is added to main run loop
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.healthCheckTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+                guard let self = self, let tap = self.eventTap else {
+                    Task { JSONLogger.shared.log("bfd.dbg.health", data: ["tap": "nil"]) }
+                    return
+                }
+                let enabled = CGEvent.tapIsEnabled(tap: tap)
+                let portValid = CFMachPortIsValid(tap)
+                Task {
+                    JSONLogger.shared.log("bfd.dbg.health", data: [
+                        "enabled": enabled,
+                        "portValid": portValid
+                    ])
+                }
+            }
+            // Fire immediately for first check
+            self.healthCheckTimer?.fire()
+        }
+
         return true
     }
 
     /// Stop capturing keyboard events
     func stop() {
+        healthCheckTimer?.invalidate()
+        healthCheckTimer = nil
+
         guard let tap = eventTap else { return }
 
         CGEvent.tapEnable(tap: tap, enable: false)
@@ -128,10 +156,39 @@ class BFDKeyHandler {
     // MARK: - Private
 
     private func handleEvent(proxy: CGEventTapProxy, type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+        // [OBERDEBUG-001] Log non-keyDown events (keyDown is too noisy)
+        if type != .keyDown {
+            Task {
+                JSONLogger.shared.log("bfd.dbg.event", data: [
+                    "type": type.rawValue,
+                    "typeName": "\(type)"
+                ])
+            }
+        }
+
         // Re-enable tap if disabled by timeout
         if type == .tapDisabledByTimeout {
+            // [OBERDEBUG-002] Log timeout with tap state BEFORE re-enable
+            let wasEnabled = eventTap.map { CGEvent.tapIsEnabled(tap: $0) } ?? false
+            let wasValid = eventTap.map { CFMachPortIsValid($0) } ?? false
+            Task {
+                JSONLogger.shared.log("bfd.dbg.timeout", data: [
+                    "wasEnabled": wasEnabled,
+                    "wasValid": wasValid
+                ])
+            }
+
             if let tap = eventTap {
                 CGEvent.tapEnable(tap: tap, enable: true)
+                // [OBERDEBUG-003] Log tap state AFTER re-enable attempt
+                let nowEnabled = CGEvent.tapIsEnabled(tap: tap)
+                let nowValid = CFMachPortIsValid(tap)
+                Task {
+                    JSONLogger.shared.log("bfd.dbg.reenable", data: [
+                        "success": nowEnabled,
+                        "valid": nowValid
+                    ])
+                }
             }
             return Unmanaged.passRetained(event)
         }
@@ -184,6 +241,13 @@ class BFDKeyHandler {
             if configKey.keyCode == eventKey.keyCode &&
                bfdModifiersMatch(config: configKey.modifiers, event: eventKey.modifiers) {
                 if shouldExecute(key: configKey, def: def, isRepeat: isRepeat) {
+                    // [OBERDEBUG-005] Log hotkey execution
+                    Task {
+                        JSONLogger.shared.log("bfd.dbg.exec", data: [
+                            "spec": spec,
+                            "keyCode": keyCode
+                        ])
+                    }
                     onHotkeyTriggered?(spec, def)
                 }
                 return nil  // Consume event
