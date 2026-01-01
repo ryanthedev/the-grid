@@ -6,14 +6,22 @@ struct ServerConfig: Codable {
     /// Apps whose windows should not be tracked (by bundle ID or app name)
     var windowBlacklist: [String] = []
 
+    /// Path to CLI binary for invoking border sync on external focus changes
+    /// Defaults to "thegrid" (assumes in PATH)
+    var cliPath: String = "thegrid"
+
     enum CodingKeys: String, CodingKey {
         case windowBlacklist = "window_blacklist"
+        case cliPath = "cli_path"
     }
 
     init() {}
 
     private static func builtinDefaults() -> [String: Any] {
-        return ["window_blacklist": []]
+        return [
+            "window_blacklist": [],
+            "cli_path": "thegrid"
+        ]
     }
 
     /// Load config using XDG resolution with layered merging

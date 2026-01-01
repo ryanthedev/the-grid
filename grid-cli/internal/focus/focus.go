@@ -649,7 +649,7 @@ type MoveFocusOpts struct {
 
 // FindAdjacentDisplay finds the display adjacent to the current one in the given direction.
 // Returns nil if no display exists in that direction.
-// Uses ~5px tolerance for edge matching to handle minor alignment differences.
+// Uses ~5px tolerance for edge matching, with fallback to find "most in direction" display.
 func FindAdjacentDisplay(currentDisplayUUID string, direction types.Direction, allDisplays []server.DisplayInfo) *server.DisplayInfo {
 	const edgeTolerance = 5.0
 
@@ -667,12 +667,22 @@ func FindAdjacentDisplay(currentDisplayUUID string, direction types.Direction, a
 
 	// currentDisplay.Frame may be nil, use VisibleFrame as fallback
 	currentFrame := currentDisplay.VisibleFrame
+	frameSource := "visible"
 	if currentFrame == (types.Rect{}) && currentDisplay.Frame != (types.Rect{}) {
 		currentFrame = currentDisplay.Frame
+		frameSource = "frame"
 	}
 	if currentFrame == (types.Rect{}) {
 		return nil
 	}
+
+	// Track candidates for fallback: displays in the general direction even if edges don't align
+	type candidate struct {
+		display  *server.DisplayInfo
+		frame    types.Rect
+		edgeDist float64 // distance between edges (negative = overlapping, positive = gap)
+	}
+	var candidates []candidate
 
 	// Find adjacent displays based on direction
 	for i := range allDisplays {
@@ -689,40 +699,96 @@ func FindAdjacentDisplay(currentDisplayUUID string, direction types.Direction, a
 		}
 
 		// Check adjacency based on direction
-		isAdjacent := false
+		var edgeDist float64
+		var hasOverlap bool
+
 		switch direction {
 		case types.DirLeft:
 			// B is to the left: B.X + B.Width ≈ A.X AND vertical overlap
-			edgesAlign := math.Abs((candidateFrame.X+candidateFrame.Width)-currentFrame.X) <= edgeTolerance
-			verticalOverlap := overlapsVertically(currentFrame, candidateFrame)
-			isAdjacent = edgesAlign && verticalOverlap
+			edgeDist = currentFrame.X - (candidateFrame.X + candidateFrame.Width)
+			hasOverlap = overlapsVertically(currentFrame, candidateFrame)
+			// Must be to the left (candidate's right edge <= current's left edge)
+			if hasOverlap && candidateFrame.X+candidateFrame.Width <= currentFrame.X+edgeTolerance {
+				candidates = append(candidates, candidate{&allDisplays[i], candidateFrame, edgeDist})
+			}
 
 		case types.DirRight:
 			// B is to the right: A.X + A.Width ≈ B.X AND vertical overlap
-			edgesAlign := math.Abs((currentFrame.X+currentFrame.Width)-candidateFrame.X) <= edgeTolerance
-			verticalOverlap := overlapsVertically(currentFrame, candidateFrame)
-			isAdjacent = edgesAlign && verticalOverlap
+			edgeDist = candidateFrame.X - (currentFrame.X + currentFrame.Width)
+			hasOverlap = overlapsVertically(currentFrame, candidateFrame)
+			// Must be to the right (candidate's left edge >= current's right edge)
+			if hasOverlap && candidateFrame.X >= currentFrame.X+currentFrame.Width-edgeTolerance {
+				candidates = append(candidates, candidate{&allDisplays[i], candidateFrame, edgeDist})
+			}
 
 		case types.DirUp:
-			// B is above: B.Y + B.Height ≈ A.Y AND horizontal overlap
-			edgeDiff := math.Abs((candidateFrame.Y + candidateFrame.Height) - currentFrame.Y)
-			edgesAlign := edgeDiff <= edgeTolerance
-			horizontalOverlap := overlapsHorizontally(currentFrame, candidateFrame)
-			isAdjacent = edgesAlign && horizontalOverlap
+			// B is above: candidate.maxY touches current.minY (candidate at smaller Y values)
+			// In macOS coords where origin is main display bottom-left, smaller Y = visually higher
+			hasOverlap = overlapsHorizontally(currentFrame, candidateFrame)
+			candidateMaxY := candidateFrame.Y + candidateFrame.Height
+			currentMinY := currentFrame.Y
+
+			// Edge distance: how far candidate's bottom is from our top
+			// Positive = gap, 0 = touching, negative = overlapping
+			edgeDist = currentMinY - candidateMaxY
+
+			// Include if candidate is above us (its maxY <= our minY, with tolerance)
+			if hasOverlap && edgeDist >= -edgeTolerance {
+				candidates = append(candidates, candidate{&allDisplays[i], candidateFrame, edgeDist})
+			}
 
 		case types.DirDown:
-			// B is below: A.Y + A.Height ≈ B.Y AND horizontal overlap
-			edgesAlign := math.Abs((currentFrame.Y+currentFrame.Height)-candidateFrame.Y) <= edgeTolerance
-			horizontalOverlap := overlapsHorizontally(currentFrame, candidateFrame)
-			isAdjacent = edgesAlign && horizontalOverlap
-		}
+			// B is below: candidate.minY touches current.maxY (candidate at larger Y values)
+			// In macOS coords, larger Y = visually lower
+			hasOverlap = overlapsHorizontally(currentFrame, candidateFrame)
+			candidateMinY := candidateFrame.Y
+			currentMaxY := currentFrame.Y + currentFrame.Height
 
-		if isAdjacent {
-			return &allDisplays[i]
+			// Edge distance: how far candidate's top is from our bottom
+			edgeDist = candidateMinY - currentMaxY
+
+			// Include if candidate is below us (its minY >= our maxY, with tolerance)
+			if hasOverlap && edgeDist >= -edgeTolerance {
+				candidates = append(candidates, candidate{&allDisplays[i], candidateFrame, edgeDist})
+			}
 		}
 	}
 
-	return nil
+	// Log for debugging cross-display navigation issues
+	if len(candidates) > 0 || len(allDisplays) > 1 {
+		candidateInfo := make([]map[string]any, 0, len(candidates))
+		for _, c := range candidates {
+			candidateInfo = append(candidateInfo, map[string]any{
+				"uuid":     c.display.UUID[:8],
+				"frame":    fmt.Sprintf("(%.0f,%.0f,%.0f,%.0f)", c.frame.X, c.frame.Y, c.frame.Width, c.frame.Height),
+				"edgeDist": c.edgeDist,
+			})
+		}
+		jsonlog.Log("focus.adjacent_search", jsonlog.WithData(map[string]any{
+			"dir":         direction.String(),
+			"current":     currentDisplayUUID[:8],
+			"currentFrame": fmt.Sprintf("(%.0f,%.0f,%.0f,%.0f)", currentFrame.X, currentFrame.Y, currentFrame.Width, currentFrame.Height),
+			"frameSource": frameSource,
+			"candidates":  candidateInfo,
+		}))
+	}
+
+	if len(candidates) == 0 {
+		return nil
+	}
+
+	// Sort candidates by edge distance (prefer closest/touching edges)
+	sort.Slice(candidates, func(i, j int) bool {
+		distI := math.Abs(candidates[i].edgeDist)
+		distJ := math.Abs(candidates[j].edgeDist)
+		if distI != distJ {
+			return distI < distJ
+		}
+		// Tie-breaker: sort by UUID for deterministic ordering
+		return candidates[i].display.UUID < candidates[j].display.UUID
+	})
+
+	return candidates[0].display
 }
 
 // MatchVisualPosition maps a position from source display to equivalent position on target display.

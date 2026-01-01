@@ -42,8 +42,35 @@ actor StateManager: StateEventHandler {
     // Window blacklist (runtime Set for O(1) lookup)
     private var windowBlacklist: Set<String> = []
 
+    // CLI focus tracking: windowID -> timestamp when CLI focused it
+    // Used to distinguish CLI-initiated focus from external (click) focus
+    private var cliFocusTimestamps: [UInt32: Date] = [:]
+
+    // How long to consider a focus as "CLI-initiated" (prevents loop)
+    private let cliFocusWindow: TimeInterval = 0.5
+
+    // CLI path for invoking border sync on external focus
+    private var cliPath: String = "thegrid"
+
+    // Debug: sequence counter for CLI invocations to track ordering
+    private var cliInvokeSequence: Int = 0
+
     func setBorderEvents(_ events: BorderEvents) {
         self.borderEvents = events
+    }
+
+    /// Check if a window was recently focused via CLI (within cliFocusWindow)
+    /// Used to distinguish CLI-initiated focus from external (click) focus
+    /// Also cleans up stale entries to prevent memory leaks
+    private func wasRecentlyCliFocused(_ windowID: UInt32) -> Bool {
+        // Clean up stale entries opportunistically (prevents unbounded growth)
+        let cutoff = Date().addingTimeInterval(-cliFocusWindow * 2)
+        cliFocusTimestamps = cliFocusTimestamps.filter { $0.value > cutoff }
+
+        guard let timestamp = cliFocusTimestamps[windowID] else {
+            return false
+        }
+        return Date().timeIntervalSince(timestamp) < cliFocusWindow
     }
 
     // MARK: - Initialization
@@ -62,11 +89,15 @@ actor StateManager: StateEventHandler {
     // MARK: - Public Interface
 
     func start() async {
-        // Load server config for window blacklist FIRST (before state refresh)
+        // Load server config for window blacklist and CLI path FIRST (before state refresh)
         do {
             let config = try await ServerConfig.load()
             windowBlacklist = Set(config.windowBlacklist)
-            JSONLogger.shared.log("srv.cfg.loaded", data: ["blacklist_count": windowBlacklist.count])
+            cliPath = config.cliPath
+            JSONLogger.shared.log("srv.cfg.loaded", data: [
+                "blacklist_count": windowBlacklist.count,
+                "cli_path": cliPath
+            ])
         } catch {
             JSONLogger.shared.log("srv.cfg.error", msg: "failed to load server config", data: ["error": "\(error)"])
         }
@@ -653,10 +684,20 @@ actor StateManager: StateEventHandler {
         updateWindowSpaces(windowID)
     }
 
+    /// Mark a window as about to be focused by CLI (call BEFORE focusWindow)
+    /// This prevents the border sync loop when AX observer fires
+    func markCLIFocusIntent(_ windowID: UInt32) {
+        cliFocusTimestamps[windowID] = Date()
+    }
+
     /// Public method to set focused window (for MessageHandler focus commands)
     /// This updates state immediately rather than waiting for AX callback which may not fire
     /// Note: Does NOT emit focusChanged event - observers will handle that when they fire
     func setFocusedWindow(_ windowID: UInt32) {
+        // Clean up old timestamps (older than cliFocusWindow)
+        let cutoff = Date().addingTimeInterval(-cliFocusWindow * 2)
+        cliFocusTimestamps = cliFocusTimestamps.filter { $0.value > cutoff }
+
         state.metadata.focusedWindowID = windowID
 
         // Update active display
@@ -1386,8 +1427,67 @@ var windows: [String: WindowState] = [:]
 
         JSONLogger.shared.log("win.focus", data: logData)
 
+        // Check if this was a CLI-initiated focus (skip CLI invocation to prevent loop)
+        if wasRecentlyCliFocused(windowID) {
+            JSONLogger.shared.log("win.focus.cli", data: ["wid": windowID, "skip": true])
+        } else {
+            // External focus (click, etc.) - invoke CLI to sync borders
+            invokeCLIForBorderSync(windowID: windowID)
+        }
+
         if let stateSpan = stateSpan {
             await stateSpan.end()
+        }
+    }
+
+    /// Invoke CLI to sync borders for external focus changes
+    /// Fire-and-forget: spawns process asynchronously, logs result, no retries
+    private func invokeCLIForBorderSync(windowID: UInt32) {
+        let path = cliPath
+        let seq = cliInvokeSequence
+        cliInvokeSequence += 1
+        let spawnTime = Date()
+
+        // Log when process is SPAWNED (not just when it completes)
+        JSONLogger.shared.log("cli.invoke.spawn", data: [
+            "wid": windowID,
+            "seq": seq
+        ])
+
+        Task.detached {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            process.arguments = [path, "event", "focus", String(windowID)]
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+
+            do {
+                try process.run()
+                process.waitUntilExit()
+
+                let status = process.terminationStatus
+                let durationMs = Int(Date().timeIntervalSince(spawnTime) * 1000)
+                if status == 0 {
+                    JSONLogger.shared.log("cli.invoke.ok", data: [
+                        "wid": windowID,
+                        "seq": seq,
+                        "dur_ms": durationMs
+                    ])
+                } else {
+                    JSONLogger.shared.log("cli.invoke.err", data: [
+                        "wid": windowID,
+                        "seq": seq,
+                        "dur_ms": durationMs,
+                        "status": status
+                    ])
+                }
+            } catch {
+                JSONLogger.shared.log("cli.invoke.err", data: [
+                    "wid": windowID,
+                    "seq": seq,
+                    "error": "\(error)"
+                ])
+            }
         }
     }
 

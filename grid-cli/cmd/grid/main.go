@@ -1625,6 +1625,78 @@ var stateResetCmd = &cobra.Command{
 	},
 }
 
+// MARK: - Event Commands (Server→CLI callbacks)
+
+// eventCmd is the parent command for server-initiated events
+var eventCmd = &cobra.Command{
+	Use:   "event",
+	Short: "Handle server-initiated events",
+	Long:  `Commands invoked by the server for event handling (e.g., border sync on click focus).`,
+}
+
+// eventFocusCmd handles external focus events from the server
+var eventFocusCmd = &cobra.Command{
+	Use:   "focus <windowID>",
+	Short: "Sync borders for external focus change",
+	Long:  `Called by the server when a window is focused externally (click, etc.).
+Syncs border focus if the window is tileable.`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		windowID, err := strconv.ParseUint(args[0], 10, 32)
+		if err != nil {
+			return fmt.Errorf("invalid window ID: %w", err)
+		}
+
+		ctx := context.Background()
+
+		cfg, err := gridConfig.LoadConfig("")
+		if err != nil {
+			jsonlog.Log("event.focus.err", jsonlog.WithMsg("config load failed"), jsonlog.WithData(map[string]any{"err": err.Error()}))
+			return nil // Don't fail - borders are non-critical
+		}
+
+		// Skip if borders not enabled
+		if cfg.Borders == nil || !cfg.Borders.GetEnabled() {
+			return nil
+		}
+
+		c := client.NewClient(socketPath, timeout)
+		defer c.Close()
+
+		// Get current snapshot
+		snap, err := gridServer.Fetch(ctx, c)
+		if err != nil {
+			jsonlog.Log("event.focus.err", jsonlog.WithMsg("snapshot failed"), jsonlog.WithData(map[string]any{"err": err.Error()}))
+			return nil
+		}
+
+		// Find window in snapshot
+		window := snap.GetWindowByID(uint32(windowID))
+		if window == nil {
+			jsonlog.Log("event.focus.skip", jsonlog.WithMsg("window not found"), jsonlog.WithData(map[string]any{"wid": windowID}))
+			return nil
+		}
+
+		// Check if tileable (has role AXWindow and standard subrole)
+		if !window.IsTileable() {
+			jsonlog.Log("event.focus.skip", jsonlog.WithMsg("not tileable"), jsonlog.WithData(map[string]any{"wid": windowID, "role": window.Role}))
+			return nil
+		}
+
+		// Get display UUID for this window
+		displayUUID := window.DisplayUUID
+		if displayUUID == "" {
+			displayUUID = snap.GetCurrentDisplayUUID()
+		}
+
+		// Sync border focus
+		gridReconcile.SyncBorderFocus(ctx, c, displayUUID, uint32(windowID), cfg)
+		jsonlog.Log("event.focus.ok", jsonlog.WithData(map[string]any{"wid": windowID, "display": displayUUID}))
+
+		return nil
+	},
+}
+
 // MARK: - the-grid Focus Commands
 
 // focusCmd is the parent command for focus subcommands
@@ -2812,6 +2884,10 @@ func init() {
 	rootCmd.AddCommand(gridStateCmd)
 	gridStateCmd.AddCommand(stateShowCmd)
 	gridStateCmd.AddCommand(stateResetCmd)
+
+	// Add event commands (server→CLI callbacks)
+	rootCmd.AddCommand(eventCmd)
+	eventCmd.AddCommand(eventFocusCmd)
 
 	// Add the-grid focus commands
 	rootCmd.AddCommand(focusCmd)

@@ -624,6 +624,10 @@ class MessageHandler {
                     from: .manual(reason: "cli")
                 )
 
+                // Mark CLI focus intent BEFORE focus operation to prevent border sync loop
+                // AX observer may fire immediately when window is focused
+                await StateManager.shared.markCLIFocusIntent(wid)
+
                 let state = await StateManager.shared.getState()
                 let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
 
@@ -851,12 +855,27 @@ completion(Response(id: request.id, result: AnyCodable(["success": true])))
                 return
             }
 
-            // Update border focus (server looks up display from cached assignments)
-            if let borderManager = self.simpleBorderManager {
-                borderManager.updateFocus(newFocusedWindow: wid)
-            }
+            Task {
+                // Check for stale focus update: if the server's current focused window
+                // doesn't match the requested window, this is a stale request from a
+                // delayed CLI process - ignore it to prevent race conditions
+                let state = await StateManager.shared.getState()
+                if let currentFocused = state.metadata.focusedWindowID, currentFocused != wid {
+                    JSONLogger.shared.log("bdr.stale", data: [
+                        "req": wid,
+                        "cur": currentFocused
+                    ])
+                    completion(Response(id: request.id, result: AnyCodable(["success": true, "windowId": wid, "stale": true])))
+                    return
+                }
 
-            completion(Response(id: request.id, result: AnyCodable(["success": true, "windowId": wid])))
+                // Update border focus (server looks up display from cached assignments)
+                if let borderManager = self.simpleBorderManager {
+                    borderManager.updateFocus(newFocusedWindow: wid)
+                }
+
+                completion(Response(id: request.id, result: AnyCodable(["success": true, "windowId": wid])))
+            }
         }
 
         // Query border info for a window
