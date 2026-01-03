@@ -1451,7 +1451,8 @@ var windows: [String: WindowState] = [:]
         // Log when process is SPAWNED (not just when it completes)
         JSONLogger.shared.log("cli.invoke.spawn", data: [
             "wid": windowID,
-            "seq": seq
+            "seq": seq,
+            "path": path
         ])
 
         Task.detached {
@@ -1478,13 +1479,15 @@ var windows: [String: WindowState] = [:]
                         "wid": windowID,
                         "seq": seq,
                         "dur_ms": durationMs,
-                        "status": status
+                        "status": status,
+                        "path": path
                     ])
                 }
             } catch {
                 JSONLogger.shared.log("cli.invoke.err", data: [
                     "wid": windowID,
                     "seq": seq,
+                    "path": path,
                     "error": "\(error)"
                 ])
             }
