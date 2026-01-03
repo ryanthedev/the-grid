@@ -58,6 +58,15 @@ class SimpleBorderManager {
     /// windowID → BorderWindow
     private var inactiveBorders: [UInt32: BorderWindow] = [:]
 
+    /// Free pool of reusable border windows (avoids expensive SLSNewWindow calls)
+    private var freePool: [BorderWindow] = []
+
+    /// Cap for lazy cleanup. 10 is sufficient because:
+    /// - Typical cell has 1-4 windows
+    /// - Users rarely have more than 10 windows visible across all cells
+    /// - Each BorderWindow is ~1KB (overlay window handle + style state)
+    private let maxFreePoolSize = 10
+
     init(connectionID: Int32) {
         self.connectionID = connectionID
 
@@ -79,9 +88,13 @@ class SimpleBorderManager {
             // Capture borders before async dispatch - don't block with sync
             let active = activeBorder
             let inactive = Array(inactiveBorders.values)
+            let pooled = freePool
             DispatchQueue.main.async {
                 active?.destroy()
                 for border in inactive {
+                    border.destroy()
+                }
+                for border in pooled {
                     border.destroy()
                 }
             }
@@ -210,21 +223,17 @@ class SimpleBorderManager {
         if cellID != previousCellID {
             // DIFFERENT CELL: rebuild entire pool
             rebuildBorderPool(source: "updateFocus-cellChange")
-            Task {
-                JSONLogger.shared.log("bdr.cell_change", data: [
-                    "cell": cellID,
-                    "wid": newFocusedWindow
-                ])
-            }
+            JSONLogger.shared.log("bdr.cell_change", data: [
+                "cell": cellID,
+                "wid": newFocusedWindow
+            ])
         } else if newFocusedWindow != previousFocusedWindow {
             // SAME CELL, DIFFERENT WINDOW: reassign roles
             reassignBorders(previousFocused: previousFocusedWindow)
-            Task {
-                JSONLogger.shared.log("bdr.focus_change", data: [
-                    "cell": cellID,
-                    "wid": newFocusedWindow
-                ])
-            }
+            JSONLogger.shared.log("bdr.focus_change", data: [
+                "cell": cellID,
+                "wid": newFocusedWindow
+            ])
         }
         // Same window refocused - no action needed
     }
@@ -260,29 +269,27 @@ class SimpleBorderManager {
     }
 
     private func handleWindowDestroyedImpl(windowID: UInt32) {
-        // Remove from inactive pool
+        // Remove from inactive pool - release to free pool for reuse
         if let border = inactiveBorders.removeValue(forKey: windowID) {
-            border.destroy()
-            Task {
-                JSONLogger.shared.log("bdr.destroy", data: [
-                    "wid": windowID,
-                    "role": "inactive"
-                ])
-            }
+            releaseBorder(border)
+            JSONLogger.shared.log("bdr.release", data: [
+                "wid": windowID,
+                "role": "inactive",
+                "reason": "window_destroyed"
+            ])
         }
 
-        // If it was the active border, destroy it
+        // If it was the active border, release it to pool
         // Focus will shift and trigger handleFocusChanged
         if focusedWindowID == windowID, let border = activeBorder {
-            border.destroy()
+            releaseBorder(border)
             activeBorder = nil
             focusedWindowID = nil
-            Task {
-                JSONLogger.shared.log("bdr.destroy", data: [
-                    "wid": windowID,
-                    "role": "active"
-                ])
-            }
+            JSONLogger.shared.log("bdr.release", data: [
+                "wid": windowID,
+                "role": "active",
+                "reason": "window_destroyed"
+            ])
         }
 
         // Clean up from all display caches to prevent unbounded growth
@@ -313,9 +320,7 @@ class SimpleBorderManager {
             // Keep focusedWindowID - focus will shift and trigger new state
         }
 
-        Task {
-            JSONLogger.shared.log("bdr.display_disconnect", data: ["uuid": displayUUID])
-        }
+        JSONLogger.shared.log("bdr.display_disconnect", data: ["uuid": displayUUID])
     }
 
     // MARK: - Private Helpers
@@ -421,6 +426,12 @@ class SimpleBorderManager {
             border.destroy()
         }
         inactiveBorders.removeAll()
+
+        // Destroy free pool
+        for border in freePool {
+            border.destroy()
+        }
+        freePool.removeAll()
     }
 
     /// Reassign borders when focus changes within the same cell (no destroy/recreate)
@@ -431,32 +442,30 @@ class SimpleBorderManager {
         // For tabbed cells: retarget the existing active border (no demote/promote)
         if isActiveCellTabbed {
             if let border = activeBorder {
-                border.retarget(to: newFocused)
-                Task {
+                if border.retarget(to: newFocused) {
                     JSONLogger.shared.log("bdr.retarget_focus", data: [
                         "prev": previousFocused ?? 0,
                         "new": newFocused
                     ])
-                }
-            } else {
-                // Edge case: no active border exists, create one
-                // First verify window is still in active cell
-                guard let cellID = activeCellID,
-                      let displayUUID = currentDisplayUUID,
-                      let assignments = cellAssignmentsPerDisplay[displayUUID],
-                      assignments[newFocused] == cellID else {
-                    Task {
-                        JSONLogger.shared.log("err.bdr.invalid_tabbed", data: ["wid": newFocused])
-                    }
                     return
                 }
-                if let border = createBorder(for: newFocused) {
-                    updateBorderStyle(border, style: config.activeStyle, isActive: true)
-                    activeBorder = border
-                    Task {
-                        JSONLogger.shared.log("warn.bdr.missing_tabbed", data: ["wid": newFocused])
-                    }
-                }
+                // Retarget failed - border is invalid, destroy and fall through to create new
+                border.destroy()
+                activeBorder = nil
+            }
+
+            // No active border or retarget failed - create new one
+            guard let cellID = activeCellID,
+                  let displayUUID = currentDisplayUUID,
+                  let assignments = cellAssignmentsPerDisplay[displayUUID],
+                  assignments[newFocused] == cellID else {
+                JSONLogger.shared.log("err.bdr.invalid_tabbed", data: ["wid": newFocused])
+                return
+            }
+            if let (border, _) = acquireBorder(for: newFocused) {
+                updateBorderStyle(border, style: config.activeStyle, isActive: true)
+                activeBorder = border
+                JSONLogger.shared.log("bdr.create_tabbed", data: ["wid": newFocused])
             }
             return
         }
@@ -467,9 +476,7 @@ class SimpleBorderManager {
             updateBorderStyle(border, style: config.inactiveStyle)
             inactiveBorders[prevWindow] = border
             activeBorder = nil
-            Task {
-                JSONLogger.shared.log("bdr.demote", data: ["wid": prevWindow])
-            }
+            JSONLogger.shared.log("bdr.demote", data: ["wid": prevWindow])
         }
 
         // Step 2: Promote border for newly focused window
@@ -477,26 +484,31 @@ class SimpleBorderManager {
             // Border exists in inactive pool - promote it
             updateBorderStyle(border, style: config.activeStyle, isActive: true)
             activeBorder = border
-            Task {
-                JSONLogger.shared.log("bdr.promote", data: ["wid": newFocused])
-            }
+            JSONLogger.shared.log("bdr.promote", data: ["wid": newFocused])
         } else {
             // No border for this window (edge case: window appeared and auto-focused
             // before CLI sent assignments, then assignments arrived)
-            if let border = createBorder(for: newFocused) {
+            if let (border, _) = acquireBorder(for: newFocused) {
                 updateBorderStyle(border, style: config.activeStyle, isActive: true)
                 activeBorder = border
-                Task {
-                    JSONLogger.shared.log("warn.bdr.missing", data: ["wid": newFocused])
-                }
+                JSONLogger.shared.log("warn.bdr.missing", data: ["wid": newFocused])
             }
         }
+
+        validatePoolInvariants()
     }
 
     /// Rebuild the entire border pool (called on cell change or layout apply)
     private func rebuildBorderPool(source: String = "unknown") {
-        // Destroy all existing borders
-        destroyAllBorders()
+        // Release existing borders TO POOL (not destroy)
+        if let border = activeBorder {
+            releaseBorder(border)
+            activeBorder = nil
+        }
+        for (_, border) in inactiveBorders {
+            releaseBorder(border)
+        }
+        inactiveBorders.removeAll()
 
         // Get windows in active cell
         guard let cellID = activeCellID,
@@ -511,9 +523,12 @@ class SimpleBorderManager {
         // Track if cell is tabbed (multiple windows stacked)
         isActiveCellTabbed = windowsInCell.count > 1
 
-        // Create borders for windows in cell
-        // For tabbed cells: only create border for focused window (retarget on focus change)
-        // For non-tabbed cells: create borders for all windows (active + inactive)
+        var acquiredFromPool = 0
+        var newlyCreated = 0
+
+        // Acquire borders for windows in cell (from pool first)
+        // For tabbed cells: only acquire border for focused window (retarget on focus change)
+        // For non-tabbed cells: acquire borders for all windows (active + inactive)
         for windowID in windowsInCell {
             let isFocused = (windowID == focusedWindowID)
 
@@ -522,7 +537,13 @@ class SimpleBorderManager {
                 continue
             }
 
-            guard let border = createBorder(for: windowID) else { continue }
+            guard let (border, fromPool) = acquireBorder(for: windowID) else { continue }
+
+            if fromPool {
+                acquiredFromPool += 1
+            } else {
+                newlyCreated += 1
+            }
 
             let style = isFocused ? config.activeStyle : config.inactiveStyle
             updateBorderStyle(border, style: style, isActive: isFocused)
@@ -532,33 +553,71 @@ class SimpleBorderManager {
             } else {
                 inactiveBorders[windowID] = border
             }
+        }
 
-            Task {
-                JSONLogger.shared.log("bdr.create", data: [
-                    "wid": windowID,
-                    "role": isFocused ? "active" : "inactive"
-                ])
+        JSONLogger.shared.log("bdr.rebuild", data: [
+            "source": source,
+            "cell": cellID,
+            "count": windowsInCell.count,
+            "fromPool": acquiredFromPool,
+            "created": newlyCreated,
+            "poolSize": freePool.count
+        ])
+
+        validatePoolInvariants()
+    }
+
+    /// Acquire a border for a window (from pool or create new)
+    /// Returns a tuple: (border, fromPool) for metrics tracking
+    private func acquireBorder(for windowID: UInt32) -> (border: BorderWindow, fromPool: Bool)? {
+        // 1. Try to get from free pool (avoids SLSNewWindow)
+        if let border = freePool.popLast() {
+            guard border.retarget(to: windowID) else {
+                // Retarget failed - border is now invalid, destroy and retry
+                // Note: retarget() failure leaves border in undefined state
+                border.destroy()
+                // Recursion bounded by maxFreePoolSize (max 10 calls)
+                return acquireBorder(for: windowID)
             }
+            return (border, fromPool: true)
         }
 
-        Task {
-            JSONLogger.shared.log("bdr.rebuild", data: [
-                "source": source,
-                "cell": cellID,
-                "count": windowsInCell.count,
-                "focused": focusedWindowID ?? 0,
-                "tabbed": isActiveCellTabbed
-            ])
+        // 2. Pool empty - create new (expensive)
+        guard let border = createBorder(for: windowID) else {
+            return nil
         }
+        return (border, fromPool: false)
+    }
+
+    /// Release a border to the free pool (or destroy if pool is full)
+    private func releaseBorder(_ border: BorderWindow) {
+        border.hide(reason: "released_to_pool")
+
+        // Add to pool if under cap
+        if freePool.count < maxFreePoolSize {
+            freePool.append(border)
+        } else {
+            // Pool full - destroy excess
+            border.destroy()
+        }
+    }
+
+    /// Debug assertion to catch pool invariant violations
+    private func validatePoolInvariants() {
+        #if DEBUG
+        let activeSet = activeBorder.map { [$0] } ?? []
+        let inactiveSet = Array(inactiveBorders.values)
+        let all = activeSet + inactiveSet + freePool
+        assert(Set(all.map { ObjectIdentifier($0) }).count == all.count,
+               "Border appears in multiple collections")
+        #endif
     }
 
     /// Create a border for a window
     private func createBorder(for windowID: UInt32) -> BorderWindow? {
         let border = BorderWindow(connectionID: connectionID, targetWindowID: windowID)
         guard border.create() else {
-            Task {
-                JSONLogger.shared.log("err.bdr.create", data: ["wid": windowID])
-            }
+            JSONLogger.shared.log("err.bdr.create", data: ["wid": windowID])
             return nil
         }
 
@@ -566,9 +625,7 @@ class SimpleBorderManager {
         var frame = CGRect.zero
         guard SLSGetWindowBounds(connectionID, windowID, &frame) == .success else {
             border.destroy()
-            Task {
-                JSONLogger.shared.log("err.bdr.bounds", data: ["wid": windowID])
-            }
+            JSONLogger.shared.log("err.bdr.bounds", data: ["wid": windowID])
             return nil
         }
 
@@ -594,9 +651,7 @@ class SimpleBorderManager {
             updateBorderStyle(border, style: config.inactiveStyle, isActive: false)
         }
 
-        Task {
-            JSONLogger.shared.log("bdr.config_change", data: [:])
-        }
+        JSONLogger.shared.log("bdr.config_change", data: [:])
     }
 
     /// Update a border's style

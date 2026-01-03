@@ -431,29 +431,28 @@ class BorderWindow {
         performUpdate(frame)
     }
 
-    /// Re-target this border to track a different window
-    /// Used for tabbed cells where we keep one border and switch targets on focus change
-    func retarget(to newTargetID: UInt32) {
+    /// Re-target this border to track a different window.
+    /// Used for tabbed cells where we keep one border and switch targets on focus change.
+    /// - Returns: true on success, false on failure (border must be destroyed on failure)
+    func retarget(to newTargetID: UInt32) -> Bool {
         // Capture windowID upfront to avoid race with concurrent destroy()
         let currentWindowID = windowID
-        guard currentWindowID != 0 else { return }
-        guard newTargetID != targetWindowID else { return }
+        guard currentWindowID != 0 else { return false }
+        guard newTargetID != targetWindowID else { return true }  // Already targeting
 
         let oldTarget = targetWindowID
-        targetWindowID = newTargetID
+        targetWindowID = newTargetID  // Updated before validation - see doc comment
 
         // Get new target's frame and update position
         var frame = CGRect.zero
         guard SLSGetWindowBounds(connectionID, newTargetID, &frame) == .success else {
-            Task {
-                JSONLogger.shared.log("err.bdr.retarget", data: [
-                    "wid": currentWindowID,
-                    "oldTarget": oldTarget,
-                    "newTarget": newTargetID,
-                    "reason": "no_bounds"
-                ])
-            }
-            return
+            JSONLogger.shared.log("err.bdr.retarget", data: [
+                "wid": currentWindowID,
+                "oldTarget": oldTarget,
+                "newTarget": newTargetID,
+                "reason": "no_bounds"
+            ])
+            return false
         }
 
         // Update position to new target
@@ -467,13 +466,12 @@ class BorderWindow {
             _ = SLSOrderWindow(connectionID, currentWindowID, -1, newTargetID)
         }
 
-        Task {
-            JSONLogger.shared.log("bdr.retarget", data: [
-                "wid": currentWindowID,
-                "oldTarget": oldTarget,
-                "newTarget": newTargetID
-            ])
-        }
+        JSONLogger.shared.log("bdr.retarget", data: [
+            "wid": currentWindowID,
+            "oldTarget": oldTarget,
+            "newTarget": newTargetID
+        ])
+        return true
     }
 
     /// Update the border's style and visibility
