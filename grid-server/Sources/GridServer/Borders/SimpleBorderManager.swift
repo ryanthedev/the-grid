@@ -570,19 +570,18 @@ class SimpleBorderManager {
     /// Acquire a border for a window (from pool or create new)
     /// Returns a tuple: (border, fromPool) for metrics tracking
     private func acquireBorder(for windowID: UInt32) -> (border: BorderWindow, fromPool: Bool)? {
-        // 1. Try to get from free pool (avoids SLSNewWindow)
-        if let border = freePool.popLast() {
-            guard border.retarget(to: windowID) else {
-                // Retarget failed - border is now invalid, destroy and retry
-                // Note: retarget() failure leaves border in undefined state
-                border.destroy()
-                // Recursion bounded by maxFreePoolSize (max 10 calls)
-                return acquireBorder(for: windowID)
+        // 1. Drain pool looking for usable border (avoids SLSNewWindow)
+        while let border = freePool.popLast() {
+            if border.retarget(to: windowID) {
+                return (border, fromPool: true)
             }
-            return (border, fromPool: true)
+            // Retarget failed (target window gone?) - destroy and try next
+            // Note: border is still valid after retarget failure, but we destroy
+            // anyway since repeated failures suggest the border may be problematic
+            border.destroy()
         }
 
-        // 2. Pool empty - create new (expensive)
+        // 2. Pool exhausted - create new (expensive)
         guard let border = createBorder(for: windowID) else {
             return nil
         }

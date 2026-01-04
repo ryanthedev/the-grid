@@ -164,31 +164,33 @@ private func rebuildBorderPool(source: String) {
 
 Modify `retarget(to:)` to return `Bool` for success/failure.
 
-**Important:** On failure, the border is left in an undefined state (`targetWindowID` may be
-updated but bounds/space not). Callers MUST destroy the border on failure - do not attempt reuse.
+**Exception Safety:** On failure, the border remains in its original valid state (validate-before-mutate).
+Callers can safely retry with a different target or return the border to the pool.
 
 ```swift
 /// Re-target this border to track a different window.
-/// - Returns: true on success, false on failure (border must be destroyed)
+/// - Returns: true on success, false if target window invalid (border remains in valid state)
 func retarget(to newTargetID: UInt32) -> Bool {
     let currentWindowID = windowID
     guard currentWindowID != 0 else { return false }
     guard newTargetID != targetWindowID else { return true }  // Already targeting
 
-    let oldTarget = targetWindowID
-    targetWindowID = newTargetID  // Updated before validation - see note above
-
-    // Get new target's frame
+    // Validate new target BEFORE any mutation (exception safety)
     var frame = CGRect.zero
     guard SLSGetWindowBounds(connectionID, newTargetID, &frame) == .success else {
         JSONLogger.shared.log("err.bdr.retarget", data: [
             "wid": currentWindowID,
-            "oldTarget": oldTarget,
+            "oldTarget": targetWindowID,
             "newTarget": newTargetID,
             "reason": "no_bounds"
         ])
+        // Border remains in valid state - caller can retry or return to pool
         return false
     }
+
+    // Validation passed - now safe to mutate
+    let oldTarget = targetWindowID
+    targetWindowID = newTargetID
 
     update(targetFrame: frame)
     moveToTargetSpace()

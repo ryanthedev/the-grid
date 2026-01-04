@@ -433,27 +433,29 @@ class BorderWindow {
 
     /// Re-target this border to track a different window.
     /// Used for tabbed cells where we keep one border and switch targets on focus change.
-    /// - Returns: true on success, false on failure (border must be destroyed on failure)
+    /// - Returns: true on success, false if target window invalid (border remains in valid state)
     func retarget(to newTargetID: UInt32) -> Bool {
         // Capture windowID upfront to avoid race with concurrent destroy()
         let currentWindowID = windowID
         guard currentWindowID != 0 else { return false }
         guard newTargetID != targetWindowID else { return true }  // Already targeting
 
-        let oldTarget = targetWindowID
-        targetWindowID = newTargetID  // Updated before validation - see doc comment
-
-        // Get new target's frame and update position
+        // Validate new target BEFORE any mutation (exception safety)
         var frame = CGRect.zero
         guard SLSGetWindowBounds(connectionID, newTargetID, &frame) == .success else {
             JSONLogger.shared.log("err.bdr.retarget", data: [
                 "wid": currentWindowID,
-                "oldTarget": oldTarget,
+                "oldTarget": targetWindowID,
                 "newTarget": newTargetID,
                 "reason": "no_bounds"
             ])
+            // Border remains in valid state - caller can retry or return to pool
             return false
         }
+
+        // Validation passed - now safe to mutate
+        let oldTarget = targetWindowID
+        targetWindowID = newTargetID
 
         // Update position to new target
         update(targetFrame: frame)
