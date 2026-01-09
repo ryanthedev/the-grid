@@ -1244,58 +1244,6 @@ var layoutApplyCmd = &cobra.Command{
 	},
 }
 
-// layoutCycleCmd cycles to the next layout
-var layoutCycleCmd = &cobra.Command{
-	Use:   "cycle",
-	Short: "Cycle to the next layout",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx := context.Background()
-
-		cfg, err := gridConfig.LoadConfig("")
-		if err != nil {
-			return fmt.Errorf("failed to load config: %w", err)
-		}
-
-		runtimeState, err := gridState.LoadState()
-		if err != nil {
-			return fmt.Errorf("failed to load state: %w", err)
-		}
-
-		c := client.NewClient(socketPath, timeout)
-		defer c.Close()
-
-
-		// 1. Fetch server state ONCE
-		snap, err := gridServer.Fetch(ctx, c)
-		if err != nil {
-			return fmt.Errorf("failed to fetch server state: %w", err)
-		}
-
-		// 2. Reconcile local state with server
-		if err := gridReconcile.Sync(ctx, c, snap, runtimeState, cfg); err != nil {
-			return fmt.Errorf("failed to reconcile state: %w", err)
-		}
-
-		// 3. Cycle layout
-		opts := gridLayout.DefaultApplyOptions()
-		opts.BaseSpacing = cfg.GetBaseSpacing()
-		if settingsPadding, err := cfg.GetSettingsPadding(); err == nil {
-			opts.SettingsPadding = settingsPadding
-		}
-		if settingsWindowSpacing, err := cfg.GetSettingsWindowSpacing(); err == nil {
-			opts.SettingsWindowSpacing = settingsWindowSpacing
-		}
-
-		newLayout, err := gridLayout.CycleLayout(ctx, c, snap, cfg, runtimeState, opts)
-		if err != nil {
-			return fmt.Errorf("failed to cycle layout: %w", err)
-		}
-
-		successColor.Printf("✓ Cycled to layout: %s\n", newLayout)
-		return nil
-	},
-}
-
 // layoutCurrentCmd shows the current layout
 var layoutCurrentCmd = &cobra.Command{
 	Use:   "current",
@@ -1339,12 +1287,27 @@ var layoutCurrentCmd = &cobra.Command{
 	},
 }
 
-// layoutReapplyCmd reapplies the current layout
-var layoutReapplyCmd = &cobra.Command{
-	Use:   "reapply",
-	Short: "Reapply the current layout",
+// layoutRefreshCmd refreshes layouts on all displays
+var layoutRefreshCmd = &cobra.Command{
+	Use:   "refresh",
+	Short: "Refresh layouts on all displays",
+	Long: `Refreshes layouts on all connected displays.
+
+For each display, this command:
+- Fetches the current window state
+- Reconciles state (removes dead windows)
+- Reapplies the existing layout if one was active, or applies the default layout
+
+This is useful when windows have moved or displays have changed.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := context.Background()
+
+		// Log command invocation
+		displayFilter, _ := cmd.Flags().GetString("display")
+		jsonlog.Log("cli.invoke", jsonlog.WithData(map[string]any{
+			"cmd":     "layout refresh",
+			"display": displayFilter,
+		}))
 
 		cfg, err := gridConfig.LoadConfig("")
 		if err != nil {
@@ -1359,21 +1322,8 @@ var layoutReapplyCmd = &cobra.Command{
 		c := client.NewClient(socketPath, timeout)
 		defer c.Close()
 
-
-		// 1. Fetch server state ONCE
-		snap, err := gridServer.Fetch(ctx, c)
-		if err != nil {
-			return fmt.Errorf("failed to fetch server state: %w", err)
-		}
-
-		// 2. Reconcile local state with server
-		if err := gridReconcile.Sync(ctx, c, snap, runtimeState, cfg); err != nil {
-			return fmt.Errorf("failed to reconcile state: %w", err)
-		}
-
-		// 3. Reapply layout
+		// Build options
 		opts := gridLayout.DefaultApplyOptions()
-		opts.Strategy = gridTypes.AssignPreserve
 		opts.BaseSpacing = cfg.GetBaseSpacing()
 		if settingsPadding, err := cfg.GetSettingsPadding(); err == nil {
 			opts.SettingsPadding = settingsPadding
@@ -1381,12 +1331,26 @@ var layoutReapplyCmd = &cobra.Command{
 		if settingsWindowSpacing, err := cfg.GetSettingsWindowSpacing(); err == nil {
 			opts.SettingsWindowSpacing = settingsWindowSpacing
 		}
-
-		if err := gridLayout.ReapplyLayout(ctx, c, snap, cfg, runtimeState, opts); err != nil {
-			return fmt.Errorf("failed to reapply layout: %w", err)
+		if displayFilter != "" {
+			opts.DisplayFilter = displayFilter
 		}
 
-		successColor.Println("✓ Layout reapplied")
+		// Refresh all displays (or filtered display)
+		errors := gridLayout.RefreshAllDisplays(ctx, c, cfg, runtimeState, opts)
+
+		// Report results
+		if len(errors) > 0 {
+			for _, e := range errors {
+				errorColor.Printf("✗ %s (%s): %v\n", e.DisplayName, e.DisplayUUID, e.Err)
+			}
+			return fmt.Errorf("refresh failed on %d display(s)", len(errors))
+		}
+
+		if displayFilter != "" {
+			successColor.Printf("✓ Refreshed layout on display %s\n", displayFilter)
+		} else {
+			successColor.Println("✓ Refreshed layouts on all displays")
+		}
 		return nil
 	},
 }
@@ -1749,7 +1713,7 @@ func focusDirectionHelper(direction gridTypes.Direction, wrapAround bool, extend
 
 	// Warn if focus didn't actually change (likely stale state)
 	if windowID == previousFocusedID && previousFocusedID != 0 {
-		warnColor.Printf("⚠ Focus unchanged - runtime state may be stale. Try: thegrid layout reapply\n")
+		warnColor.Printf("⚠ Focus unchanged - runtime state may be stale. Try: thegrid layout refresh\n")
 	}
 
 	// Sync borders after focus change (cell assignments may have changed)
@@ -2864,14 +2828,13 @@ func init() {
 	gridLayoutCmd.AddCommand(layoutListCmd)
 	gridLayoutCmd.AddCommand(layoutShowCmd)
 	gridLayoutCmd.AddCommand(layoutApplyCmd)
-	gridLayoutCmd.AddCommand(layoutCycleCmd)
 	gridLayoutCmd.AddCommand(layoutCurrentCmd)
-	gridLayoutCmd.AddCommand(layoutReapplyCmd)
+	gridLayoutCmd.AddCommand(layoutRefreshCmd)
 
 	// Add layout command flags
 	layoutApplyCmd.Flags().String("space", "", "Space ID to apply layout to")
-	layoutCycleCmd.Flags().String("space", "", "Space ID to cycle layout for")
 	layoutCurrentCmd.Flags().String("space", "", "Space ID to check")
+	layoutRefreshCmd.Flags().String("display", "", "Only refresh specific display (UUID)")
 
 	// Add the-grid config commands
 	rootCmd.AddCommand(gridConfigCmd)

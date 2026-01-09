@@ -19,6 +19,7 @@ type ApplyLayoutOptions struct {
 	SettingsPadding       *types.Padding           // Global default padding from settings
 	SettingsWindowSpacing *types.PaddingValue      // Global default window spacing from settings
 	SendBorders           bool                     // Whether to send border config/assignments
+	DisplayFilter         string                   // If non-empty, only refresh this display UUID
 }
 
 // DefaultApplyOptions returns sensible default options
@@ -307,37 +308,6 @@ func findLayoutIndex(cfg *config.Config, layoutID string) int {
 	return 0
 }
 
-// CycleLayout cycles to the next layout for the current space.
-func CycleLayout(
-	ctx context.Context,
-	c *client.Client,
-	snap *server.Snapshot,
-	cfg *config.Config,
-	rs *state.RuntimeState,
-	opts ApplyLayoutOptions,
-) (string, error) {
-	// Get available layouts for this space
-	availableLayouts := cfg.GetLayoutIDs()
-	if spaceConfig := cfg.GetSpaceConfig(snap.SpaceID); spaceConfig != nil && len(spaceConfig.Layouts) > 0 {
-		availableLayouts = spaceConfig.Layouts
-	}
-
-	if len(availableLayouts) == 0 {
-		return "", fmt.Errorf("no layouts available")
-	}
-
-	// Cycle in state
-	spaceState := rs.GetSpace(snap.SpaceID)
-	newLayoutID := spaceState.CycleLayout(availableLayouts)
-
-	// Apply the new layout
-	if err := ApplyLayout(ctx, c, snap, cfg, rs, newLayoutID, opts); err != nil {
-		return "", err
-	}
-
-	return newLayoutID, nil
-}
-
 // ReapplyLayout reapplies the current layout.
 func ReapplyLayout(
 	ctx context.Context,
@@ -536,4 +506,213 @@ func sendCellAssignments(ctx context.Context, c *client.Client, displayUUID stri
 	}
 
 	return c.SendCellAssignments(ctx, displayUUID, cellAssignments)
+}
+
+// reconcileSpace removes windows from state that no longer exist in the snapshot.
+// This is a simplified inline version of reconcile.Sync to avoid import cycles
+// (reconcile imports layout, so layout cannot import reconcile).
+// Note: This does not sync focus state like the full reconcile.Sync does,
+// which is acceptable here since ApplyLayout will update focus state anyway.
+func reconcileSpace(snap *server.Snapshot, rs *state.RuntimeState) error {
+	spaceState := rs.GetSpaceReadOnly(snap.SpaceID)
+	if spaceState == nil {
+		return nil
+	}
+
+	changed := false
+	for cellID, cell := range spaceState.Cells {
+		var valid []uint32
+		for _, wid := range cell.Windows {
+			if snap.WindowIDs[wid] {
+				valid = append(valid, wid)
+			}
+		}
+
+		if len(valid) != len(cell.Windows) {
+			// Windows were removed, update cell
+			mutableCell := rs.GetSpace(snap.SpaceID).GetCell(cellID)
+			mutableCell.Windows = valid
+			mutableCell.SplitRatios = reconcileEqualRatios(len(valid))
+			changed = true
+		}
+	}
+
+	if changed {
+		rs.MarkUpdated()
+		if err := rs.Save(); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// reconcileEqualRatios returns equal split ratios for n windows.
+func reconcileEqualRatios(n int) []float64 {
+	if n <= 0 {
+		return nil
+	}
+	ratio := 1.0 / float64(n)
+	ratios := make([]float64, n)
+	for i := range ratios {
+		ratios[i] = ratio
+	}
+	return ratios
+}
+
+// DisplayError represents an error that occurred while refreshing a specific display.
+type DisplayError struct {
+	DisplayUUID string
+	DisplayName string
+	Err         error
+}
+
+func (e DisplayError) Error() string {
+	return fmt.Sprintf("display %s (%s): %v", e.DisplayName, e.DisplayUUID, e.Err)
+}
+
+// RefreshAllDisplays refreshes layouts on all connected displays.
+// This is the core algorithm for the "layout refresh" feature.
+// It iterates through all displays, fetches a snapshot for each display's space,
+// reconciles state, and applies the appropriate layout.
+// Returns a slice of DisplayErrors for any displays that failed (best-effort approach).
+func RefreshAllDisplays(
+	ctx context.Context,
+	c *client.Client,
+	cfg *config.Config,
+	rs *state.RuntimeState,
+	opts ApplyLayoutOptions,
+) []DisplayError {
+	// Start span for the entire refresh operation
+	span := jsonlog.StartSpan("layout.refresh_all", jsonlog.WithData(map[string]any{}))
+	defer span.End()
+
+	// Fetch initial snapshot to get all displays
+	initialSnap, err := server.Fetch(ctx, c)
+	if err != nil {
+		return []DisplayError{{
+			DisplayUUID: "",
+			DisplayName: "unknown",
+			Err:         fmt.Errorf("failed to fetch initial snapshot: %w", err),
+		}}
+	}
+
+	jsonlog.Log("layout.refresh_all.displays", jsonlog.WithData(map[string]any{
+		"count": len(initialSnap.AllDisplays),
+	}))
+
+	var errors []DisplayError
+	processedCount := 0
+
+	for _, display := range initialSnap.AllDisplays {
+		// Skip if DisplayFilter is set and doesn't match this display
+		if opts.DisplayFilter != "" && display.UUID != opts.DisplayFilter {
+			continue
+		}
+		processedCount++
+		// Convert CurrentSpaceID to string
+		spaceID := ""
+		switch v := display.CurrentSpaceID.(type) {
+		case float64:
+			spaceID = fmt.Sprintf("%.0f", v)
+		case int:
+			spaceID = fmt.Sprintf("%d", v)
+		case int64:
+			spaceID = fmt.Sprintf("%d", v)
+		case string:
+			spaceID = v
+		}
+
+		if spaceID == "" {
+			errors = append(errors, DisplayError{
+				DisplayUUID: display.UUID,
+				DisplayName: display.Name,
+				Err:         fmt.Errorf("could not determine space ID"),
+			})
+			continue
+		}
+
+		jsonlog.Log("layout.refresh_all.display", jsonlog.WithData(map[string]any{
+			"uuid":    display.UUID,
+			"name":    display.Name,
+			"spaceID": spaceID,
+		}))
+
+		// 1. Fetch snapshot for this display's space
+		snap, err := server.FetchForSpace(ctx, c, spaceID)
+		if err != nil {
+			errors = append(errors, DisplayError{
+				DisplayUUID: display.UUID,
+				DisplayName: display.Name,
+				Err:         fmt.Errorf("failed to fetch snapshot for space %s: %w", spaceID, err),
+			})
+			continue
+		}
+
+		// 2. Reconcile state (clean up dead windows)
+		// Inline reconcile logic to avoid import cycle with reconcile package
+		if err := reconcileSpace(snap, rs); err != nil {
+			errors = append(errors, DisplayError{
+				DisplayUUID: display.UUID,
+				DisplayName: display.Name,
+				Err:         fmt.Errorf("failed to reconcile state: %w", err),
+			})
+			continue
+		}
+
+		// 3. Check if space has existing state
+		spaceState := rs.GetSpaceReadOnly(spaceID)
+
+		var layoutID string
+		displayOpts := opts
+
+		if spaceState != nil && spaceState.CurrentLayoutID != "" {
+			// Existing state: reapply with preserved ratios
+			layoutID = spaceState.CurrentLayoutID
+			displayOpts.Strategy = types.AssignPreserve
+			jsonlog.Log("layout.refresh_all.reapply", jsonlog.WithData(map[string]any{
+				"spaceID":  spaceID,
+				"layoutID": layoutID,
+			}))
+		} else {
+			// No state: apply default layout
+			layoutID = "default"
+			// Check if "default" layout exists
+			if _, err := cfg.GetLayout("default"); err != nil {
+				// Fall back to built-in "single-tabbed"
+				layoutID = "single-tabbed"
+			}
+			displayOpts.Strategy = types.AssignPosition
+			jsonlog.Log("layout.refresh_all.fresh", jsonlog.WithData(map[string]any{
+				"spaceID":  spaceID,
+				"layoutID": layoutID,
+			}))
+		}
+
+		// 4. Apply layout
+		if err := ApplyLayout(ctx, c, snap, cfg, rs, layoutID, displayOpts); err != nil {
+			errors = append(errors, DisplayError{
+				DisplayUUID: display.UUID,
+				DisplayName: display.Name,
+				Err:         fmt.Errorf("failed to apply layout %s: %w", layoutID, err),
+			})
+			continue
+		}
+	}
+
+	// If a display filter was specified but no displays matched, return an error
+	if opts.DisplayFilter != "" && processedCount == 0 {
+		errors = append(errors, DisplayError{
+			DisplayUUID: opts.DisplayFilter,
+			DisplayName: "unknown",
+			Err:         fmt.Errorf("no display found with UUID %q", opts.DisplayFilter),
+		})
+	}
+
+	jsonlog.Log("layout.refresh_all.done", jsonlog.WithData(map[string]any{
+		"processed": processedCount,
+		"errors":    len(errors),
+	}))
+
+	return errors
 }
