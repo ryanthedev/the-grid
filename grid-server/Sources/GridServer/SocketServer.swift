@@ -57,8 +57,8 @@ class SocketServer {
             throw SocketError.bindFailed(errno)
         }
 
-        // Listen
-        guard listen(sock, 5) >= 0 else {
+        // Listen (backlog=128 to handle parallel client connections)
+        guard listen(sock, 128) >= 0 else {
             throw SocketError.listenFailed(errno)
         }
 

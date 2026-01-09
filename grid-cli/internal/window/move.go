@@ -9,6 +9,7 @@ import (
 	"github.com/ryanthedev/grid-cli/internal/focus"
 	"github.com/ryanthedev/grid-cli/internal/jsonlog"
 	"github.com/ryanthedev/grid-cli/internal/layout"
+	"github.com/ryanthedev/grid-cli/internal/reconcile"
 	"github.com/ryanthedev/grid-cli/internal/server"
 	"github.com/ryanthedev/grid-cli/internal/state"
 	"github.com/ryanthedev/grid-cli/internal/types"
@@ -72,7 +73,7 @@ func MoveWindow(
 	if err != nil {
 		return nil, fmt.Errorf("layout not found: %w", err)
 	}
-	calculated := layout.CalculateLayout(layoutDef, snap.DisplayBounds, 0)
+	calculated := layout.CalculateLayoutWithRatios(layoutDef, snap.DisplayBounds, 0, spaceState.ColumnRatios, spaceState.RowRatios)
 
 	// Find adjacent cells on current display
 	adjacentMap := layout.GetAdjacentCells(sourceCell, calculated.CellBounds)
@@ -136,7 +137,7 @@ func moveWindowToCell(
 	if err != nil {
 		return nil, fmt.Errorf("layout not found: %w", err)
 	}
-	calculated := layout.CalculateLayout(layoutDef, snap.DisplayBounds, 0)
+	calculated := layout.CalculateLayoutWithRatios(layoutDef, snap.DisplayBounds, 0, mutableSpace.ColumnRatios, mutableSpace.RowRatios)
 
 	// Build assignments for just the affected cells
 	affectedAssignments := make(map[string][]uint32)
@@ -338,7 +339,7 @@ func moveWindowCrossDisplay(
 		if targetDisplayBounds == (types.Rect{}) {
 			targetDisplayBounds = adjacentDisplay.Frame
 		}
-		calculated := layout.CalculateLayout(layoutDef, targetDisplayBounds, 0)
+		calculated := layout.CalculateLayoutWithRatios(layoutDef, targetDisplayBounds, 0, targetSpace.ColumnRatios, targetSpace.RowRatios)
 
 		// Build assignments for just the target cell
 		affectedAssignments := make(map[string][]uint32)
@@ -409,7 +410,7 @@ func moveWindowCrossDisplay(
 
 	// Also rebalance the source cell on the source display
 	if sourceLayoutDef, err := cfg.GetLayout(sourceSpace.CurrentLayoutID); err == nil {
-		sourceCalculated := layout.CalculateLayout(sourceLayoutDef, currentDisplayBounds, 0)
+		sourceCalculated := layout.CalculateLayoutWithRatios(sourceLayoutDef, currentDisplayBounds, 0, sourceSpace.ColumnRatios, sourceSpace.RowRatios)
 
 		sourceAssignments := make(map[string][]uint32)
 		if cellState := sourceSpace.Cells[currentCell]; cellState != nil {
@@ -482,6 +483,9 @@ func moveWindowCrossDisplay(
 	if err := focus.FocusWindow(ctx, c, windowID); err != nil {
 		jsonlog.Log("warn.focus_moved", jsonlog.WithData(map[string]any{"wid": windowID, "err": err.Error()}))
 	}
+
+	// Sync borders with focus atomically (prevents race conditions with rapid commands)
+	reconcile.SyncBordersWithFocus(ctx, c, *adjacentDisplay, targetSpaceIDStr, windowID, rs, cfg)
 
 	// Save state
 	rs.MarkUpdated()

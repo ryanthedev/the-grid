@@ -44,6 +44,14 @@ func (c *Client) Close() error {
 	return c.conn.Close()
 }
 
+// Clone creates a new client with the same configuration but a fresh connection.
+// Useful for parallel operations that need independent connections.
+func (c *Client) Clone() *Client {
+	return &Client{
+		conn: NewConnection(c.conn.socketPath, c.conn.timeout),
+	}
+}
+
 // request is a helper to send a request and get the response
 func (c *Client) request(ctx context.Context, method string, params map[string]interface{}) (*models.Response, error) {
 	if !c.conn.IsConnected() {

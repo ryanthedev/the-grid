@@ -6,6 +6,7 @@ import (
 
 	"github.com/ryanthedev/grid-cli/internal/client"
 	"github.com/ryanthedev/grid-cli/internal/config"
+	"github.com/ryanthedev/grid-cli/internal/jsonlog"
 	"github.com/ryanthedev/grid-cli/internal/server"
 	"github.com/ryanthedev/grid-cli/internal/state"
 	"github.com/ryanthedev/grid-cli/internal/types"
@@ -276,9 +277,12 @@ func AdjustCellBoundary(
 		mutableSpace.RowRatios = newRatios
 	}
 	rs.MarkUpdated()
+	saveSpan := jsonlog.StartSpan("resize.state_save_1")
 	if err := rs.Save(); err != nil {
+		saveSpan.EndWithError(err.Error())
 		return fmt.Errorf("failed to save state: %w", err)
 	}
+	saveSpan.End()
 
 	// Reapply layout
 	opts := DefaultApplyOptions()

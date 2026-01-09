@@ -3,6 +3,8 @@ package layout
 import (
 	"context"
 	"fmt"
+	"sync"
+	"sync/atomic"
 
 	"github.com/ryanthedev/grid-cli/internal/client"
 	"github.com/ryanthedev/grid-cli/internal/config"
@@ -45,6 +47,9 @@ func ApplyLayout(
 	layoutID string,
 	opts ApplyLayoutOptions,
 ) error {
+	applySpan := jsonlog.StartSpan("layout.apply_inner", jsonlog.WithData(map[string]any{"lid": layoutID}))
+	defer applySpan.End()
+
 	// 1. Get layout from config
 	layout, err := cfg.GetLayout(layoutID)
 	if err != nil {
@@ -63,12 +68,16 @@ func ApplyLayout(
 	}
 
 	// 3. Calculate grid layout using snapshot's display bounds (gap=0, padding handles spacing)
+	calcSpan := jsonlog.StartSpan("layout.calc")
 	calculatedLayout := CalculateLayoutWithRatios(layout, snap.DisplayBounds, 0, columnRatios, rowRatios)
+	calcSpan.End()
 
 	// 4. Filter and convert windows (exclude transient windows)
+	filterSpan := jsonlog.StartSpan("layout.filter")
 	exclusions := cfg.GetWindowExclusions()
 	tileableWindows := snap.FilterTileable(exclusions)
 	windows := convertWindows(tileableWindows)
+	filterSpan.End()
 
 	// 4. Get previous assignments from local state
 	spaceState := rs.GetSpace(snap.SpaceID)
@@ -78,6 +87,7 @@ func ApplyLayout(
 	}
 
 	// 5. Assign windows to cells
+	assignSpan := jsonlog.StartSpan("layout.assign")
 	assignment := AssignWindows(
 		windows,
 		layout,
@@ -86,6 +96,7 @@ func ApplyLayout(
 		previousAssignments,
 		opts.Strategy,
 	)
+	assignSpan.End()
 
 	// 6. Get cell modes and ratios from config/state
 	cellModes := make(map[string]types.StackMode)
@@ -139,6 +150,7 @@ func ApplyLayout(
 	}
 
 	// 8. Calculate window placements
+	placementCalcSpan := jsonlog.StartSpan("layout.placement_calc")
 	placements := CalculateAllWindowPlacements(
 		calculatedLayout,
 		layout,
@@ -152,6 +164,7 @@ func ApplyLayout(
 		focusedIndices,
 		tabIndicatorInset,
 	)
+	placementCalcSpan.End()
 
 	// 8b. Apply per-display offset if configured
 	displayUUID := snap.GetCurrentDisplayUUID()
@@ -209,6 +222,7 @@ func ApplyLayout(
 
 	// 9b. Send border config and cell assignments to server
 	if opts.SendBorders {
+		borderSpan := jsonlog.StartSpan("borders.sync")
 		if err := sendBorderConfig(ctx, c, cfg); err != nil {
 			// Log but don't fail - borders are optional
 			jsonlog.Log("warn.border_config", jsonlog.WithData(map[string]any{"err": err.Error()}))
@@ -220,6 +234,7 @@ func ApplyLayout(
 			// Log but don't fail - borders are optional
 			jsonlog.Log("warn.cell_assignments", jsonlog.WithData(map[string]any{"err": err.Error()}))
 		}
+		borderSpan.End()
 	}
 
 	// 10. Update local state
@@ -235,39 +250,61 @@ func ApplyLayout(
 	rs.MarkUpdated()
 
 	// 11. Save state
+	saveSpan := jsonlog.StartSpan("state.save")
 	if err := rs.Save(); err != nil {
+		saveSpan.EndWithError(err.Error())
 		return fmt.Errorf("failed to save state: %w", err)
 	}
+	saveSpan.End()
 
 	return nil
 }
 
-// ApplyPlacements sends window placements to the server.
-// Continues on individual errors to apply as many windows as possible.
+// ApplyPlacements sends window placements to the server in parallel.
+// Each goroutine uses its own client connection to avoid response mixing.
 func ApplyPlacements(ctx context.Context, c *client.Client, placements []types.WindowPlacement) error {
-	successCount := 0
-	errorCount := 0
-
-	for _, p := range placements {
-		updates := map[string]interface{}{
-			"x":      p.Bounds.X,
-			"y":      p.Bounds.Y,
-			"width":  p.Bounds.Width,
-			"height": p.Bounds.Height,
-		}
-
-		_, err := c.UpdateWindow(ctx, int(p.WindowID), updates)
-		if err != nil {
-			fmt.Printf("Warning: failed to update window %d: %v\n", p.WindowID, err)
-			errorCount++
-		} else {
-			successCount++
-		}
+	if len(placements) == 0 {
+		return nil
 	}
 
+	span := jsonlog.StartSpan("placements.apply", jsonlog.WithData(map[string]any{"count": len(placements)}))
+	defer span.End()
+
+	var successCount atomic.Int32
+	var errorCount atomic.Int32
+	var wg sync.WaitGroup
+
+	for _, p := range placements {
+		wg.Add(1)
+		go func(p types.WindowPlacement) {
+			defer wg.Done()
+
+			// Clone client for thread-safe parallel requests
+			pc := c.Clone()
+			defer pc.Close()
+
+			updates := map[string]interface{}{
+				"x":      p.Bounds.X,
+				"y":      p.Bounds.Y,
+				"width":  p.Bounds.Width,
+				"height": p.Bounds.Height,
+			}
+
+			_, err := pc.UpdateWindow(ctx, int(p.WindowID), updates)
+			if err != nil {
+				fmt.Printf("Warning: failed to update window %d: %v\n", p.WindowID, err)
+				errorCount.Add(1)
+			} else {
+				successCount.Add(1)
+			}
+		}(p)
+	}
+
+	wg.Wait()
+
 	// Only fail if NO windows could be updated
-	if successCount == 0 && errorCount > 0 {
-		return fmt.Errorf("failed to update all %d windows", errorCount)
+	if successCount.Load() == 0 && errorCount.Load() > 0 {
+		return fmt.Errorf("failed to update all %d windows", errorCount.Load())
 	}
 
 	return nil
@@ -317,6 +354,9 @@ func ReapplyLayout(
 	rs *state.RuntimeState,
 	opts ApplyLayoutOptions,
 ) error {
+	reapplySpan := jsonlog.StartSpan("layout.reapply")
+	defer reapplySpan.End()
+
 	spaceState := rs.GetSpaceReadOnly(snap.SpaceID)
 	if spaceState == nil || spaceState.CurrentLayoutID == "" {
 		return fmt.Errorf("no layout currently applied")
@@ -505,7 +545,7 @@ func sendCellAssignments(ctx context.Context, c *client.Client, displayUUID stri
 		return nil // No assignments to send
 	}
 
-	return c.SendCellAssignments(ctx, displayUUID, cellAssignments)
+	return c.SendCellAssignments(ctx, displayUUID, cellAssignments, nil)
 }
 
 // reconcileSpace removes windows from state that no longer exist in the snapshot.

@@ -160,9 +160,11 @@ type CellRect struct {
 	Height float64 `json:"height"`
 }
 
-// SendCellAssignments sends window-to-cell mappings to the server
-// displayUUID is required for per-display caching in the server
-func (c *Client) SendCellAssignments(ctx context.Context, displayUUID string, assignments []CellAssignment) error {
+// SendCellAssignments sends window-to-cell mappings to the server.
+// displayUUID is required for per-display caching in the server.
+// focusedWindowID is optional - if provided, server updates focus atomically with assignments.
+// This prevents race conditions when commands execute rapidly.
+func (c *Client) SendCellAssignments(ctx context.Context, displayUUID string, assignments []CellAssignment, focusedWindowID *uint32) error {
 	// Build assignment map (windowID as string -> cellID)
 	assignmentMap := make(map[string]string)
 	for _, a := range assignments {
@@ -172,6 +174,11 @@ func (c *Client) SendCellAssignments(ctx context.Context, displayUUID string, as
 	params := map[string]interface{}{
 		"assignments": assignmentMap,
 		"displayUUID": displayUUID,
+	}
+
+	// Include focused window for atomic update (prevents race conditions)
+	if focusedWindowID != nil {
+		params["focusedWindowId"] = *focusedWindowID
 	}
 
 	resp, err := c.request(ctx, "borders.setCellAssignments", params)

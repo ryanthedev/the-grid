@@ -20,6 +20,7 @@ import (
 	gridLayout "github.com/ryanthedev/grid-cli/internal/layout"
 	"github.com/ryanthedev/grid-cli/internal/models"
 	gridMouse "github.com/ryanthedev/grid-cli/internal/mouse"
+	"github.com/ryanthedev/grid-cli/internal/mutex"
 	"github.com/ryanthedev/grid-cli/internal/output"
 	gridReconcile "github.com/ryanthedev/grid-cli/internal/reconcile"
 	gridServer "github.com/ryanthedev/grid-cli/internal/server"
@@ -59,6 +60,9 @@ var (
 
 	// Command span for tracing
 	currentSpan *jsonlog.Span
+
+	// CLI mutex for serializing commands (prevents race conditions with rapid hotkeys)
+	cliMutex *mutex.CLIMutex
 )
 
 // rootCmd is the base command
@@ -87,8 +91,28 @@ and move windows between spaces and displays.`,
 
 		// Register span with tracing context
 		tracing.SetCurrentSpan(currentSpan)
+
+		// Acquire CLI mutex (serialize commands to prevent race conditions)
+		// Skip for read-only/help commands that don't modify state
+		if !shouldSkipMutex(cmd) {
+			stateDir := filepath.Join(xdg.StateHome(), "thegrid")
+			cliMutex = mutex.New(stateDir)
+			if err := cliMutex.Lock(mutex.DefaultTimeout); err != nil {
+				// Log the error but don't fail - better to risk a race than block completely
+				jsonlog.Log("mutex.error", jsonlog.WithData(map[string]any{
+					"err": err.Error(),
+					"cmd": cmd.CommandPath(),
+				}))
+			}
+		}
 	},
 	PersistentPostRun: func(cmd *cobra.Command, args []string) {
+		// Release CLI mutex
+		if cliMutex != nil {
+			cliMutex.Unlock()
+			cliMutex = nil
+		}
+
 		if currentSpan != nil {
 			currentSpan.End()
 			currentSpan = nil
@@ -1845,7 +1869,12 @@ func moveWindowDirectionHelper(direction gridTypes.Direction, wrapAround bool, e
 	}
 
 	// Sync borders after window move (cell assignments changed)
-	gridReconcile.SyncBorders(ctx, c, snap, runtimeState, cfg)
+	// For cross-display moves, border sync is handled inside moveWindowCrossDisplay()
+	// with the correct target display UUID. Only sync here for same-display moves.
+	if !result.CrossDisplay {
+		gridReconcile.SyncBorders(ctx, c, snap, runtimeState, cfg)
+		gridReconcile.SyncBorderFocus(ctx, c, snap.GetCurrentDisplayUUID(), result.WindowID, cfg)
+	}
 
 	// Optionally warp mouse to moved window
 	if mouse && result.WindowID != 0 {
@@ -1894,6 +1923,9 @@ func swapWindowDirectionHelper(direction gridTypes.Direction, mouse bool) error 
 
 	// Sync borders after window swap (cell assignments changed)
 	gridReconcile.SyncBorders(ctx, c, snap, runtimeState, cfg)
+
+	// Sync border focus so the border appears on the focused window
+	gridReconcile.SyncBorderFocus(ctx, c, snap.GetCurrentDisplayUUID(), snap.FocusedWindowID, cfg)
 
 	// Optionally warp mouse to focused window
 	if mouse && snap.FocusedWindowID != 0 {
@@ -2462,39 +2494,57 @@ Examples:
 			delta = parsed
 		}
 
+		// DEBUG: timing instrumentation
+		configSpan := jsonlog.StartSpan("resize.load_config")
 		cfg, err := gridConfig.LoadConfig("")
 		if err != nil {
+			configSpan.EndWithError(err.Error())
 			return fmt.Errorf("failed to load config: %w", err)
 		}
+		configSpan.End()
 
+		stateSpan := jsonlog.StartSpan("resize.load_state")
 		runtimeState, err := gridState.LoadState()
 		if err != nil {
+			stateSpan.EndWithError(err.Error())
 			return fmt.Errorf("failed to load state: %w", err)
 		}
+		stateSpan.End()
 
 		c := client.NewClient(socketPath, timeout)
 		defer c.Close()
 
 		// 1. Fetch server state ONCE
+		fetchSpan := jsonlog.StartSpan("resize.fetch")
 		snap, err := gridServer.Fetch(ctx, c)
 		if err != nil {
+			fetchSpan.EndWithError(err.Error())
 			return fmt.Errorf("failed to fetch server state: %w", err)
 		}
+		fetchSpan.End()
 
 		// 2. Reconcile local state with server
+		reconcileSpan := jsonlog.StartSpan("resize.reconcile")
 		if err := gridReconcile.Sync(ctx, c, snap, runtimeState, cfg); err != nil {
+			reconcileSpan.EndWithError(err.Error())
 			return fmt.Errorf("failed to reconcile state: %w", err)
 		}
+		reconcileSpan.End()
 
 		// 3. Adjust cell boundary
+		adjustSpan := jsonlog.StartSpan("resize.adjust")
 		if err := gridLayout.AdjustCellBoundary(ctx, c, snap, cfg, runtimeState, direction, delta); err != nil {
+			adjustSpan.EndWithError(err.Error())
 			return fmt.Errorf("failed to resize cell: %w", err)
 		}
+		adjustSpan.End()
 
 		successColor.Printf("✓ Resized cell (%s)\n", direction)
 
 		// Sync borders after cell resize (bounds changed)
+		borderSpan := jsonlog.StartSpan("resize.sync_borders_2")
 		gridReconcile.SyncBorders(ctx, c, snap, runtimeState, cfg)
+		borderSpan.End()
 
 		return nil
 	},
@@ -2995,6 +3045,48 @@ func main() {
 }
 
 // Helper functions
+
+// shouldSkipMutex returns true for commands that don't need serialization.
+// These are typically read-only commands or help/completion commands.
+func shouldSkipMutex(cmd *cobra.Command) bool {
+	cmdPath := cmd.CommandPath()
+
+	// Commands that don't modify state and don't need serialization
+	skipPrefixes := []string{
+		"thegrid help",
+		"thegrid completion",
+		"thegrid config show",
+		"thegrid config sources",
+		"thegrid config validate",
+	}
+
+	// Exact matches for simple commands
+	skipExact := map[string]bool{
+		"thegrid":      true, // Root command (shows help)
+		"thegrid ping": true,
+		"thegrid info": true,
+		"thegrid dump": true,
+		"thegrid list": true,
+		"thegrid show": true,
+	}
+
+	if skipExact[cmdPath] {
+		return true
+	}
+
+	for _, prefix := range skipPrefixes {
+		if strings.HasPrefix(cmdPath, prefix) {
+			return true
+		}
+	}
+
+	// Also skip if it's a help invocation (has --help flag)
+	if cmd.Flags().Changed("help") {
+		return true
+	}
+
+	return false
+}
 
 func printJSON(data interface{}) error {
 	enc := json.NewEncoder(os.Stdout)
