@@ -92,7 +92,7 @@ jobs:
           cp -R dist/GridServer.app dist/thegrid-${VERSION}/
           cp grid-cli/bin/thegrid dist/thegrid-${VERSION}/bin/
           cp VERSION dist/thegrid-${VERSION}/
-          cd dist && tar -czf thegrid-${VERSION}-darwin-universal.tar.gz thegrid-${VERSION}
+          tar -czf dist/thegrid-${VERSION}-darwin-universal.tar.gz -C dist thegrid-${VERSION}
 
           echo "Test tarball created:"
           ls -lh dist/thegrid-${VERSION}-darwin-universal.tar.gz
