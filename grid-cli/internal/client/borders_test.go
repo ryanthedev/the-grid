@@ -48,20 +48,3 @@ func TestCellAssignment_Structure(t *testing.T) {
 	}
 }
 
-func TestCellOverride_Structure(t *testing.T) {
-	override := CellOverride{
-		ActiveCellColor: "0xFF0000",
-		InactiveColor:   "0x00FF00",
-		Style:           "round",
-	}
-
-	if override.ActiveCellColor != "0xFF0000" {
-		t.Errorf("Expected ActiveCellColor 0xFF0000, got %s", override.ActiveCellColor)
-	}
-	if override.InactiveColor != "0x00FF00" {
-		t.Errorf("Expected InactiveColor 0x00FF00, got %s", override.InactiveColor)
-	}
-	if override.Style != "round" {
-		t.Errorf("Expected Style 'round', got %s", override.Style)
-	}
-}
