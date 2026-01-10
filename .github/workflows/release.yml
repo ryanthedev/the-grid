@@ -1,5 +1,12 @@
 name: Publish Release
 
+# Workflow: PR builds artifact (CI) → Merge → Manual dispatch to publish
+#
+# Before running this workflow:
+# 1. Ensure CI passed on the PR that was merged
+# 2. Review the changes that will be released
+# 3. Choose the appropriate version bump (patch/minor)
+
 on:
   workflow_dispatch:
     inputs:
