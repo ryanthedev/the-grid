@@ -3,6 +3,20 @@ package config
 import "github.com/ryanthedev/grid-cli/internal/types"
 
 var builtinLayouts = map[string]LayoutConfig{
+	"single-tabbed": {
+		ID:   "single-tabbed",
+		Name: "Single Tabbed",
+		Grid: GridConfig{
+			Columns: []string{"1fr"},
+			Rows:    []string{"1fr"},
+		},
+		Cells: []CellConfig{
+			{ID: "main", Column: "1/2", Row: "1/2"},
+		},
+		CellModes: map[string]types.StackMode{
+			"main": types.StackTabs,
+		},
+	},
 	"two-column-tabs": {
 		ID:   "two-column-tabs",
 		Name: "Two Column Tabs",

@@ -823,11 +823,20 @@ completion(Response(id: request.id, result: AnyCodable(["success": true])))
                 }
             }
 
-            // Update SimpleBorderManager with per-display data
-            if let simpleBorderManager = self.simpleBorderManager {
-                simpleBorderManager.setCellAssignments(cellAssignments, forDisplay: displayUUID)
+            // Parse optional focusedWindowId for atomic update (prevents race conditions)
+            var focusedWindowID: UInt32?
+            if let focusedInt = params["focusedWindowId"]?.value as? Int {
+                focusedWindowID = UInt32(focusedInt)
+            } else if let focusedStr = params["focusedWindowId"]?.value as? String,
+                      let parsed = UInt32(focusedStr) {
+                focusedWindowID = parsed
             }
-completion(Response(id: request.id, result: AnyCodable(["success": true])))
+
+            // Update SimpleBorderManager with per-display data (and optional atomic focus)
+            if let simpleBorderManager = self.simpleBorderManager {
+                simpleBorderManager.setCellAssignments(cellAssignments, forDisplay: displayUUID, focusedWindowID: focusedWindowID)
+            }
+            completion(Response(id: request.id, result: AnyCodable(["success": true])))
         }
 
         // Update border focus (called after window.focus)
@@ -855,6 +864,12 @@ completion(Response(id: request.id, result: AnyCodable(["success": true])))
                 return
             }
 
+            // displayUUID is required - CLI must tell us which display
+            guard let displayUUID = params["displayUUID"]?.value as? String, !displayUUID.isEmpty else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Missing or invalid displayUUID")))
+                return
+            }
+
             Task {
                 // Check for stale focus update: if the server's current focused window
                 // doesn't match the requested window, this is a stale request from a
@@ -869,9 +884,9 @@ completion(Response(id: request.id, result: AnyCodable(["success": true])))
                     return
                 }
 
-                // Update border focus (server looks up display from cached assignments)
+                // Update border focus using the display UUID from CLI
                 if let borderManager = self.simpleBorderManager {
-                    borderManager.updateFocus(newFocusedWindow: wid)
+                    borderManager.updateFocus(newFocusedWindow: wid, displayUUID: displayUUID)
                 }
 
                 completion(Response(id: request.id, result: AnyCodable(["success": true, "windowId": wid])))

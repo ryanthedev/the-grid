@@ -211,8 +211,8 @@ func SyncBorders(ctx context.Context, c *client.Client, snap *server.Snapshot, r
 		return
 	}
 
-	// 9. Send to server
-	if err := c.SendCellAssignments(ctx, displayUUID, assignments); err != nil {
+	// 9. Send to server (no focused window - caller handles focus separately)
+	if err := c.SendCellAssignments(ctx, displayUUID, assignments, nil); err != nil {
 		jsonlog.Log("warn.sync_borders", jsonlog.WithData(map[string]any{"err": err.Error()}))
 		return
 	}
@@ -268,8 +268,57 @@ func SyncBordersForDisplay(ctx context.Context, c *client.Client, displayInfo se
 		return
 	}
 
-	if err := c.SendCellAssignments(ctx, displayInfo.UUID, assignments); err != nil {
+	if err := c.SendCellAssignments(ctx, displayInfo.UUID, assignments, nil); err != nil {
 		jsonlog.Log("warn.sync_borders_display", jsonlog.WithData(map[string]any{"err": err.Error()}))
+		return
+	}
+}
+
+// SyncBordersWithFocus sends cell assignments AND updates focus atomically.
+// This prevents race conditions when multiple commands execute rapidly.
+// Use this instead of SyncBordersForDisplay + SyncBorderFocus for cross-display moves.
+func SyncBordersWithFocus(ctx context.Context, c *client.Client, displayInfo server.DisplayInfo, spaceID string, focusedWindowID uint32, rs *state.RuntimeState, cfg *config.Config) {
+	if cfg == nil || cfg.Borders == nil || !cfg.Borders.GetEnabled() {
+		return
+	}
+
+	spaceState := rs.GetSpaceReadOnly(spaceID)
+	if spaceState == nil || spaceState.CurrentLayoutID == "" {
+		return
+	}
+
+	layoutDef, err := cfg.GetLayout(spaceState.CurrentLayoutID)
+	if err != nil {
+		jsonlog.Log("warn.sync_borders_focus", jsonlog.WithData(map[string]any{"lid": spaceState.CurrentLayoutID, "err": err.Error()}))
+		return
+	}
+
+	displayBounds := displayInfo.VisibleFrame
+	if displayBounds == (types.Rect{}) {
+		displayBounds = displayInfo.Frame
+	}
+	if displayBounds == (types.Rect{}) {
+		return
+	}
+
+	pseudoSnap := &server.Snapshot{
+		SpaceID:       spaceID,
+		DisplayBounds: displayBounds,
+	}
+
+	cellBounds := calculateCellBounds(layoutDef, pseudoSnap, spaceState)
+	if cellBounds == nil {
+		return
+	}
+
+	assignments := buildCellAssignments(spaceState)
+	if len(assignments) == 0 {
+		return
+	}
+
+	// Send assignments with focused window atomically
+	if err := c.SendCellAssignments(ctx, displayInfo.UUID, assignments, &focusedWindowID); err != nil {
+		jsonlog.Log("warn.sync_borders_focus", jsonlog.WithData(map[string]any{"err": err.Error()}))
 		return
 	}
 }

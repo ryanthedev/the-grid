@@ -91,16 +91,20 @@ class SimpleBorderManager {
     // MARK: - IPC Handlers (receive data from CLI)
 
     /// Set cell assignments received from CLI for a specific display
-    func setCellAssignments(_ assignments: [UInt32: String], forDisplay displayUUID: String) {
+    /// - Parameters:
+    ///   - assignments: Window-to-cell mappings
+    ///   - displayUUID: Target display
+    ///   - focusedWindowID: Optional - if provided, updates focus atomically (prevents race conditions)
+    func setCellAssignments(_ assignments: [UInt32: String], forDisplay displayUUID: String, focusedWindowID: UInt32? = nil) {
         let span = CurrentSpan.current
         DispatchQueue.main.async { [weak self, span] in
             CurrentSpan.$current.withValue(span) {
-                self?.setCellAssignmentsImpl(assignments, forDisplay: displayUUID)
+                self?.setCellAssignmentsImpl(assignments, forDisplay: displayUUID, focusedWindowID: focusedWindowID)
             }
         }
     }
 
-    private func setCellAssignmentsImpl(_ assignments: [UInt32: String], forDisplay displayUUID: String) {
+    private func setCellAssignmentsImpl(_ assignments: [UInt32: String], forDisplay displayUUID: String, focusedWindowID newFocusedWindow: UInt32? = nil) {
         // Reentrancy guard
         guard !isUpdating else { return }
         isUpdating = true
@@ -109,18 +113,32 @@ class SimpleBorderManager {
         let oldAssignments = cellAssignmentsPerDisplay[displayUUID]
         cellAssignmentsPerDisplay[displayUUID] = assignments
 
-        // If this affects the current display, rebuild pool
-        if displayUUID == currentDisplayUUID {
-            // Re-derive active cell from focused window
+        // If focusedWindowID is provided, update focus atomically (prevents race conditions)
+        // This is the key fix: assignments + focus happen in single main queue dispatch
+        if let newFocused = newFocusedWindow,
+           let cellID = assignments[newFocused] {
+            let previousCellID = activeCellID
+            let previousDisplayUUID = currentDisplayUUID
+
+            // Update state
+            focusedWindowID = newFocused
+            activeCellID = cellID
+            currentDisplayUUID = displayUUID
+
+            // Detect display OR cell change
+            let displayChanged = displayUUID != previousDisplayUUID
+            if displayChanged || cellID != previousCellID {
+                rebuildBorderPool(source: displayChanged ? "atomic-displayChange" : "atomic-cellChange")
+            }
+        } else if displayUUID == currentDisplayUUID {
+            // No focus update requested - existing behavior for current display
             let oldCellID = activeCellID
             if let focused = focusedWindowID, let cellID = assignments[focused] {
                 activeCellID = cellID
-                // Update tabbed flag based on new assignments
                 let windowsInCell = assignments.filter { $0.value == cellID }.map { $0.key }
                 isActiveCellTabbed = windowsInCell.count > 1
             }
 
-            // Only rebuild if assignments actually changed
             let assignmentsChanged = oldAssignments != assignments
             let cellChanged = oldCellID != activeCellID
 
@@ -129,7 +147,6 @@ class SimpleBorderManager {
             }
         } else if currentDisplayUUID == nil {
             // Edge case: new window appeared and focused before any assignments
-            // Now assignments arrived - check if focused window is now assigned
             if let focused = focusedWindowID ?? queryCurrentFocusedWindow(),
                let cellID = assignments[focused] {
                 focusedWindowID = focused
@@ -145,7 +162,6 @@ class SimpleBorderManager {
             Dictionary(uniqueKeysWithValues: $0.map { (String($0.key), $0.value) })
         }
 
-        // Collect unique cells for context
         let cells = Array(Set(assignments.values)).sorted()
 
         JSONLogger.shared.log("bdr.assignments", data: [
@@ -153,34 +169,28 @@ class SimpleBorderManager {
             "cells": cells,
             "count": assignments.count,
             "assignments": assignmentsStr,
-            "prev": prevStr as Any
+            "prev": prevStr as Any,
+            "atomicFocus": newFocusedWindow as Any
         ])
-    }
-
-    /// Find which display has an assignment for a window
-    private func findAssignment(for windowID: UInt32) -> (displayUUID: String?, cellID: String?) {
-        for (displayUUID, assignments) in cellAssignmentsPerDisplay {
-            if let cellID = assignments[windowID] {
-                return (displayUUID, cellID)
-            }
-        }
-        return (nil, nil)
     }
 
     // MARK: - Focus Management
 
     /// Update focus when a different window becomes active
-    /// This is the main entry point for focus changes from BorderEvents
-    func updateFocus(newFocusedWindow: UInt32) {
+    /// This is the main entry point for focus changes from CLI
+    /// - Parameters:
+    ///   - newFocusedWindow: The window ID that now has focus
+    ///   - displayUUID: The display where the window is located (from CLI)
+    func updateFocus(newFocusedWindow: UInt32, displayUUID: String) {
         let span = CurrentSpan.current
         DispatchQueue.main.async { [weak self, span] in
             CurrentSpan.$current.withValue(span) {
-                self?.updateFocusImpl(newFocusedWindow: newFocusedWindow)
+                self?.updateFocusImpl(newFocusedWindow: newFocusedWindow, displayUUID: displayUUID)
             }
         }
     }
 
-    private func updateFocusImpl(newFocusedWindow: UInt32) {
+    private func updateFocusImpl(newFocusedWindow: UInt32, displayUUID: String) {
         // Reentrancy guard
         guard !isUpdating else { return }
         isUpdating = true
@@ -189,17 +199,15 @@ class SimpleBorderManager {
         // Ignore focus on our own overlay windows
         if isOurOverlayWindow(newFocusedWindow) { return }
 
-        // Find assignment for the new focused window
-        let (newDisplayUUID, newCellID) = findAssignment(for: newFocusedWindow)
-
-        guard let cellID = newCellID, let displayUUID = newDisplayUUID else {
-            // Window not assigned to any cell - IGNORE this focus event
-            // Don't destroy borders just because an untracked window got focus
-            // (e.g., transient focus during app switch, or window from another space)
+        // Look up cell assignment on the specified display (trust CLI's displayUUID)
+        guard let assignments = cellAssignmentsPerDisplay[displayUUID],
+              let cellID = assignments[newFocusedWindow] else {
+            // Window not assigned on this display - ignore
             return
         }
 
         let previousCellID = activeCellID
+        let previousDisplayUUID = currentDisplayUUID
         let previousFocusedWindow = focusedWindowID
 
         // Update state
@@ -207,13 +215,18 @@ class SimpleBorderManager {
         activeCellID = cellID
         currentDisplayUUID = displayUUID
 
-        if cellID != previousCellID {
-            // DIFFERENT CELL: rebuild entire pool
-            rebuildBorderPool(source: "updateFocus-cellChange")
+        // Detect display OR cell change - cell IDs are not globally unique
+        let displayChanged = displayUUID != previousDisplayUUID
+
+        if displayChanged || cellID != previousCellID {
+            // DIFFERENT CELL OR DISPLAY: rebuild entire pool
+            let source = displayChanged ? "updateFocus-displayChange" : "updateFocus-cellChange"
+            rebuildBorderPool(source: source)
             Task {
                 JSONLogger.shared.log("bdr.cell_change", data: [
                     "cell": cellID,
-                    "wid": newFocusedWindow
+                    "wid": newFocusedWindow,
+                    "displayChanged": displayChanged
                 ])
             }
         } else if newFocusedWindow != previousFocusedWindow {

@@ -1,0 +1,109 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build & Test
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Build CLI
+        run: make cli
+
+      - name: Build Server
+        run: make server
+
+      - name: Run CLI tests
+        run: make cli-test
+
+      - name: Run Server tests
+        run: make server-test
+
+  build-universal:
+    name: Build Universal Binaries
+    runs-on: macos-latest
+    needs: build
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Create ad-hoc signing identity
+        run: |
+          # Create a temporary keychain for ad-hoc signing
+          KEYCHAIN_PATH=$RUNNER_TEMP/build.keychain-db
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 24)
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security list-keychains -d user -s $KEYCHAIN_PATH $(security list-keychains -d user | tr -d '"')
+
+      - name: Build universal CLI
+        run: make cli-universal
+
+      - name: Build universal Server (ad-hoc signed)
+        env:
+          CODESIGN_IDENTITY: "-"
+        run: make app-bundle
+
+      - name: Verify universal binaries
+        run: |
+          echo "CLI binary:"
+          file grid-cli/bin/thegrid
+
+          echo ""
+          echo "Server binary:"
+          file dist/GridServer.app/Contents/MacOS/grid-server
+
+          # Verify both are universal
+          file grid-cli/bin/thegrid | grep -q "universal binary" || (echo "CLI is not universal!" && exit 1)
+          file dist/GridServer.app/Contents/MacOS/grid-server | grep -q "universal binary" || (echo "Server is not universal!" && exit 1)
+
+          echo ""
+          echo "Universal binaries verified successfully"
+
+      - name: Create test tarball
+        run: |
+          VERSION=$(cat VERSION)
+          mkdir -p dist/thegrid-${VERSION}/bin
+          cp -R dist/GridServer.app dist/thegrid-${VERSION}/
+          cp grid-cli/bin/thegrid dist/thegrid-${VERSION}/bin/
+          cp VERSION dist/thegrid-${VERSION}/
+          tar -czf dist/thegrid-${VERSION}-darwin-universal.tar.gz -C dist thegrid-${VERSION}
+
+          echo "Test tarball created:"
+          ls -lh dist/thegrid-${VERSION}-darwin-universal.tar.gz
+
+          echo ""
+          echo "SHA256:"
+          shasum -a 256 dist/thegrid-${VERSION}-darwin-universal.tar.gz
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: thegrid-universal-${{ github.sha }}
+          path: dist/thegrid-*-darwin-universal.tar.gz
+          retention-days: 7
