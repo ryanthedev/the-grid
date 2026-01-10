@@ -934,5 +934,98 @@ completion(Response(id: request.id, result: AnyCodable(["success": true])))
             }
         }
 
+        // MARK: - Picker Methods
+
+        // Show the picker with a list of items
+        register(method: "picker.show") { request, completion in
+            guard let params = request.params else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
+                return
+            }
+
+            // Parse items array
+            guard let itemsRaw = params["items"]?.value as? [[String: Any]] else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Missing or invalid 'items' array")))
+                return
+            }
+
+            // Validate item count to prevent memory exhaustion
+            let maxItemCount = 10000
+            guard itemsRaw.count <= maxItemCount else {
+                JSONLogger.shared.log("err.picker", data: [
+                    "op": "show",
+                    "msg": "item_limit_exceeded",
+                    "count": itemsRaw.count,
+                    "limit": maxItemCount
+                ])
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Items array exceeds maximum limit of \(maxItemCount)")))
+                return
+            }
+
+            // Convert to PickerItem array
+            var items: [PickerItem] = []
+            for itemDict in itemsRaw {
+                guard let id = itemDict["id"] as? String,
+                      let display = itemDict["display"] as? String else {
+                    continue
+                }
+
+                let searchable = itemDict["searchable"] as? [String]
+                let metadata = itemDict["metadata"] as? [String: String]
+
+                items.append(PickerItem(
+                    id: id,
+                    display: display,
+                    searchable: searchable,
+                    metadata: metadata
+                ))
+            }
+
+            guard !items.isEmpty else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Items array is empty")))
+                return
+            }
+
+            // Parse optional style overrides
+            var style: PickerStyle? = nil
+            if let styleDict = params["style"]?.value as? [String: Any] {
+                style = PickerStyle.default
+                if let width = styleDict["width"] as? Double {
+                    style?.width = CGFloat(width)
+                }
+                if let maxVisible = styleDict["maxVisibleItems"] as? Int {
+                    style?.maxVisibleItems = maxVisible
+                }
+                if let itemHeight = styleDict["itemHeight"] as? Double {
+                    style?.itemHeight = CGFloat(itemHeight)
+                }
+                if let fontSize = styleDict["fontSize"] as? Double {
+                    style?.fontSize = CGFloat(fontSize)
+                }
+                if let bgColor = styleDict["backgroundColor"] as? String {
+                    style?.backgroundColor = bgColor
+                }
+                if let textColor = styleDict["textColor"] as? String {
+                    style?.textColor = textColor
+                }
+                if let selectedBg = styleDict["selectedBackgroundColor"] as? String {
+                    style?.selectedBackgroundColor = selectedBg
+                }
+                if let matchColor = styleDict["matchHighlightColor"] as? String {
+                    style?.matchHighlightColor = matchColor
+                }
+            }
+
+            Task {
+                let result = await PickerManager.shared.show(items: items, style: style)
+
+                let response = Response(
+                    id: request.id,
+                    result: AnyCodable(result.asDictionary)
+                )
+                completion(response)
+            }
+        }
+
     }
 }
