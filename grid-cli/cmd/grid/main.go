@@ -2856,57 +2856,6 @@ Example JSON input:
 	},
 }
 
-// pickerCmd is for testing the picker UI
-var pickerCmd = &cobra.Command{
-	Use:   "picker",
-	Short: "Show the picker UI (test command)",
-	Long:  `Opens a Telescope-style fuzzy picker with sample items for testing.`,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		c := client.NewClient(socketPath, timeout)
-		defer c.Close()
-
-		// Sample items for testing
-		items := []client.PickerItem{
-			{ID: "1", Display: "Open Terminal", Searchable: []string{"terminal", "shell", "bash", "zsh"}},
-			{ID: "2", Display: "Open Browser", Searchable: []string{"browser", "chrome", "firefox", "safari", "web"}},
-			{ID: "3", Display: "Open Editor", Searchable: []string{"editor", "code", "vim", "neovim", "vscode"}},
-			{ID: "4", Display: "Open Finder", Searchable: []string{"finder", "files", "explorer"}},
-			{ID: "5", Display: "Open Mail", Searchable: []string{"mail", "email", "inbox"}},
-			{ID: "6", Display: "Open Calendar", Searchable: []string{"calendar", "schedule", "events"}},
-			{ID: "7", Display: "Open Notes", Searchable: []string{"notes", "memo", "notepad"}},
-			{ID: "8", Display: "Open Music", Searchable: []string{"music", "spotify", "apple music"}},
-			{ID: "9", Display: "Open Messages", Searchable: []string{"messages", "chat", "imessage", "sms"}},
-			{ID: "10", Display: "Open Settings", Searchable: []string{"settings", "preferences", "config"}},
-			{ID: "11", Display: "Open Activity Monitor", Searchable: []string{"activity", "monitor", "process", "cpu", "memory"}},
-			{ID: "12", Display: "Open Disk Utility", Searchable: []string{"disk", "utility", "storage", "format"}},
-		}
-
-		// 5-minute timeout for picker since it waits for user input
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-		defer cancel()
-
-		result, err := c.ShowPicker(ctx, items, nil)
-		if err != nil {
-			return fmt.Errorf("picker failed: %w", err)
-		}
-
-		if jsonOutput {
-			return printJSON(map[string]interface{}{
-				"cancelled": result.Cancelled,
-				"selected":  result.Selected,
-			})
-		}
-
-		if result.Cancelled {
-			fmt.Println("Picker cancelled")
-		} else if item := result.SelectedItem(); item != nil {
-			fmt.Printf("Selected: %s (id=%s)\n", item.Display, item.ID)
-		}
-
-		return nil
-	},
-}
-
 func init() {
 	// Global flags
 	rootCmd.PersistentFlags().StringVar(&socketPath, "socket", client.DefaultSocketPath, "Unix socket path")
@@ -2987,9 +2936,6 @@ func init() {
 	rootCmd.AddCommand(mouseCmd)
 	mouseCmd.AddCommand(mouseCenterCmd)
 	mouseCmd.AddCommand(mouseWarpCmd)
-
-	// Add picker command (for testing)
-	rootCmd.AddCommand(pickerCmd)
 
 	// Add the-grid resize commands
 	rootCmd.AddCommand(gridResizeCmd)

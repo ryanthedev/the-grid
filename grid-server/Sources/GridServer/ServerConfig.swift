@@ -1,73 +1,5 @@
 import Foundation
 import Yams
-import CoreGraphics
-
-/// Picker style configuration (loaded from config file)
-struct PickerConfig: Codable {
-    var width: CGFloat?
-    var maxVisibleItems: Int?
-    var itemHeight: CGFloat?
-    var inputHeight: CGFloat?
-    var padding: CGFloat?
-    var fontName: String?
-    var fontSize: CGFloat?
-    var inputFontSize: CGFloat?
-    var backgroundColor: String?
-    var inputBackgroundColor: String?
-    var textColor: String?
-    var secondaryTextColor: String?
-    var selectedBackgroundColor: String?
-    var matchHighlightColor: String?
-    var cursorColor: String?
-    var borderColor: String?
-    var cornerRadius: CGFloat?
-    var borderWidth: CGFloat?
-
-    enum CodingKeys: String, CodingKey {
-        case width
-        case maxVisibleItems = "max_visible_items"
-        case itemHeight = "item_height"
-        case inputHeight = "input_height"
-        case padding
-        case fontName = "font_name"
-        case fontSize = "font_size"
-        case inputFontSize = "input_font_size"
-        case backgroundColor = "background_color"
-        case inputBackgroundColor = "input_background_color"
-        case textColor = "text_color"
-        case secondaryTextColor = "secondary_text_color"
-        case selectedBackgroundColor = "selected_background_color"
-        case matchHighlightColor = "match_highlight_color"
-        case cursorColor = "cursor_color"
-        case borderColor = "border_color"
-        case cornerRadius = "corner_radius"
-        case borderWidth = "border_width"
-    }
-
-    /// Convert to PickerStyle, merging with defaults
-    func toPickerStyle() -> PickerStyle {
-        var style = PickerStyle.default
-        if let width = width { style.width = width }
-        if let maxVisibleItems = maxVisibleItems { style.maxVisibleItems = maxVisibleItems }
-        if let itemHeight = itemHeight { style.itemHeight = itemHeight }
-        if let inputHeight = inputHeight { style.inputHeight = inputHeight }
-        if let padding = padding { style.padding = padding }
-        if let fontName = fontName { style.fontName = fontName }
-        if let fontSize = fontSize { style.fontSize = fontSize }
-        if let inputFontSize = inputFontSize { style.inputFontSize = inputFontSize }
-        if let backgroundColor = backgroundColor { style.backgroundColor = backgroundColor }
-        if let inputBackgroundColor = inputBackgroundColor { style.inputBackgroundColor = inputBackgroundColor }
-        if let textColor = textColor { style.textColor = textColor }
-        if let secondaryTextColor = secondaryTextColor { style.secondaryTextColor = secondaryTextColor }
-        if let selectedBackgroundColor = selectedBackgroundColor { style.selectedBackgroundColor = selectedBackgroundColor }
-        if let matchHighlightColor = matchHighlightColor { style.matchHighlightColor = matchHighlightColor }
-        if let cursorColor = cursorColor { style.cursorColor = cursorColor }
-        if let borderColor = borderColor { style.borderColor = borderColor }
-        if let cornerRadius = cornerRadius { style.cornerRadius = cornerRadius }
-        if let borderWidth = borderWidth { style.borderWidth = borderWidth }
-        return style
-    }
-}
 
 /// Server configuration for window management behavior
 struct ServerConfig: Codable {
@@ -78,13 +10,9 @@ struct ServerConfig: Codable {
     /// Defaults to "thegrid" (assumes in PATH)
     var cliPath: String = "thegrid"
 
-    /// Picker UI configuration
-    var picker: PickerConfig?
-
     enum CodingKeys: String, CodingKey {
         case windowBlacklist = "window_blacklist"
         case cliPath = "cli_path"
-        case picker
     }
 
     init() {}
