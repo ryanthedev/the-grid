@@ -265,6 +265,10 @@ class PickerWindow: NSWindow {
     func submit() {
         finish(.submitted(textField.stringValue))
     }
+
+    func focusInput() {
+        makeFirstResponder(textField)
+    }
 }
 
 extension PickerWindow: NSTextFieldDelegate {
@@ -343,7 +347,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         window = PickerWindow(config: config)
         window?.makeKeyAndOrderFront(nil)
-        window?.makeFirstResponder(window?.contentView?.subviews.first { $0 is NSTextField })
+        window?.focusInput()
 
         // Watch for focus loss
         NotificationCenter.default.addObserver(
