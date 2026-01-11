@@ -1,4 +1,4 @@
-.PHONY: help build server cli test clean server-test cli-test server-clean cli-clean run-server install dist dev reset-accessibility setup-signing install-scripts
+.PHONY: help build server cli picker test clean server-test cli-test server-clean cli-clean run-server install dist dev reset-accessibility setup-signing install-scripts
 
 # Version from VERSION file
 VERSION := $(shell cat VERSION)
@@ -34,6 +34,11 @@ generate-version:
 server: generate-version
 	@echo "Building grid-server..."
 	@cd grid-server && swift build
+
+# Picker target (standalone input picker)
+picker:
+	@echo "Building grid-picker..."
+	@cd grid-server && swift build --product grid-picker
 
 server-release: generate-version
 	@echo "Building grid-server (release)..."
@@ -202,7 +207,7 @@ APP_BUNDLE := grid-server/.build/debug/GridServer.app
 DEPLOY_LOCATION := $(HOME)/.local/state/thegrid/GridServer.app
 
 # Build debug app bundle
-dev: server cli
+dev: server cli picker
 	@echo "Creating debug GridServer.app bundle..."
 	@mkdir -p $(APP_BUNDLE)/Contents/MacOS
 	@mkdir -p $(APP_BUNDLE)/Contents/Resources
@@ -231,10 +236,12 @@ run: dev install-dev
 	@echo "✓ Service restarted"
 
 # Install dev build to ~/.local/bin
-install-dev: cli
+install-dev: cli picker
 	@mkdir -p ~/.local/bin
 	@cp grid-cli/bin/thegrid ~/.local/bin/thegrid
+	@cp grid-server/.build/debug/grid-picker ~/.local/bin/grid-picker
 	@echo "✓ Installed dev CLI to ~/.local/bin/thegrid"
+	@echo "✓ Installed grid-picker to ~/.local/bin/grid-picker"
 
 # Install utility scripts to ~/.local/bin
 install-scripts:

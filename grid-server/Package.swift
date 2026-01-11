@@ -12,6 +12,10 @@ let package = Package(
         .executable(
             name: "grid-server",
             targets: ["GridServer"]
+        ),
+        .executable(
+            name: "grid-picker",
+            targets: ["GridPicker"]
         )
     ],
     dependencies: [
@@ -43,6 +47,11 @@ let package = Package(
                 .unsafeFlags(["-F", "/System/Library/PrivateFrameworks"]),
                 .linkedFramework("SkyLight")
             ]
+        ),
+        .executableTarget(
+            name: "GridPicker",
+            dependencies: [],
+            path: "Sources/GridPicker"
         ),
         .testTarget(
             name: "GridServerTests",
