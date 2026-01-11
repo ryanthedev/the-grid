@@ -1,0 +1,7 @@
+[
+  {"id": "1", "title": "Swift - Async/Await", "subtitle": "Concurrency pattern", "preview": "func fetchData() async throws -> Data { ... }", "icon": "🔶"},
+  {"id": "2", "title": "Go - Error Handling", "subtitle": "Idiomatic error check", "preview": "if err != nil { return fmt.Errorf(\"failed: %w\", err) }", "icon": "🐹"},
+  {"id": "3", "title": "Python - List Comprehension", "subtitle": "Functional pattern", "preview": "squares = [x**2 for x in range(10) if x % 2 == 0]", "icon": "🐍"},
+  {"id": "4", "title": "TypeScript - Type Guard", "subtitle": "Type narrowing", "preview": "function isString(x: unknown): x is string { ... }", "icon": "💙"},
+  {"id": "5", "title": "Rust - Pattern Matching", "subtitle": "Match expression", "preview": "match result { Ok(v) => v, Err(e) => panic!(\"{e}\") }", "icon": "🦀"}
+]

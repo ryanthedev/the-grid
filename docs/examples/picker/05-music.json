@@ -1,0 +1,7 @@
+[
+  {"id": "1", "title": "Bohemian Rhapsody", "subtitle": "Queen • A Night at the Opera", "preview": "6:07 • Rock • 1975", "icon": "🎸"},
+  {"id": "2", "title": "Billie Jean", "subtitle": "Michael Jackson • Thriller", "preview": "4:54 • Pop • 1982", "icon": "🕺"},
+  {"id": "3", "title": "Smells Like Teen Spirit", "subtitle": "Nirvana • Nevermind", "preview": "5:01 • Grunge • 1991", "icon": "🎤"},
+  {"id": "4", "title": "Get Lucky", "subtitle": "Daft Punk • Random Access Memories", "preview": "6:09 • Electronic • 2013", "icon": "🤖"},
+  {"id": "5", "title": "Blinding Lights", "subtitle": "The Weeknd • After Hours", "preview": "3:20 • Synth-pop • 2020", "icon": "✨"}
+]

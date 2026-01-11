@@ -1,0 +1,7 @@
+[
+  {"id": "1", "title": "Item without any icon", "subtitle": "Testing icon-less display", "preview": "This item has no icon field at all"},
+  {"id": "2", "title": "Another plain item", "subtitle": "Just title, subtitle, preview", "preview": "The icon column should collapse when no items have icons"},
+  {"id": "3", "title": "Simple text entry", "subtitle": "No decorations", "preview": "Plain content for minimalist displays"},
+  {"id": "4", "title": "Clean and simple", "subtitle": "Focus on the content", "preview": "Sometimes you don't need icons"},
+  {"id": "5", "title": "Text only mode", "subtitle": "Compact layout test", "preview": "Verifying that spacing works without icon column"}
+]

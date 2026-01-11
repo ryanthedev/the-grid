@@ -1,0 +1,7 @@
+[
+  {"id": "1", "title": "users", "subtitle": "1,234,567 rows • 256 MB", "preview": "id, email, name, created_at, updated_at, deleted_at", "icon": "👤"},
+  {"id": "2", "title": "orders", "subtitle": "5,432,100 rows • 1.2 GB", "preview": "id, user_id, status, total, created_at, shipped_at", "icon": "📦"},
+  {"id": "3", "title": "products", "subtitle": "45,678 rows • 128 MB", "preview": "id, name, description, price, inventory, category_id", "icon": "🏷️"},
+  {"id": "4", "title": "sessions", "subtitle": "892,345 rows • 64 MB", "preview": "id, user_id, token, expires_at, ip_address, user_agent", "icon": "🔐"},
+  {"id": "5", "title": "audit_logs", "subtitle": "12,345,678 rows • 4.5 GB", "preview": "id, action, entity_type, entity_id, user_id, timestamp", "icon": "📋"}
+]

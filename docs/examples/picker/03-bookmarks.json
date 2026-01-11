@@ -1,0 +1,7 @@
+[
+  {"id": "1", "title": "GitHub - anthropics/claude-code", "subtitle": "github.com", "preview": "Claude Code is Anthropic's official CLI for Claude", "icon": "🐙"},
+  {"id": "2", "title": "Swift Documentation", "subtitle": "docs.swift.org", "preview": "The Swift Programming Language reference documentation", "icon": "🔶"},
+  {"id": "3", "title": "Hacker News", "subtitle": "news.ycombinator.com", "preview": "Tech news and discussions", "icon": "🟧"},
+  {"id": "4", "title": "Stack Overflow - AppKit", "subtitle": "stackoverflow.com/questions/tagged/appkit", "preview": "Questions tagged with AppKit", "icon": "📚"},
+  {"id": "5", "title": "Catppuccin Theme", "subtitle": "catppuccin.com", "preview": "Soothing pastel theme for high-spirited coders", "icon": "🎨"}
+]

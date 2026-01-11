@@ -1,0 +1,7 @@
+[
+  {"id": "1", "title": "Alice Chen", "subtitle": "Engineering Lead", "preview": "alice@company.com • +1 (555) 123-4567", "icon": "👩‍💻"},
+  {"id": "2", "title": "Bob Martinez", "subtitle": "Product Manager", "preview": "bob.m@company.com • +1 (555) 234-5678", "icon": "👨‍💼"},
+  {"id": "3", "title": "Carol Williams", "subtitle": "Designer", "preview": "carol.w@company.com • +1 (555) 345-6789", "icon": "👩‍🎨"},
+  {"id": "4", "title": "David Kim", "subtitle": "Backend Engineer", "preview": "david.kim@company.com • +1 (555) 456-7890", "icon": "👨‍💻"},
+  {"id": "5", "title": "Eve Johnson", "subtitle": "DevOps", "preview": "eve.j@company.com • +1 (555) 567-8901", "icon": "👩‍🔧"}
+]

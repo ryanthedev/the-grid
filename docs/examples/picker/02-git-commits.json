@@ -1,0 +1,7 @@
+[
+  {"id": "21c50fc", "title": "feat(picker): implement fuzzy list picker", "subtitle": "21c50fc • 2 hours ago • You", "preview": "Added filtering and keyboard navigation support", "icon": "🟢"},
+  {"id": "edb6889", "title": "fix(picker): focus input field on window launch", "subtitle": "edb6889 • 3 hours ago • You", "preview": "Window now correctly focuses the text input on appear", "icon": "🔧"},
+  {"id": "fc2901e", "title": "refactor(picker): remove server-side implementation", "subtitle": "fc2901e • 5 hours ago • You", "preview": "Simplified architecture by using standalone executable", "icon": "♻️"},
+  {"id": "ec788bc", "title": "feat(picker): add standalone grid-picker executable", "subtitle": "ec788bc • 6 hours ago • You", "preview": "New binary that can be invoked directly via CLI", "icon": "🟢"},
+  {"id": "7a08ebf", "title": "test(picker): add integration test", "subtitle": "7a08ebf • yesterday • You", "preview": "Shows picker for 5 seconds to verify rendering", "icon": "🧪"}
+]

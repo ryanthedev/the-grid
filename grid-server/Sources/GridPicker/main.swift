@@ -24,8 +24,17 @@ struct PickerItem: Codable, Equatable {
     /// Unique identifier for this item
     let id: String
 
-    /// Display text shown in the picker
-    let display: String
+    /// Primary text shown in the picker (required)
+    let title: String
+
+    /// Secondary line (path, description)
+    let subtitle: String?
+
+    /// Third line excerpt
+    let preview: String?
+
+    /// Icon value (emoji, file path, data:base64, or inline SVG)
+    let icon: String?
 
     /// Additional strings to search against (e.g., description, path, tags)
     let searchable: [String]
@@ -33,37 +42,291 @@ struct PickerItem: Codable, Equatable {
     /// Optional metadata passed back on selection (picker ignores this)
     let metadata: [String: String]?
 
-    init(id: String, display: String, searchable: [String]? = nil, metadata: [String]? = nil) {
-        self.id = id
-        self.display = display
-        self.searchable = searchable ?? [display]
-        self.metadata = nil
+    /// Display text shown in the picker (backwards compatibility, returns title)
+    var display: String {
+        title
     }
 
-    init(id: String, display: String, searchable: [String]? = nil, metadata: [String: String]?) {
+    init(
+        id: String,
+        title: String,
+        subtitle: String? = nil,
+        preview: String? = nil,
+        icon: String? = nil,
+        searchable: [String]? = nil,
+        metadata: [String: String]? = nil
+    ) {
         self.id = id
-        self.display = display
-        self.searchable = searchable ?? [display]
+        self.title = title
+        self.subtitle = subtitle
+        self.preview = preview
+        self.icon = icon
+        self.searchable = searchable ?? [title]
         self.metadata = metadata
     }
 
-    /// Custom Decodable init to handle optional searchable field
+    /// Custom Decodable init to handle both old format (display) and new format (title + optional fields)
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(String.self, forKey: .id)
-        display = try container.decode(String.self, forKey: .display)
+
+        // Backwards compatibility: prefer title, fallback to display
+        if let titleValue = try container.decodeIfPresent(String.self, forKey: .title) {
+            title = titleValue
+        } else {
+            title = try container.decode(String.self, forKey: .display)
+        }
+
+        // New optional fields
+        subtitle = try container.decodeIfPresent(String.self, forKey: .subtitle)
+        preview = try container.decodeIfPresent(String.self, forKey: .preview)
+        icon = try container.decodeIfPresent(String.self, forKey: .icon)
+
+        // Existing optional fields
         let optionalSearchable = try container.decodeIfPresent([String].self, forKey: .searchable)
-        searchable = optionalSearchable ?? [display]
+        searchable = optionalSearchable ?? [title]
         metadata = try container.decodeIfPresent([String: String].self, forKey: .metadata)
     }
 
-    private enum CodingKeys: String, CodingKey {
-        case id, display, searchable, metadata
+    /// Custom Encodable to include display field for backwards compatibility
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(title, forKey: .title)
+        // Include display for backwards compatibility
+        try container.encode(title, forKey: .display)
+        try container.encode(searchable, forKey: .searchable)
+        try container.encodeIfPresent(metadata, forKey: .metadata)
+        try container.encodeIfPresent(subtitle, forKey: .subtitle)
+        try container.encodeIfPresent(preview, forKey: .preview)
+        try container.encodeIfPresent(icon, forKey: .icon)
     }
 
-    /// Get all searchable text (display + searchable fields)
+    private enum CodingKeys: String, CodingKey {
+        case id, title, display, subtitle, preview, icon, searchable, metadata
+    }
+
+    /// Get all searchable text (title + searchable + subtitle + preview when present)
     var allSearchableText: [String] {
-        [display] + searchable
+        var texts = [title] + searchable
+        if let subtitle = subtitle {
+            texts.append(subtitle)
+        }
+        if let preview = preview {
+            texts.append(preview)
+        }
+        return texts
+    }
+}
+
+// MARK: - Icon Rendering
+
+/// Renders icon strings to NSImage for display in the picker
+/// Supports: emoji, file paths, data URLs, and inline SVG
+class IconRenderer {
+
+    /// Target icon size in points
+    static let targetSize: CGFloat = 24
+
+    /// In-memory cache for rendered icons
+    private static var cache: [String: NSImage] = [:]
+
+    /// Render an icon string to an NSImage
+    /// - Parameter iconString: Icon value (emoji, file path, data:base64, or inline SVG)
+    /// - Returns: Rendered NSImage or nil if invalid/missing
+    static func render(_ iconString: String?) -> NSImage? {
+        guard let icon = iconString, !icon.isEmpty else {
+            return nil
+        }
+
+        // Check cache first
+        if let cached = cache[icon] {
+            return cached
+        }
+
+        // Detect format and render
+        let image = detectAndRender(icon)
+
+        // Cache successful renders
+        if let image = image {
+            cache[icon] = image
+        }
+
+        return image
+    }
+
+    /// Detect icon format and render appropriately
+    private static func detectAndRender(_ icon: String) -> NSImage? {
+        // Data URL (base64 encoded image)
+        if icon.hasPrefix("data:image/") {
+            return renderDataURL(icon)
+        }
+
+        // Inline SVG
+        if icon.hasPrefix("<svg") || icon.hasPrefix("<?xml") {
+            return renderSVG(icon)
+        }
+
+        // File path
+        if isFilePath(icon) {
+            return loadFromFile(icon)
+        }
+
+        // Single grapheme cluster (emoji)
+        if icon.count == 1 || (icon.unicodeScalars.count > 1 && icon.count == 1) {
+            return renderEmoji(icon)
+        }
+
+        // Check if it's a short string that looks like an emoji (handles ZWJ sequences)
+        if isLikelyEmoji(icon) {
+            return renderEmoji(icon)
+        }
+
+        return nil
+    }
+
+    /// Check if string appears to be a file path
+    private static func isFilePath(_ icon: String) -> Bool {
+        // Starts with path indicators
+        if icon.hasPrefix("/") || icon.hasPrefix("~") || icon.hasPrefix("./") {
+            return true
+        }
+
+        // Ends with image extension
+        let lowercased = icon.lowercased()
+        let imageExtensions = [".svg", ".png", ".jpg", ".jpeg", ".gif"]
+        return imageExtensions.contains { lowercased.hasSuffix($0) }
+    }
+
+    /// Check if string is likely an emoji (handles complex emoji like flags, ZWJ sequences)
+    private static func isLikelyEmoji(_ icon: String) -> Bool {
+        // Must be short (most emoji are 1-2 grapheme clusters, ZWJ sequences can be longer)
+        guard icon.count <= 7 else { return false }
+
+        // Check if all characters are emoji-like
+        for scalar in icon.unicodeScalars {
+            let value = scalar.value
+            // Allow: emoji ranges, variation selectors, ZWJ, skin tone modifiers
+            let isEmojiLike = (value >= 0x1F300 && value <= 0x1FAD6) ||  // Misc symbols, emoticons, etc.
+                              (value >= 0x2600 && value <= 0x26FF) ||    // Misc symbols
+                              (value >= 0x2700 && value <= 0x27BF) ||    // Dingbats
+                              (value >= 0x1F600 && value <= 0x1F64F) ||  // Emoticons
+                              (value >= 0x1F680 && value <= 0x1F6FF) ||  // Transport/map
+                              (value >= 0x1F1E0 && value <= 0x1F1FF) ||  // Regional indicators (flags)
+                              value == 0xFE0F ||                          // Variation selector
+                              value == 0x200D ||                          // ZWJ
+                              (value >= 0x1F3FB && value <= 0x1F3FF)      // Skin tone modifiers
+            if !isEmojiLike {
+                return false
+            }
+        }
+        return true
+    }
+
+    /// Render emoji character to NSImage
+    private static func renderEmoji(_ emoji: String) -> NSImage? {
+        let size = NSSize(width: targetSize, height: targetSize)
+
+        // Create attributed string with emoji
+        let fontSize = targetSize * 0.85
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: fontSize)
+        ]
+        let attributedString = NSAttributedString(string: emoji, attributes: attributes)
+
+        // Calculate text size for centering
+        let textSize = attributedString.size()
+
+        // Create image
+        let image = NSImage(size: size)
+        image.lockFocus()
+
+        // Draw centered
+        let x = (size.width - textSize.width) / 2
+        let y = (size.height - textSize.height) / 2
+        attributedString.draw(at: NSPoint(x: x, y: y))
+
+        image.unlockFocus()
+        return image
+    }
+
+    /// Load image from file path
+    private static func loadFromFile(_ path: String) -> NSImage? {
+        // Expand tilde
+        let expandedPath = (path as NSString).expandingTildeInPath
+
+        guard let image = NSImage(contentsOfFile: expandedPath) else {
+            return nil
+        }
+
+        return scaleImage(image, to: targetSize)
+    }
+
+    /// Render base64 data URL to NSImage
+    private static func renderDataURL(_ dataURL: String) -> NSImage? {
+        // Find base64 data after "base64,"
+        guard let base64Range = dataURL.range(of: "base64,") else {
+            return nil
+        }
+
+        let base64String = String(dataURL[base64Range.upperBound...])
+
+        guard let data = Data(base64Encoded: base64String, options: .ignoreUnknownCharacters) else {
+            return nil
+        }
+
+        guard let image = NSImage(data: data) else {
+            return nil
+        }
+
+        return scaleImage(image, to: targetSize)
+    }
+
+    /// Render inline SVG to NSImage
+    private static func renderSVG(_ svgString: String) -> NSImage? {
+        guard let data = svgString.data(using: .utf8) else {
+            return nil
+        }
+
+        guard let image = NSImage(data: data) else {
+            return nil
+        }
+
+        return scaleImage(image, to: targetSize)
+    }
+
+    /// Scale an image to fit within target size while maintaining aspect ratio
+    private static func scaleImage(_ image: NSImage, to targetSize: CGFloat) -> NSImage {
+        let originalSize = image.size
+
+        // Calculate scale factor to fit within target size
+        let scale = min(targetSize / originalSize.width, targetSize / originalSize.height)
+        let newSize = NSSize(
+            width: originalSize.width * scale,
+            height: originalSize.height * scale
+        )
+
+        // Create new image at target size
+        let newImage = NSImage(size: NSSize(width: targetSize, height: targetSize))
+        newImage.lockFocus()
+
+        // Draw centered
+        let x = (targetSize - newSize.width) / 2
+        let y = (targetSize - newSize.height) / 2
+        image.draw(
+            in: NSRect(x: x, y: y, width: newSize.width, height: newSize.height),
+            from: NSRect(origin: .zero, size: originalSize),
+            operation: .copy,
+            fraction: 1.0
+        )
+
+        newImage.unlockFocus()
+        return newImage
+    }
+
+    /// Clear the icon cache (useful for testing or memory management)
+    static func clearCache() {
+        cache.removeAll()
     }
 }
 
@@ -84,6 +347,24 @@ struct MatchResult {
 /// Fuzzy matcher for filtering picker items
 enum FuzzyMatcher {
 
+    /// Field type for weighted scoring
+    private enum FieldType {
+        case title
+        case subtitle
+        case preview
+        case searchable
+
+        /// Weight multiplier for this field type
+        /// Title: 100%, Subtitle: 70%, Preview: 50%, Searchable: 100% (same as title)
+        var weight: Double {
+            switch self {
+            case .title, .searchable: return 1.0
+            case .subtitle: return 0.7
+            case .preview: return 0.5
+            }
+        }
+    }
+
     /// Match a query against a list of items
     /// - Parameters:
     ///   - query: The search query
@@ -101,27 +382,60 @@ enum FuzzyMatcher {
         var results: [MatchResult] = []
 
         for item in items {
-            // Try to match against all searchable fields, take best score
-            var bestScore = Int.min
-            var bestIndices: [Int] = []
+            // Build list of (text, fieldType) pairs for searching
+            var searchFields: [(text: String, fieldType: FieldType)] = []
 
-            for searchText in item.allSearchableText {
-                if let (score, indices) = matchSingle(
+            // Title is always first and primary
+            searchFields.append((item.title, .title))
+
+            // Subtitle if present
+            if let subtitle = item.subtitle {
+                searchFields.append((subtitle, .subtitle))
+            }
+
+            // Preview if present
+            if let preview = item.preview {
+                searchFields.append((preview, .preview))
+            }
+
+            // Additional searchable strings (excluding title which is already included)
+            for searchText in item.searchable where searchText != item.title {
+                searchFields.append((searchText, .searchable))
+            }
+
+            // Track best weighted score and title match indices separately
+            var bestWeightedScore = Int.min
+            var titleMatchIndices: [Int] = []
+            var hasAnyMatch = false
+
+            for (text, fieldType) in searchFields {
+                if let (rawScore, indices) = matchSingle(
                     query: query,
-                    text: searchText,
-                    caseSensitive: caseSensitive,
-                    isDisplayField: searchText == item.display
+                    text: text,
+                    caseSensitive: caseSensitive
                 ) {
-                    if score > bestScore {
-                        bestScore = score
-                        // Only keep indices if this is the display field
-                        bestIndices = searchText == item.display ? indices : []
+                    hasAnyMatch = true
+
+                    // Apply field weight to raw score
+                    let weightedScore = Int(Double(rawScore) * fieldType.weight)
+
+                    if weightedScore > bestWeightedScore {
+                        bestWeightedScore = weightedScore
+                    }
+
+                    // Capture title match indices for highlighting (prefer title even if not highest score)
+                    if fieldType == .title {
+                        titleMatchIndices = indices
                     }
                 }
             }
 
-            if bestScore > Int.min {
-                results.append(MatchResult(item: item, score: bestScore, matchedIndices: bestIndices))
+            if hasAnyMatch {
+                results.append(MatchResult(
+                    item: item,
+                    score: bestWeightedScore,
+                    matchedIndices: titleMatchIndices
+                ))
             }
         }
 
@@ -139,13 +453,11 @@ enum FuzzyMatcher {
     ///   - query: Search query
     ///   - text: Text to search in
     ///   - caseSensitive: Whether to match case-sensitively
-    ///   - isDisplayField: Whether this is the display field (affects scoring)
     /// - Returns: (score, matched indices) or nil if no match
     private static func matchSingle(
         query: String,
         text: String,
-        caseSensitive: Bool,
-        isDisplayField: Bool
+        caseSensitive: Bool
     ) -> (Int, [Int])? {
         let queryChars = caseSensitive ? Array(query) : Array(query.lowercased())
         let textChars = caseSensitive ? Array(text) : Array(text.lowercased())
@@ -204,11 +516,6 @@ enum FuzzyMatcher {
         // All query characters must match
         guard queryIndex == queryChars.count else { return nil }
 
-        // Bonus for display field matches
-        if isDisplayField {
-            score += 50
-        }
-
         // Bonus for shorter text (tighter match)
         score += max(0, 100 - text.count)
 
@@ -245,8 +552,9 @@ class PickerState {
     /// Scroll offset (first visible item index)
     private(set) var scrollOffset: Int = 0
 
-    /// Maximum visible items in the list
-    let maxVisibleItems: Int = 10
+    /// Maximum height for the list area (in points)
+    /// With variable item heights (36-70pt), use height constraint instead of item count
+    static let maxListHeight: CGFloat = 500
 
     /// Callback when state changes
     var onStateChange: (() -> Void)?
@@ -274,12 +582,42 @@ class PickerState {
 
         // Adjust scroll offset to keep selection visible
         if selectedIndex < scrollOffset {
+            // Selection moved above visible area
             scrollOffset = selectedIndex
-        } else if selectedIndex >= scrollOffset + maxVisibleItems {
-            scrollOffset = selectedIndex - maxVisibleItems + 1
+        } else {
+            // Check if selection is below visible area
+            // Calculate visible item count from current scroll offset
+            let visibleCount = countVisibleItemsFrom(scrollOffset)
+            if selectedIndex >= scrollOffset + visibleCount {
+                // Need to scroll down - find new scroll offset that makes selection visible
+                // Start from selection and work backwards to find scroll offset
+                scrollOffset = findScrollOffsetToShow(selectedIndex)
+            }
         }
 
         onStateChange?()
+    }
+
+    /// Find the scroll offset that would show the given index at the bottom of the visible area
+    private func findScrollOffsetToShow(_ targetIndex: Int) -> Int {
+        // Start from targetIndex and work backwards
+        // Include items until we would exceed max height
+        var accumulatedHeight: CGFloat = 0
+        var startIndex = targetIndex
+
+        for i in stride(from: targetIndex, through: 0, by: -1) {
+            let itemHeight = ListItemView.heightForItem(filteredResults[i].item)
+
+            if accumulatedHeight + itemHeight > Self.maxListHeight {
+                // This item would exceed max height, stop at previous
+                break
+            }
+
+            accumulatedHeight += itemHeight
+            startIndex = i
+        }
+
+        return startIndex
     }
 
     /// Get the currently selected item, if any
@@ -298,12 +636,63 @@ class PickerState {
         return filteredResults[selectedIndex]
     }
 
-    /// Get visible results based on scroll offset
-    var visibleResults: ArraySlice<MatchResult> {
-        let start = scrollOffset
-        let end = min(scrollOffset + maxVisibleItems, filteredResults.count)
-        guard start < end else { return [] }
-        return filteredResults[start..<end]
+    /// Get visible results based on scroll offset and max list height
+    /// Uses variable item heights to determine how many items fit
+    var visibleResults: [MatchResult] {
+        guard scrollOffset < filteredResults.count else { return [] }
+
+        var results: [MatchResult] = []
+        var accumulatedHeight: CGFloat = 0
+
+        for i in scrollOffset..<filteredResults.count {
+            let result = filteredResults[i]
+            let itemHeight = ListItemView.heightForItem(result.item)
+
+            // Always include at least one item
+            if results.isEmpty {
+                results.append(result)
+                accumulatedHeight += itemHeight
+                continue
+            }
+
+            // Check if adding this item would exceed max height
+            if accumulatedHeight + itemHeight > Self.maxListHeight {
+                break
+            }
+
+            results.append(result)
+            accumulatedHeight += itemHeight
+        }
+
+        return results
+    }
+
+    /// Calculate how many items fit starting from a given index (for scroll calculations)
+    private func countVisibleItemsFrom(_ startIndex: Int) -> Int {
+        guard startIndex < filteredResults.count else { return 0 }
+
+        var count = 0
+        var accumulatedHeight: CGFloat = 0
+
+        for i in startIndex..<filteredResults.count {
+            let itemHeight = ListItemView.heightForItem(filteredResults[i].item)
+
+            // Always include at least one item
+            if count == 0 {
+                count += 1
+                accumulatedHeight += itemHeight
+                continue
+            }
+
+            if accumulatedHeight + itemHeight > Self.maxListHeight {
+                break
+            }
+
+            count += 1
+            accumulatedHeight += itemHeight
+        }
+
+        return count
     }
 
     /// Check if there are items to display
@@ -321,16 +710,47 @@ class PickerState {
 
 /// A single row in the picker list
 class ListItemView: NSView {
-    private let displayText: String
+    private let item: PickerItem
     private let matchedIndices: Set<Int>
     private let isSelected: Bool
+    private let showIconColumn: Bool
 
-    static let itemHeight: CGFloat = 28
+    // Layout constants per requirements:
+    // - 8pt padding top + bottom = 16pt base
+    // - Title: ~20pt line height
+    // - Subtitle: +18pt
+    // - Preview: +16pt
+    // - Icon column: 40pt (8pt padding + 24pt icon + 8pt padding)
+    private static let verticalPadding: CGFloat = 8
+    private static let titleLineHeight: CGFloat = 20
+    private static let subtitleLineHeight: CGFloat = 18
+    private static let previewLineHeight: CGFloat = 16
+    private static let iconColumnWidth: CGFloat = 40
+    private static let horizontalPadding: CGFloat = 12
 
-    init(displayText: String, matchedIndices: [Int], isSelected: Bool) {
-        self.displayText = displayText
+    // Minimum height for title-only items (~36pt per requirements)
+    static let itemHeight: CGFloat = 36
+
+    /// Calculate height for a specific item based on its content
+    /// - Title only: ~36pt
+    /// - + Subtitle: ~54pt
+    /// - + Preview: ~70pt
+    static func heightForItem(_ item: PickerItem) -> CGFloat {
+        var height: CGFloat = verticalPadding * 2 + titleLineHeight
+        if item.subtitle != nil {
+            height += subtitleLineHeight
+        }
+        if item.preview != nil {
+            height += previewLineHeight
+        }
+        return height
+    }
+
+    init(item: PickerItem, matchedIndices: [Int], isSelected: Bool, showIconColumn: Bool) {
+        self.item = item
         self.matchedIndices = Set(matchedIndices)
         self.isSelected = isSelected
+        self.showIconColumn = showIconColumn
         super.init(frame: .zero)
     }
 
@@ -349,16 +769,81 @@ class ListItemView: NSView {
             NSBezierPath(roundedRect: bounds.insetBy(dx: 4, dy: 2), xRadius: 4, yRadius: 4).fill()
         }
 
-        // Build attributed string with highlighting
+        // Calculate text starting X position
+        let textStartX: CGFloat
+        if showIconColumn {
+            textStartX = Self.horizontalPadding + Self.iconColumnWidth
+        } else {
+            textStartX = Self.horizontalPadding
+        }
+
+        // Draw icon if present and icon column is shown
+        // Icon is centered vertically in the row, and horizontally within the 40pt column
+        if showIconColumn, let iconImage = IconRenderer.render(item.icon) {
+            let iconSize = IconRenderer.targetSize
+            let iconX = (Self.iconColumnWidth - iconSize) / 2
+            let iconY = (bounds.height - iconSize) / 2
+            iconImage.draw(in: NSRect(x: iconX, y: iconY, width: iconSize, height: iconSize))
+        }
+
+        // Track Y position (drawing from top to bottom, but NSView coordinates are bottom-up)
+        var currentY = bounds.height - Self.verticalPadding
+
+        // Draw title with highlighting
+        let titleString = buildTitleAttributedString()
+        let titleHeight = titleString.size().height
+        currentY -= titleHeight
+        titleString.draw(at: NSPoint(x: textStartX, y: currentY))
+        currentY -= (Self.titleLineHeight - titleHeight)
+
+        // Draw subtitle if present (12pt per requirements)
+        if let subtitle = item.subtitle {
+            let subtitleString = NSAttributedString(
+                string: subtitle,
+                attributes: [
+                    .font: NSFont.systemFont(ofSize: 12, weight: .regular),
+                    .foregroundColor: Colors.placeholder
+                ]
+            )
+            let subtitleHeight = subtitleString.size().height
+            currentY -= subtitleHeight
+            subtitleString.draw(at: NSPoint(x: textStartX, y: currentY))
+            currentY -= (Self.subtitleLineHeight - subtitleHeight)
+        }
+
+        // Draw preview if present (11pt, single line truncated)
+        if let preview = item.preview {
+            let paragraphStyle = NSMutableParagraphStyle()
+            paragraphStyle.lineBreakMode = .byTruncatingTail
+
+            let previewString = NSAttributedString(
+                string: preview,
+                attributes: [
+                    .font: NSFont.systemFont(ofSize: 11, weight: .regular),
+                    .foregroundColor: Colors.placeholder,
+                    .paragraphStyle: paragraphStyle
+                ]
+            )
+            currentY -= Self.previewLineHeight
+            let textWidth = bounds.width - textStartX - Self.horizontalPadding
+            let previewRect = NSRect(x: textStartX, y: currentY, width: textWidth, height: Self.previewLineHeight)
+            previewString.draw(in: previewRect)
+        }
+    }
+
+    /// Build the title attributed string with match highlighting
+    /// Title: system font 14pt, medium weight, Colors.text
+    private func buildTitleAttributedString() -> NSAttributedString {
+        let displayText = item.title
         let attributedString = NSMutableAttributedString(
             string: displayText,
             attributes: [
-                .font: NSFont.monospacedSystemFont(ofSize: 14, weight: .regular),
+                .font: NSFont.systemFont(ofSize: 14, weight: .medium),
                 .foregroundColor: Colors.text
             ]
         )
 
-        // Highlight matched characters
+        // Highlight matched characters with accent color
         // Convert Character indices to UTF-16 ranges for NSAttributedString
         let characters = Array(displayText)
         for charIndex in matchedIndices {
@@ -369,15 +854,10 @@ class ListItemView: NSView {
                 let charUtf16Length = String(characters[charIndex]).utf16.count
                 let range = NSRange(location: utf16Start, length: charUtf16Length)
                 attributedString.addAttribute(.foregroundColor, value: Colors.prompt, range: range)
-                attributedString.addAttribute(.font, value: NSFont.monospacedSystemFont(ofSize: 14, weight: .medium), range: range)
             }
         }
 
-        // Draw text
-        let textRect = bounds.insetBy(dx: 12, dy: 0)
-        let textHeight = attributedString.size().height
-        let yOffset = (bounds.height - textHeight) / 2
-        attributedString.draw(in: NSRect(x: textRect.minX, y: yOffset, width: textRect.width, height: textHeight))
+        return attributedString
     }
 }
 
@@ -398,6 +878,13 @@ class ListView: NSView {
         fatalError("init(coder:) not implemented")
     }
 
+    /// Check if ANY item in the filtered results has an icon
+    /// This determines whether to show icon column for ALL items (consistent layout)
+    var hasAnyIcons: Bool {
+        guard let state = state else { return false }
+        return state.filteredResults.contains { $0.item.icon != nil }
+    }
+
     /// Refresh the list view based on current state
     func refresh() {
         // Remove old views
@@ -406,16 +893,22 @@ class ListView: NSView {
 
         guard let state = state else { return }
 
-        let visibleResults = Array(state.visibleResults)
+        let visibleResults = state.visibleResults
+        let showIconColumn = hasAnyIcons
+
+        // Track cumulative Y offset for variable height positioning
+        var cumulativeY: CGFloat = 0
 
         for (viewIndex, result) in visibleResults.enumerated() {
             let actualIndex = state.scrollOffset + viewIndex
             let isSelected = actualIndex == state.selectedIndex
+            let itemHeight = ListItemView.heightForItem(result.item)
 
             let itemView = ListItemView(
-                displayText: result.item.display,
+                item: result.item,
                 matchedIndices: result.matchedIndices,
-                isSelected: isSelected
+                isSelected: isSelected,
+                showIconColumn: showIconColumn
             )
             itemView.translatesAutoresizingMaskIntoConstraints = false
             addSubview(itemView)
@@ -424,17 +917,19 @@ class ListView: NSView {
             NSLayoutConstraint.activate([
                 itemView.leadingAnchor.constraint(equalTo: leadingAnchor),
                 itemView.trailingAnchor.constraint(equalTo: trailingAnchor),
-                itemView.topAnchor.constraint(equalTo: topAnchor, constant: CGFloat(viewIndex) * ListItemView.itemHeight),
-                itemView.heightAnchor.constraint(equalToConstant: ListItemView.itemHeight)
+                itemView.topAnchor.constraint(equalTo: topAnchor, constant: cumulativeY),
+                itemView.heightAnchor.constraint(equalToConstant: itemHeight)
             ])
+
+            cumulativeY += itemHeight
         }
     }
 
-    /// Calculate required height based on visible item count
+    /// Calculate required height based on visible items (variable heights)
     var requiredHeight: CGFloat {
         guard let state = state else { return 0 }
-        let visibleCount = min(state.filteredResults.count, state.maxVisibleItems)
-        return CGFloat(visibleCount) * ListItemView.itemHeight
+        let visibleResults = state.visibleResults
+        return visibleResults.reduce(0) { $0 + ListItemView.heightForItem($1.item) }
     }
 
     /// Show "No matches" message when filtered results are empty but items exist
@@ -550,9 +1045,20 @@ enum PickerResult {
     private func formatSelectedItem(_ item: PickerItem) -> String {
         var selectedDict: [String: Any] = [
             "id": item.id,
+            "title": item.title,
+            // Include display for backwards compatibility
             "display": item.display,
             "searchable": item.searchable
         ]
+        if let subtitle = item.subtitle {
+            selectedDict["subtitle"] = subtitle
+        }
+        if let preview = item.preview {
+            selectedDict["preview"] = preview
+        }
+        if let icon = item.icon {
+            selectedDict["icon"] = icon
+        }
         if let metadata = item.metadata {
             selectedDict["metadata"] = metadata
         }
@@ -570,7 +1076,7 @@ enum PickerResult {
 
         // Fallback to manual construction
         let escaped = escapeJSON(item.display)
-        return "{\"cancelled\": false, \"selected\": {\"id\": \"\(escapeJSON(item.id))\", \"display\": \"\(escaped)\"}}"
+        return "{\"cancelled\": false, \"selected\": {\"id\": \"\(escapeJSON(item.id))\", \"title\": \"\(escaped)\", \"display\": \"\(escaped)\"}}"
     }
 }
 
@@ -661,7 +1167,9 @@ class PickerWindow: NSWindow {
         // Calculate initial window size (inline to avoid self usage before super.init)
         let initialHeight: CGFloat
         if let st = pickerState, st.hasItems {
-            let listHeight = CGFloat(min(st.filteredResults.count, st.maxVisibleItems)) * ListItemView.itemHeight
+            // Calculate list height using variable item heights
+            let visibleResults = st.visibleResults
+            let listHeight = visibleResults.reduce(0) { $0 + ListItemView.heightForItem($1.item) }
             if listHeight == 0 {
                 initialHeight = Self.inputHeight + ListItemView.itemHeight + Self.listPadding
             } else {
@@ -696,7 +1204,11 @@ class PickerWindow: NSWindow {
         guard let state = state, state.hasItems else {
             return Self.inputHeight
         }
-        let listHeight = CGFloat(min(state.filteredResults.count, state.maxVisibleItems)) * ListItemView.itemHeight
+
+        // Calculate list height using variable item heights
+        let visibleResults = state.visibleResults
+        let listHeight = visibleResults.reduce(0) { $0 + ListItemView.heightForItem($1.item) }
+
         if listHeight == 0 {
             // Show "No matches" row
             return Self.inputHeight + ListItemView.itemHeight + Self.listPadding
