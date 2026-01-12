@@ -31,6 +31,8 @@ import (
 	gridTypes "github.com/ryanthedev/grid-cli/internal/types"
 	gridWindow "github.com/ryanthedev/grid-cli/internal/window"
 	"github.com/ryanthedev/grid-cli/internal/xdg"
+	"github.com/ryanthedev/grid-cli/internal/process"
+	"github.com/ryanthedev/grid-cli/internal/tmux"
 	"gopkg.in/yaml.v3"
 )
 
@@ -1711,6 +1713,7 @@ type PickerItem struct {
 	ID         string            `json:"id"`
 	Title      string            `json:"title"`
 	Subtitle   string            `json:"subtitle,omitempty"`
+	Preview    string            `json:"preview,omitempty"`
 	Icon       string            `json:"icon,omitempty"`
 	Searchable []string          `json:"searchable"`
 	Metadata   map[string]string `json:"metadata,omitempty"`
@@ -1846,6 +1849,21 @@ func getAllWindows(ctx context.Context, c *client.Client) ([]*models.Window, *mo
 func windowsToPickerItems(windows []*models.Window, state *models.State) []PickerItem {
 	items := make([]PickerItem, 0, len(windows))
 
+	// Get tmux clients and cache for enriching terminal windows
+	tmuxClients, _ := tmux.GetClients()
+	tmuxCache, _ := tmux.LoadCache()
+
+	// Refresh process tree once (single ps call instead of many pgrep calls)
+	process.RefreshProcessTree()
+
+	// Track which windows were enriched with tmux info
+	type tmuxEnrichment struct {
+		sessionName string
+		windowName  string
+		paneCommand string
+	}
+	tmuxInfo := make(map[int]*tmuxEnrichment)
+
 	for _, w := range windows {
 		// Get title with fallback
 		title := "Untitled"
@@ -1865,6 +1883,18 @@ func windowsToPickerItems(windows []*models.Window, state *models.State) []Picke
 			bundleID = app.BundleIdentifier
 		}
 
+		// Try to enrich terminal windows with tmux session info
+		if tmux.IsTerminalApp(bundleID) && len(tmuxClients) > 0 {
+			if info := enrichWithTmux(w, tmuxCache, tmuxClients); info != nil {
+				title = info.SessionName
+				tmuxInfo[w.ID] = &tmuxEnrichment{
+					sessionName: info.SessionName,
+					windowName:  info.WindowName,
+					paneCommand: info.PaneCommand,
+				}
+			}
+		}
+
 		// Build searchable strings
 		searchable := []string{title, appName}
 		if bundleID != "" {
@@ -1877,10 +1907,21 @@ func windowsToPickerItems(windows []*models.Window, state *models.State) []Picke
 			icon = "bundle:" + bundleID
 		}
 
+		// Build subtitle and preview
+		subtitle := appName
+		preview := ""
+		if enrichment, ok := tmuxInfo[w.ID]; ok {
+			subtitle = fmt.Sprintf("%s:%s", enrichment.sessionName, enrichment.windowName)
+			preview = enrichment.paneCommand
+			// Add tmux info to searchable
+			searchable = append(searchable, enrichment.sessionName, enrichment.windowName)
+		}
+
 		item := PickerItem{
 			ID:         strconv.Itoa(w.ID),
 			Title:      title,
-			Subtitle:   appName,
+			Subtitle:   subtitle,
+			Preview:    preview,
 			Icon:       icon,
 			Searchable: searchable,
 			Metadata:   map[string]string{"wid": strconv.Itoa(w.ID)},
@@ -1888,7 +1929,39 @@ func windowsToPickerItems(windows []*models.Window, state *models.State) []Picke
 		items = append(items, item)
 	}
 
+	// Prune and save cache
+	if len(tmuxClients) > 0 {
+		validClientPIDs := make(map[int]bool)
+		for pid := range tmuxClients {
+			validClientPIDs[pid] = true
+		}
+		tmuxCache.Prune(validClientPIDs)
+		tmuxCache.Save()
+	}
+
 	return items
+}
+
+// enrichWithTmux attempts to find tmux session info for a terminal window.
+// Returns the TmuxClientInfo if found, nil otherwise.
+func enrichWithTmux(w *models.Window, cache *tmux.Cache, clients map[int]tmux.TmuxClientInfo) *tmux.TmuxClientInfo {
+	// Try cache first
+	if clientPID, found := cache.Lookup(w.PID); found {
+		if info, ok := clients[clientPID]; ok {
+			return &info
+		}
+	}
+
+	// Cache miss - search process tree (depth 4 to handle login->shell->bash->tmux)
+	descendants, _ := process.GetDescendantPIDs(w.PID, 4)
+	for _, pid := range descendants {
+		if info, ok := clients[pid]; ok {
+			cache.Store(w.PID, pid)
+			return &info
+		}
+	}
+
+	return nil
 }
 
 // runPickWindow launches the interactive window picker
