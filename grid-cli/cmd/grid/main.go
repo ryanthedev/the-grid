@@ -1993,8 +1993,16 @@ func runPickWindow() error {
 		return fmt.Errorf("failed to load state: %w", err)
 	}
 
+	// Load config for border sync
+	cfg, err := gridConfig.LoadConfig("")
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
 	// Collect all window IDs assigned to cells across ALL current spaces (one per display)
+	// Also track which display each window is on for border sync
 	assignedWindowIDs := make(map[uint32]bool)
+	windowToDisplay := make(map[uint32]string)
 	for _, display := range serverState.Displays {
 		spaceID := display.GetCurrentSpaceIDString()
 		if spaceID == "" {
@@ -2007,6 +2015,7 @@ func runPickWindow() error {
 		for _, cell := range spaceState.Cells {
 			for _, wid := range cell.Windows {
 				assignedWindowIDs[wid] = true
+				windowToDisplay[wid] = display.UUID
 			}
 		}
 	}
@@ -2067,6 +2076,11 @@ func runPickWindow() error {
 			return fmt.Errorf("window no longer exists")
 		}
 		return fmt.Errorf("focus failed: %w", err)
+	}
+
+	// Sync border focus so the active border updates to the newly focused window
+	if displayUUID := windowToDisplay[windowID]; displayUUID != "" {
+		gridReconcile.SyncBorderFocus(ctx, c, displayUUID, windowID, cfg)
 	}
 
 	// Warp mouse to window (non-fatal if it fails since focus succeeded)
