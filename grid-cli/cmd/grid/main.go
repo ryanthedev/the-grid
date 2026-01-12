@@ -1900,7 +1900,7 @@ func runPickWindow() error {
 	jsonlog.Log("pick.start")
 
 	// Get windows from server
-	windows, state, err := getAllWindows(ctx, c)
+	windows, serverState, err := getAllWindows(ctx, c)
 	if err != nil {
 		return err
 	}
@@ -1909,8 +1909,57 @@ func runPickWindow() error {
 		return fmt.Errorf("no windows found")
 	}
 
+	// Load runtime state to get cell assignments
+	runtimeState, err := gridState.LoadState()
+	if err != nil {
+		return fmt.Errorf("failed to load state: %w", err)
+	}
+
+	// Get current space ID from the main display
+	var currentSpaceID string
+	for _, display := range serverState.Displays {
+		if display.IsMainDisplay() {
+			currentSpaceID = display.GetCurrentSpaceIDString()
+			break
+		}
+	}
+	if currentSpaceID == "" && len(serverState.Displays) > 0 {
+		// Fallback to first display if no main display found
+		currentSpaceID = serverState.Displays[0].GetCurrentSpaceIDString()
+	}
+
+	// Get the space state and collect assigned window IDs
+	spaceState := runtimeState.GetSpaceReadOnly(currentSpaceID)
+	if spaceState == nil || len(spaceState.Cells) == 0 {
+		return fmt.Errorf("no windows assigned to cells (run a layout first)")
+	}
+
+	// Collect all window IDs assigned to cells in this space
+	assignedWindowIDs := make(map[uint32]bool)
+	for _, cell := range spaceState.Cells {
+		for _, wid := range cell.Windows {
+			assignedWindowIDs[wid] = true
+		}
+	}
+
+	if len(assignedWindowIDs) == 0 {
+		return fmt.Errorf("no windows assigned to cells (run a layout first)")
+	}
+
+	// Filter windows to only those assigned to cells
+	filteredWindows := make([]*models.Window, 0, len(windows))
+	for _, w := range windows {
+		if assignedWindowIDs[uint32(w.ID)] {
+			filteredWindows = append(filteredWindows, w)
+		}
+	}
+
+	if len(filteredWindows) == 0 {
+		return fmt.Errorf("no windows assigned to cells (run a layout first)")
+	}
+
 	// Transform to picker items
-	items := windowsToPickerItems(windows, state)
+	items := windowsToPickerItems(filteredWindows, serverState)
 
 	// Launch picker with items
 	result, err := launchPicker(items)
