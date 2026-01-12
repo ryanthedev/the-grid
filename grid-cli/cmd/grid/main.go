@@ -1864,6 +1864,9 @@ func windowsToPickerItems(windows []*models.Window, state *models.State) []Picke
 	}
 	tmuxInfo := make(map[int]*tmuxEnrichment)
 
+	// Track which PIDs have already been enriched (multiple windows can share same PID)
+	enrichedPIDs := make(map[int]bool)
+
 	for _, w := range windows {
 		// Get title with fallback
 		title := "Untitled"
@@ -1884,7 +1887,8 @@ func windowsToPickerItems(windows []*models.Window, state *models.State) []Picke
 		}
 
 		// Try to enrich terminal windows with tmux session info
-		if tmux.IsTerminalApp(bundleID) && len(tmuxClients) > 0 {
+		// Only enrich first window per PID to avoid duplicates (e.g., multiple Ghostty tabs)
+		if tmux.IsTerminalApp(bundleID) && len(tmuxClients) > 0 && !enrichedPIDs[w.PID] {
 			if info := enrichWithTmux(w, tmuxCache, tmuxClients); info != nil {
 				title = info.SessionName
 				tmuxInfo[w.ID] = &tmuxEnrichment{
@@ -1892,6 +1896,7 @@ func windowsToPickerItems(windows []*models.Window, state *models.State) []Picke
 					windowName:  info.WindowName,
 					paneCommand: info.PaneCommand,
 				}
+				enrichedPIDs[w.PID] = true
 			}
 		}
 
