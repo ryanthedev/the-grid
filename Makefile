@@ -1,4 +1,4 @@
-.PHONY: help build server cli picker test clean server-test cli-test server-clean cli-clean run-server install dist dev reset-accessibility setup-signing install-scripts
+.PHONY: help build server cli picker test clean server-test cli-test server-clean cli-clean run-server install dist dev reset-accessibility setup-signing install-scripts server-universal cli-universal picker-universal dist-universal
 
 # Version from VERSION file
 VERSION := $(shell cat VERSION)
@@ -123,6 +123,17 @@ cli-universal:
 	@echo "Created universal binary: grid-cli/bin/thegrid"
 	@file grid-cli/bin/thegrid
 
+picker-universal:
+	@echo "Building grid-picker (universal binary)..."
+	@cd grid-server && swift build -c release --product grid-picker --arch arm64 --arch x86_64
+	@echo "Verifying universal binary..."
+	@if ! file grid-server/.build/apple/Products/Release/grid-picker | grep -q "universal binary"; then \
+		echo "Error: Failed to create universal binary for grid-picker"; \
+		exit 1; \
+	fi
+	@echo "Created universal binary: grid-server/.build/apple/Products/Release/grid-picker"
+	@file grid-server/.build/apple/Products/Release/grid-picker
+
 # Create GridServer.app bundle
 app-bundle: server-universal
 	@echo "Creating GridServer.app bundle..."
@@ -142,12 +153,13 @@ app-bundle: server-universal
 	@echo "✓ GridServer.app created"
 
 # Distribution tarball with universal binaries (for Homebrew)
-dist-universal: app-bundle cli-universal
+dist-universal: app-bundle cli-universal picker-universal
 	@echo "Creating universal distribution tarball v$(VERSION)..."
 	@rm -rf dist/thegrid-$(VERSION)
 	@mkdir -p dist/thegrid-$(VERSION)/bin
 	@cp -R dist/GridServer.app dist/thegrid-$(VERSION)/
 	@cp grid-cli/bin/thegrid dist/thegrid-$(VERSION)/bin/
+	@cp grid-server/.build/apple/Products/Release/grid-picker dist/thegrid-$(VERSION)/bin/
 	@cp VERSION dist/thegrid-$(VERSION)/
 	@cp LICENSE dist/thegrid-$(VERSION)/ 2>/dev/null || echo "No LICENSE file"
 	@cp README.md dist/thegrid-$(VERSION)/ 2>/dev/null || true
@@ -162,6 +174,7 @@ dist-universal: app-bundle cli-universal
 	@echo "Verify contents:"
 	@file dist/thegrid-$(VERSION)/GridServer.app/Contents/MacOS/grid-server
 	@file dist/thegrid-$(VERSION)/bin/thegrid
+	@file dist/thegrid-$(VERSION)/bin/grid-picker
 
 # Show help
 help:
