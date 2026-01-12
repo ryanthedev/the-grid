@@ -122,7 +122,7 @@ struct PickerItem: Codable, Equatable {
 // MARK: - Icon Rendering
 
 /// Renders icon strings to NSImage for display in the picker
-/// Supports: emoji, file paths, data URLs, and inline SVG
+/// Supports: bundle IDs (bundle:com.apple.Safari), emoji, file paths, data URLs, and inline SVG
 class IconRenderer {
 
     /// Target icon size in points
@@ -157,6 +157,11 @@ class IconRenderer {
 
     /// Detect icon format and render appropriately
     private static func detectAndRender(_ icon: String) -> NSImage? {
+        // Bundle identifier (app icon lookup)
+        if icon.hasPrefix("bundle:") {
+            return loadFromBundle(icon)
+        }
+
         // Data URL (base64 encoded image)
         if icon.hasPrefix("data:image/") {
             return renderDataURL(icon)
@@ -183,6 +188,27 @@ class IconRenderer {
         }
 
         return nil
+    }
+
+    /// Load app icon from bundle identifier
+    /// - Parameter icon: Icon string starting with "bundle:" prefix
+    /// - Returns: App icon NSImage or nil if bundle not found
+    private static func loadFromBundle(_ icon: String) -> NSImage? {
+        // Extract bundle identifier (drop "bundle:" prefix - 7 chars)
+        let bundleID = String(icon.dropFirst(7))
+
+        guard !bundleID.isEmpty else {
+            return nil
+        }
+
+        // Resolve app URL from bundle identifier
+        guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else {
+            return nil
+        }
+
+        // Get app icon
+        let appIcon = NSWorkspace.shared.icon(forFile: appURL.path)
+        return scaleImage(appIcon, to: targetSize)
     }
 
     /// Check if string appears to be a file path
@@ -298,6 +324,11 @@ class IconRenderer {
     /// Scale an image to fit within target size while maintaining aspect ratio
     private static func scaleImage(_ image: NSImage, to targetSize: CGFloat) -> NSImage {
         let originalSize = image.size
+
+        // Guard against malformed images with zero dimensions
+        guard originalSize.width > 0 && originalSize.height > 0 else {
+            return image
+        }
 
         // Calculate scale factor to fit within target size
         let scale = min(targetSize / originalSize.width, targetSize / originalSize.height)
@@ -1199,7 +1230,9 @@ class PickerWindow: NSWindow {
         }
 
         // Calculate position - center on screen
-        let screen = NSScreen.main ?? NSScreen.screens.first!
+        guard let screen = NSScreen.main ?? NSScreen.screens.first else {
+            fatalError("No screens available")
+        }
         let origin = NSPoint(
             x: screen.frame.midX - config.width / 2,
             y: screen.frame.midY - initialHeight / 2
@@ -1356,7 +1389,6 @@ class PickerWindow: NSWindow {
         // ESC - cancel
         if event.keyCode == 53 {
             finish(.cancelled)
-            return
         }
 
         // Only handle navigation keys in list mode
@@ -1409,7 +1441,6 @@ extension PickerWindow: NSTextFieldDelegate {
         }
         if commandSelector == #selector(cancelOperation(_:)) {
             finish(.cancelled)
-            return true
         }
 
         // Handle navigation in text field context
