@@ -29,6 +29,7 @@ type Settings struct {
 	Resize            ResizeSettings             `yaml:"resize,omitempty" json:"resize,omitempty"`
 	WindowExclusion   WindowExclusion            `yaml:"windowExclusion,omitempty" json:"windowExclusion,omitempty"`
 	DisplayOffsets    map[string]DisplayOffset   `yaml:"displayOffsets,omitempty" json:"displayOffsets,omitempty"` // Per-display X,Y offsets by UUID or name
+	PickerPath        string                     `yaml:"pickerPath,omitempty" json:"pickerPath,omitempty"`         // Override path to grid-picker executable
 }
 
 // ResizeSettings configures CLI resize behavior

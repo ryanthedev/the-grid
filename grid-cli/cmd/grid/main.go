@@ -3,11 +3,15 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -1725,8 +1729,37 @@ type PickerResult struct {
 	Selected  *PickerItem `json:"selected,omitempty"`
 }
 
-// findPickerExecutable locates the grid-picker binary by checking standard locations
-func findPickerExecutable() (string, error) {
+// tmuxEnrichment holds tmux session info for a terminal window
+type tmuxEnrichment struct {
+	sessionName string
+	windowName  string
+	paneCommand string
+}
+
+// PickerContext holds additional data needed for stable ID generation
+type PickerContext struct {
+	TmuxInfo  map[int]*tmuxEnrichment
+	BundleIDs map[int]string
+	Titles    map[int]string
+	PIDs      map[int]int
+}
+
+// findPickerExecutable locates the grid-picker binary by checking standard locations.
+// If overridePath is set, it takes precedence and errors if invalid (no silent fallback).
+func findPickerExecutable(overridePath string) (string, error) {
+	// If override path is provided, use it exclusively (no fallback)
+	if overridePath != "" {
+		info, err := os.Stat(overridePath)
+		if err != nil {
+			return "", fmt.Errorf("configured pickerPath %q not found: %w", overridePath, err)
+		}
+		// Check if file is executable (has any execute bit set)
+		if info.Mode()&0111 == 0 {
+			return "", fmt.Errorf("configured pickerPath %q is not executable", overridePath)
+		}
+		return overridePath, nil
+	}
+
 	// Build list of paths to check in order of preference
 	var searchPaths []string
 	var searchedLocations []string
@@ -1767,10 +1800,11 @@ func findPickerExecutable() (string, error) {
 	return "", fmt.Errorf("grid-picker not found in:\n  - %s", strings.Join(searchedLocations, "\n  - "))
 }
 
-// launchPicker spawns the picker executable with items and returns the selection result
-func launchPicker(items []PickerItem) (*PickerResult, error) {
+// launchPicker spawns the picker executable with items and returns the selection result.
+// pickerPathOverride, if set, takes precedence over default search paths.
+func launchPicker(items []PickerItem, pickerPathOverride string) (*PickerResult, error) {
 	// Find the picker executable
-	pickerPath, err := findPickerExecutable()
+	pickerPath, err := findPickerExecutable(pickerPathOverride)
 	if err != nil {
 		return nil, err
 	}
@@ -1846,8 +1880,15 @@ func getAllWindows(ctx context.Context, c *client.Client) ([]*models.Window, *mo
 }
 
 // windowsToPickerItems transforms windows into PickerItem format for grid-picker
-func windowsToPickerItems(windows []*models.Window, state *models.State) []PickerItem {
+// Also returns PickerContext with data needed for stable ID generation
+func windowsToPickerItems(windows []*models.Window, state *models.State) ([]PickerItem, *PickerContext) {
 	items := make([]PickerItem, 0, len(windows))
+	pctx := &PickerContext{
+		TmuxInfo:  make(map[int]*tmuxEnrichment),
+		BundleIDs: make(map[int]string),
+		Titles:    make(map[int]string),
+		PIDs:      make(map[int]int),
+	}
 
 	// Get tmux clients and cache for enriching terminal windows
 	tmuxClients, _ := tmux.GetClients()
@@ -1856,23 +1897,20 @@ func windowsToPickerItems(windows []*models.Window, state *models.State) []Picke
 	// Refresh process tree once (single ps call instead of many pgrep calls)
 	process.RefreshProcessTree()
 
-	// Track which windows were enriched with tmux info
-	type tmuxEnrichment struct {
-		sessionName string
-		windowName  string
-		paneCommand string
-	}
-	tmuxInfo := make(map[int]*tmuxEnrichment)
-
 	// Track which PIDs have already been enriched (multiple windows can share same PID)
 	enrichedPIDs := make(map[int]bool)
 
 	for _, w := range windows {
+		// Store PID for stable ID generation
+		pctx.PIDs[w.ID] = w.PID
+
 		// Get title with fallback
 		title := "Untitled"
 		if w.Title != nil && *w.Title != "" {
 			title = *w.Title
 		}
+		// Store original title for stable ID
+		pctx.Titles[w.ID] = title
 
 		// Get app name with fallback
 		appName := "Unknown"
@@ -1885,13 +1923,14 @@ func windowsToPickerItems(windows []*models.Window, state *models.State) []Picke
 		if app := state.FindApplicationByPID(w.PID); app != nil {
 			bundleID = app.BundleIdentifier
 		}
+		pctx.BundleIDs[w.ID] = bundleID
 
 		// Try to enrich terminal windows with tmux session info
 		// Only enrich first window per PID to avoid duplicates (e.g., multiple Ghostty tabs)
 		if tmux.IsTerminalApp(bundleID) && len(tmuxClients) > 0 && !enrichedPIDs[w.PID] {
 			if info := enrichWithTmux(w, tmuxCache, tmuxClients); info != nil {
 				title = info.SessionName
-				tmuxInfo[w.ID] = &tmuxEnrichment{
+				pctx.TmuxInfo[w.ID] = &tmuxEnrichment{
 					sessionName: info.SessionName,
 					windowName:  info.WindowName,
 					paneCommand: info.PaneCommand,
@@ -1915,7 +1954,7 @@ func windowsToPickerItems(windows []*models.Window, state *models.State) []Picke
 		// Build subtitle and preview
 		subtitle := appName
 		preview := ""
-		if enrichment, ok := tmuxInfo[w.ID]; ok {
+		if enrichment, ok := pctx.TmuxInfo[w.ID]; ok {
 			subtitle = fmt.Sprintf("%s:%s", enrichment.sessionName, enrichment.windowName)
 			preview = enrichment.paneCommand
 			// Add tmux info to searchable
@@ -1944,7 +1983,7 @@ func windowsToPickerItems(windows []*models.Window, state *models.State) []Picke
 		tmuxCache.Save()
 	}
 
-	return items
+	return items, pctx
 }
 
 // enrichWithTmux attempts to find tmux session info for a terminal window.
@@ -1967,6 +2006,90 @@ func enrichWithTmux(w *models.Window, cache *tmux.Cache, clients map[int]tmux.Tm
 	}
 
 	return nil
+}
+
+// normalizeTitle converts a title to a stable, URL-safe form
+// lowercase, keep alphanumeric + hyphens, truncate to 30 chars
+func normalizeTitle(title string) string {
+	// Convert to lowercase
+	title = strings.ToLower(title)
+	// Replace non-alphanumeric with hyphens, collapse multiple hyphens
+	re := regexp.MustCompile(`[^a-z0-9]+`)
+	title = re.ReplaceAllString(title, "-")
+	// Trim leading/trailing hyphens
+	title = strings.Trim(title, "-")
+	// Truncate to 30 chars
+	if len(title) > 30 {
+		title = title[:30]
+	}
+	// Trim trailing hyphen after truncation
+	title = strings.TrimSuffix(title, "-")
+	return title
+}
+
+// hash4 returns the first 4 hex chars of SHA256(s) for collision resistance
+func hash4(s string) string {
+	h := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(h[:])[:4]
+}
+
+// stableWindowID generates a stable identifier for a window that persists across restarts.
+// Tmux windows: tmux:{session}:{window}
+// Non-tmux: {bundleID}:{normalized_title}:{hash4}
+func stableWindowID(wid int, tmuxInfo *tmuxEnrichment, bundleID, title string, pid int) string {
+	// Tmux windows
+	if tmuxInfo != nil {
+		session := tmuxInfo.sessionName
+		window := tmuxInfo.windowName
+		if session != "" && window != "" {
+			return fmt.Sprintf("tmux:%s:%s", session, window)
+		}
+		// Fallback for empty session/window
+		return fmt.Sprintf("tmux:unknown:%d", pid)
+	}
+
+	// Non-tmux with bundleID
+	if bundleID != "" {
+		if title != "" && title != "Untitled" {
+			normalized := normalizeTitle(title)
+			if normalized != "" {
+				return fmt.Sprintf("%s:%s:%s", bundleID, normalized, hash4(title))
+			}
+		}
+		// Empty title fallback
+		return fmt.Sprintf("%s:untitled:%d", bundleID, wid)
+	}
+
+	// Ultimate fallback
+	return fmt.Sprintf("unknown:%d", wid)
+}
+
+// sortItemsByHistory sorts picker items with previous window first,
+// then by frequency descending, then alphabetically by title
+func sortItemsByHistory(items []PickerItem, stableIDs map[int]string, history *gridState.PickerHistory) {
+	sort.SliceStable(items, func(i, j int) bool {
+		widI, _ := strconv.Atoi(items[i].Metadata["wid"])
+		widJ, _ := strconv.Atoi(items[j].Metadata["wid"])
+		idI := stableIDs[widI]
+		idJ := stableIDs[widJ]
+
+		// Previous window first
+		prevI := history.IsPrevious(idI)
+		prevJ := history.IsPrevious(idJ)
+		if prevI != prevJ {
+			return prevI
+		}
+
+		// Then by frequency descending
+		freqI := history.GetFrequency(idI)
+		freqJ := history.GetFrequency(idJ)
+		if freqI != freqJ {
+			return freqI > freqJ
+		}
+
+		// Finally alphabetically by title
+		return items[i].Title < items[j].Title
+	})
 }
 
 // runPickWindow launches the interactive window picker
@@ -2036,11 +2159,34 @@ func runPickWindow() error {
 		return fmt.Errorf("no windows assigned to cells (run a layout first)")
 	}
 
-	// Transform to picker items
-	items := windowsToPickerItems(filteredWindows, serverState)
+	// Transform to picker items and get context for stable ID generation
+	items, pctx := windowsToPickerItems(filteredWindows, serverState)
 
-	// Launch picker with items
-	result, err := launchPicker(items)
+	// Generate stable IDs for each window
+	stableIDs := make(map[int]string)
+	for _, item := range items {
+		wid, _ := strconv.Atoi(item.Metadata["wid"])
+		stableIDs[wid] = stableWindowID(
+			wid,
+			pctx.TmuxInfo[wid],
+			pctx.BundleIDs[wid],
+			pctx.Titles[wid],
+			pctx.PIDs[wid],
+		)
+	}
+
+	// Load picker history for sorting
+	history, err := gridState.LoadPickerHistory()
+	if err != nil {
+		jsonlog.Log("pick.history.load_err", jsonlog.WithMsg(err.Error()))
+		history = gridState.NewPickerHistory()
+	}
+
+	// Sort items by history (previous first, then by frequency)
+	sortItemsByHistory(items, stableIDs, history)
+
+	// Launch picker with items (use config override if set)
+	result, err := launchPicker(items, cfg.Settings.PickerPath)
 	if err != nil {
 		return err
 	}
@@ -2066,6 +2212,14 @@ func runPickWindow() error {
 		return fmt.Errorf("invalid window ID %q: %w", widStr, err)
 	}
 	windowID := uint32(widInt)
+
+	// Record selection in history
+	if sid, ok := stableIDs[int(windowID)]; ok {
+		history.RecordSelection(sid)
+		if err := history.Save(); err != nil {
+			jsonlog.Log("pick.history.save_err", jsonlog.WithMsg(err.Error()))
+		}
+	}
 
 	jsonlog.Log("pick.select", jsonlog.WithData(map[string]any{"wid": windowID}))
 
