@@ -554,7 +554,7 @@ class PickerState {
 
     /// Maximum height for the list area (in points)
     /// With variable item heights (36-70pt), use height constraint instead of item count
-    static let maxListHeight: CGFloat = 500
+    static let maxListHeight: CGFloat = 600
 
     /// Callback when state changes
     var onStateChange: (() -> Void)?
@@ -708,33 +708,30 @@ class PickerState {
 
 // MARK: - List Item View
 
-/// A single row in the picker list
+/// A single row in the picker list - styled as a card
 class ListItemView: NSView {
     private let item: PickerItem
     private let matchedIndices: Set<Int>
     private let isSelected: Bool
     private let showIconColumn: Bool
 
-    // Layout constants per requirements:
-    // - 8pt padding top + bottom = 16pt base
-    // - Title: ~20pt line height
-    // - Subtitle: +18pt
-    // - Preview: +16pt
-    // - Icon column: 40pt (8pt padding + 24pt icon + 8pt padding)
-    private static let verticalPadding: CGFloat = 8
-    private static let titleLineHeight: CGFloat = 20
-    private static let subtitleLineHeight: CGFloat = 18
-    private static let previewLineHeight: CGFloat = 16
-    private static let iconColumnWidth: CGFloat = 40
-    private static let horizontalPadding: CGFloat = 12
+    // Layout constants (scaled +20% for larger fonts, more breathing room)
+    private static let verticalPadding: CGFloat = 12
+    private static let titleLineHeight: CGFloat = 24
+    private static let subtitleLineHeight: CGFloat = 20
+    private static let previewLineHeight: CGFloat = 18
+    private static let iconColumnWidth: CGFloat = 48
+    private static let horizontalPadding: CGFloat = 16
 
-    // Minimum height for title-only items (~36pt per requirements)
-    static let itemHeight: CGFloat = 36
+    // Card styling
+    private static let cardCornerRadius: CGFloat = 6
+    private static let cardInset: CGFloat = 8
+    static let itemGap: CGFloat = 6
+
+    // Minimum height for title-only items
+    static let itemHeight: CGFloat = 48
 
     /// Calculate height for a specific item based on its content
-    /// - Title only: ~36pt
-    /// - + Subtitle: ~54pt
-    /// - + Preview: ~70pt
     static func heightForItem(_ item: PickerItem) -> CGFloat {
         var height: CGFloat = verticalPadding * 2 + titleLineHeight
         if item.subtitle != nil {
@@ -743,7 +740,7 @@ class ListItemView: NSView {
         if item.preview != nil {
             height += previewLineHeight
         }
-        return height
+        return height + itemGap
     }
 
     init(item: PickerItem, matchedIndices: [Int], isSelected: Bool, showIconColumn: Bool) {
@@ -763,55 +760,68 @@ class ListItemView: NSView {
 
         let bounds = self.bounds
 
-        // Draw selection background
-        if isSelected {
-            Colors.inputBackground.setFill()
-            NSBezierPath(roundedRect: bounds.insetBy(dx: 4, dy: 2), xRadius: 4, yRadius: 4).fill()
-        }
+        // Card area (inset from full bounds, accounting for gap)
+        let cardRect = NSRect(
+            x: Self.cardInset,
+            y: Self.itemGap,
+            width: bounds.width - Self.cardInset * 2,
+            height: bounds.height - Self.itemGap
+        )
 
-        // Calculate text starting X position
-        let textStartX: CGFloat
+        // Draw card background (subtle differentiation)
+        let cardBg = isSelected ? Colors.inputBackground : Colors.inputBackground.withAlphaComponent(0.3)
+        cardBg.setFill()
+        NSBezierPath(roundedRect: cardRect, xRadius: Self.cardCornerRadius, yRadius: Self.cardCornerRadius).fill()
+
+        // Text starts at left padding within card
+        let textStartX = Self.cardInset + Self.horizontalPadding
+
+        // Text ends before icon column (icon now on right) with margin
+        let iconMargin: CGFloat = 12
+        let textEndX: CGFloat
         if showIconColumn {
-            textStartX = Self.horizontalPadding + Self.iconColumnWidth
+            textEndX = bounds.width - Self.cardInset - Self.horizontalPadding - Self.iconColumnWidth - iconMargin
         } else {
-            textStartX = Self.horizontalPadding
+            textEndX = bounds.width - Self.cardInset - Self.horizontalPadding
         }
+        let textWidth = textEndX - textStartX
 
-        // Draw icon if present and icon column is shown
-        // Icon is centered vertically in the row, and horizontally within the 40pt column
+        // Draw icon on RIGHT side if present
         if showIconColumn, let iconImage = IconRenderer.render(item.icon) {
             let iconSize = IconRenderer.targetSize
-            let iconX = (Self.iconColumnWidth - iconSize) / 2
-            let iconY = (bounds.height - iconSize) / 2
+            let iconX = bounds.width - Self.cardInset - Self.horizontalPadding - iconSize
+            let iconY = cardRect.midY - iconSize / 2
             iconImage.draw(in: NSRect(x: iconX, y: iconY, width: iconSize, height: iconSize))
         }
 
         // Track Y position (drawing from top to bottom, but NSView coordinates are bottom-up)
-        var currentY = bounds.height - Self.verticalPadding
+        var currentY = cardRect.maxY - Self.verticalPadding
 
-        // Draw title with highlighting
+        // Draw title with highlighting (truncated to fit)
         let titleString = buildTitleAttributedString()
-        let titleHeight = titleString.size().height
-        currentY -= titleHeight
-        titleString.draw(at: NSPoint(x: textStartX, y: currentY))
-        currentY -= (Self.titleLineHeight - titleHeight)
+        currentY -= Self.titleLineHeight
+        let titleRect = NSRect(x: textStartX, y: currentY, width: textWidth, height: Self.titleLineHeight)
+        titleString.draw(in: titleRect)
 
-        // Draw subtitle if present (12pt per requirements)
+        // Draw subtitle if present (truncated to fit)
         if let subtitle = item.subtitle {
+            let paragraphStyle = NSMutableParagraphStyle()
+            paragraphStyle.lineBreakMode = .byTruncatingTail
+
             let subtitleString = NSAttributedString(
                 string: subtitle,
                 attributes: [
-                    .font: NSFont.systemFont(ofSize: 12, weight: .regular),
-                    .foregroundColor: Colors.placeholder
+                    .font: Fonts.mono(size: 14),
+                    .foregroundColor: Colors.textSecondary,
+                    .paragraphStyle: paragraphStyle
                 ]
             )
-            let subtitleHeight = subtitleString.size().height
-            currentY -= subtitleHeight
-            subtitleString.draw(at: NSPoint(x: textStartX, y: currentY))
-            currentY -= (Self.subtitleLineHeight - subtitleHeight)
+            currentY -= Self.subtitleLineHeight
+            let subtitleRect = NSRect(x: textStartX, y: currentY, width: textWidth, height: Self.subtitleLineHeight)
+            subtitleString.draw(in: subtitleRect)
         }
 
-        // Draw preview if present (11pt, single line truncated)
+        // Draw preview if present (truncated)
         if let preview = item.preview {
             let paragraphStyle = NSMutableParagraphStyle()
             paragraphStyle.lineBreakMode = .byTruncatingTail
@@ -819,27 +829,29 @@ class ListItemView: NSView {
             let previewString = NSAttributedString(
                 string: preview,
                 attributes: [
-                    .font: NSFont.systemFont(ofSize: 11, weight: .regular),
-                    .foregroundColor: Colors.placeholder,
+                    .font: Fonts.mono(size: 13),
+                    .foregroundColor: Colors.textTertiary,
                     .paragraphStyle: paragraphStyle
                 ]
             )
             currentY -= Self.previewLineHeight
-            let textWidth = bounds.width - textStartX - Self.horizontalPadding
             let previewRect = NSRect(x: textStartX, y: currentY, width: textWidth, height: Self.previewLineHeight)
             previewString.draw(in: previewRect)
         }
     }
 
     /// Build the title attributed string with match highlighting
-    /// Title: system font 14pt, medium weight, Colors.text
     private func buildTitleAttributedString() -> NSAttributedString {
         let displayText = item.title
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.lineBreakMode = .byTruncatingTail
+
         let attributedString = NSMutableAttributedString(
             string: displayText,
             attributes: [
-                .font: NSFont.systemFont(ofSize: 14, weight: .medium),
-                .foregroundColor: Colors.text
+                .font: Fonts.mono(size: 17),
+                .foregroundColor: Colors.text,
+                .paragraphStyle: paragraphStyle
             ]
         )
 
@@ -943,7 +955,7 @@ class ListView: NSView {
 
 struct PickerConfig {
     var prompt: String = ""
-    var width: CGFloat = 400
+    var width: CGFloat = 800
     var height: CGFloat = 56
     var items: [PickerItem] = []
 
@@ -1085,15 +1097,37 @@ func finish(_ result: PickerResult) -> Never {
     exit(result.exitCode)
 }
 
-// MARK: - Colors (Catppuccin Mocha)
+// MARK: - Colors (Ghostty-inspired dark theme)
 
 struct Colors {
-    static let background = NSColor(red: 0.118, green: 0.118, blue: 0.180, alpha: 0.95)
-    static let inputBackground = NSColor(red: 0.192, green: 0.200, blue: 0.267, alpha: 1)
-    static let text = NSColor(red: 0.804, green: 0.839, blue: 0.957, alpha: 1)
-    static let placeholder = NSColor(red: 0.424, green: 0.439, blue: 0.525, alpha: 1)
-    static let border = NSColor(red: 0.345, green: 0.357, blue: 0.439, alpha: 1)
-    static let prompt = NSColor(red: 0.537, green: 0.706, blue: 0.980, alpha: 1)
+    // #121212 - deep black background
+    static let background = NSColor(red: 0.071, green: 0.071, blue: 0.071, alpha: 0.98)
+    // #232323 - slightly lighter for input area
+    static let inputBackground = NSColor(red: 0.137, green: 0.137, blue: 0.137, alpha: 1)
+    // #BFBFBF - neutral light gray text (primary)
+    static let text = NSColor(red: 0.749, green: 0.749, blue: 0.749, alpha: 1)
+    // #949494 - secondary text (subtitle) - readable, distinct from primary
+    static let textSecondary = NSColor(red: 0.58, green: 0.58, blue: 0.58, alpha: 1)
+    // #7A7A7A - tertiary text (preview) - softer but still comfortable
+    static let textTertiary = NSColor(red: 0.478, green: 0.478, blue: 0.478, alpha: 1)
+    // #666666 - dimmed placeholder (input hints only)
+    static let placeholder = NSColor(red: 0.4, green: 0.4, blue: 0.4, alpha: 1)
+    // #404040 - subtle border
+    static let border = NSColor(red: 0.251, green: 0.251, blue: 0.251, alpha: 1)
+    // #00BFFF - bright blue accent
+    static let prompt = NSColor(red: 0.0, green: 0.749, blue: 1.0, alpha: 1)
+}
+
+// MARK: - Fonts
+
+enum Fonts {
+    static func mono(size: CGFloat, weight: NSFont.Weight = .regular) -> NSFont {
+        // Try BerkeleyMono Nerd Font first, fall back to system monospace
+        if let font = NSFont(name: "BerkeleyMono Nerd Font", size: size) {
+            return font
+        }
+        return NSFont.monospacedSystemFont(ofSize: size, weight: weight)
+    }
 }
 
 // MARK: - Window
@@ -1109,10 +1143,9 @@ class PickerWindow: NSWindow {
     private var state: PickerState?
     private var listView: ListView?
     private var listViewHeightConstraint: NSLayoutConstraint?
-    private var windowHeightConstraint: NSLayoutConstraint?
 
     // Layout constants
-    private static let inputHeight: CGFloat = 56
+    private static let inputHeight: CGFloat = 68
     private static let listPadding: CGFloat = 8
 
     init(config: PickerConfig) {
@@ -1123,21 +1156,13 @@ class PickerWindow: NSWindow {
         textField.isBordered = false
         textField.drawsBackground = false
         textField.focusRingType = .none
-        textField.font = NSFont.monospacedSystemFont(ofSize: 16, weight: .regular)
+        textField.font = Fonts.mono(size: 19)
         textField.textColor = Colors.text
-        textField.placeholderString = "Type to filter..."
-        textField.placeholderAttributedString = NSAttributedString(
-            string: config.items.isEmpty ? "Type here..." : "Type to filter...",
-            attributes: [
-                .foregroundColor: Colors.placeholder,
-                .font: NSFont.monospacedSystemFont(ofSize: 16, weight: .regular)
-            ]
-        )
 
         // Create prompt label
         promptLabel = NSLabel()
         promptLabel.stringValue = config.prompt
-        promptLabel.font = NSFont.monospacedSystemFont(ofSize: 16, weight: .medium)
+        promptLabel.font = Fonts.mono(size: 19)
         promptLabel.textColor = Colors.prompt
         promptLabel.isHidden = config.prompt.isEmpty
 
@@ -1150,7 +1175,7 @@ class PickerWindow: NSWindow {
         // Create empty state label
         emptyLabel = NSLabel()
         emptyLabel.stringValue = "No matches"
-        emptyLabel.font = NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)
+        emptyLabel.font = Fonts.mono(size: 17)
         emptyLabel.textColor = Colors.placeholder
         emptyLabel.alignment = .center
         emptyLabel.isHidden = true
@@ -1165,16 +1190,10 @@ class PickerWindow: NSWindow {
         self.state = pickerState
 
         // Calculate initial window size (inline to avoid self usage before super.init)
+        // Fixed height: always use maxListHeight for consistent window size (no shifting on filter)
         let initialHeight: CGFloat
         if let st = pickerState, st.hasItems {
-            // Calculate list height using variable item heights
-            let visibleResults = st.visibleResults
-            let listHeight = visibleResults.reduce(0) { $0 + ListItemView.heightForItem($1.item) }
-            if listHeight == 0 {
-                initialHeight = Self.inputHeight + ListItemView.itemHeight + Self.listPadding
-            } else {
-                initialHeight = Self.inputHeight + listHeight + Self.listPadding
-            }
+            initialHeight = Self.inputHeight + PickerState.maxListHeight + Self.listPadding
         } else {
             initialHeight = Self.inputHeight
         }
@@ -1198,22 +1217,6 @@ class PickerWindow: NSWindow {
         setupLayout()
         setupActions()
         setupStateObserver()
-    }
-
-    private func calculateWindowHeight() -> CGFloat {
-        guard let state = state, state.hasItems else {
-            return Self.inputHeight
-        }
-
-        // Calculate list height using variable item heights
-        let visibleResults = state.visibleResults
-        let listHeight = visibleResults.reduce(0) { $0 + ListItemView.heightForItem($1.item) }
-
-        if listHeight == 0 {
-            // Show "No matches" row
-            return Self.inputHeight + ListItemView.itemHeight + Self.listPadding
-        }
-        return Self.inputHeight + listHeight + Self.listPadding
     }
 
     private func setupWindow() {
@@ -1324,23 +1327,11 @@ class PickerWindow: NSWindow {
     }
 
     private func updateWindowSize() {
-        let newHeight = calculateWindowHeight()
-        guard abs(frame.height - newHeight) > 1 else { return }
-
-        // Update list view height
+        // Update list view height constraint for content layout
+        // Window size stays fixed - no frame changes (prevents shifting on filter)
         if let listView = listView {
             listViewHeightConstraint?.constant = listView.requiredHeight
         }
-
-        // Keep window centered while resizing
-        let screen = NSScreen.main ?? NSScreen.screens.first!
-        let newOrigin = NSPoint(
-            x: screen.frame.midX - config.width / 2,
-            y: screen.frame.midY - newHeight / 2
-        )
-
-        let newFrame = NSRect(origin: newOrigin, size: CGSize(width: config.width, height: newHeight))
-        setFrame(newFrame, display: true, animate: false)
 
         // Redraw background
         contentView?.needsDisplay = true
@@ -1471,13 +1462,13 @@ class BackgroundView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         let bounds = self.bounds
-        let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 12, yRadius: 12)
+        let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.25, dy: 0.25), xRadius: 6, yRadius: 6)
 
         Colors.background.setFill()
         path.fill()
 
         Colors.border.setStroke()
-        path.lineWidth = 1
+        path.lineWidth = 0.5
         path.stroke()
     }
 
