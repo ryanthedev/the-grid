@@ -1915,30 +1915,21 @@ func runPickWindow() error {
 		return fmt.Errorf("failed to load state: %w", err)
 	}
 
-	// Get current space ID from the main display
-	var currentSpaceID string
-	for _, display := range serverState.Displays {
-		if display.IsMainDisplay() {
-			currentSpaceID = display.GetCurrentSpaceIDString()
-			break
-		}
-	}
-	if currentSpaceID == "" && len(serverState.Displays) > 0 {
-		// Fallback to first display if no main display found
-		currentSpaceID = serverState.Displays[0].GetCurrentSpaceIDString()
-	}
-
-	// Get the space state and collect assigned window IDs
-	spaceState := runtimeState.GetSpaceReadOnly(currentSpaceID)
-	if spaceState == nil || len(spaceState.Cells) == 0 {
-		return fmt.Errorf("no windows assigned to cells (run a layout first)")
-	}
-
-	// Collect all window IDs assigned to cells in this space
+	// Collect all window IDs assigned to cells across ALL current spaces (one per display)
 	assignedWindowIDs := make(map[uint32]bool)
-	for _, cell := range spaceState.Cells {
-		for _, wid := range cell.Windows {
-			assignedWindowIDs[wid] = true
+	for _, display := range serverState.Displays {
+		spaceID := display.GetCurrentSpaceIDString()
+		if spaceID == "" {
+			continue
+		}
+		spaceState := runtimeState.GetSpaceReadOnly(spaceID)
+		if spaceState == nil {
+			continue
+		}
+		for _, cell := range spaceState.Cells {
+			for _, wid := range cell.Windows {
+				assignedWindowIDs[wid] = true
+			}
 		}
 	}
 
