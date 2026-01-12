@@ -1744,8 +1744,22 @@ type PickerContext struct {
 	PIDs      map[int]int
 }
 
-// findPickerExecutable locates the grid-picker binary by checking standard locations
-func findPickerExecutable() (string, error) {
+// findPickerExecutable locates the grid-picker binary by checking standard locations.
+// If overridePath is set, it takes precedence and errors if invalid (no silent fallback).
+func findPickerExecutable(overridePath string) (string, error) {
+	// If override path is provided, use it exclusively (no fallback)
+	if overridePath != "" {
+		info, err := os.Stat(overridePath)
+		if err != nil {
+			return "", fmt.Errorf("configured pickerPath %q not found: %w", overridePath, err)
+		}
+		// Check if file is executable (has any execute bit set)
+		if info.Mode()&0111 == 0 {
+			return "", fmt.Errorf("configured pickerPath %q is not executable", overridePath)
+		}
+		return overridePath, nil
+	}
+
 	// Build list of paths to check in order of preference
 	var searchPaths []string
 	var searchedLocations []string
@@ -1786,10 +1800,11 @@ func findPickerExecutable() (string, error) {
 	return "", fmt.Errorf("grid-picker not found in:\n  - %s", strings.Join(searchedLocations, "\n  - "))
 }
 
-// launchPicker spawns the picker executable with items and returns the selection result
-func launchPicker(items []PickerItem) (*PickerResult, error) {
+// launchPicker spawns the picker executable with items and returns the selection result.
+// pickerPathOverride, if set, takes precedence over default search paths.
+func launchPicker(items []PickerItem, pickerPathOverride string) (*PickerResult, error) {
 	// Find the picker executable
-	pickerPath, err := findPickerExecutable()
+	pickerPath, err := findPickerExecutable(pickerPathOverride)
 	if err != nil {
 		return nil, err
 	}
@@ -2170,8 +2185,8 @@ func runPickWindow() error {
 	// Sort items by history (previous first, then by frequency)
 	sortItemsByHistory(items, stableIDs, history)
 
-	// Launch picker with items
-	result, err := launchPicker(items)
+	// Launch picker with items (use config override if set)
+	result, err := launchPicker(items, cfg.Settings.PickerPath)
 	if err != nil {
 		return err
 	}
