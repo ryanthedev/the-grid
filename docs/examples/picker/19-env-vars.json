@@ -1,0 +1,7 @@
+[
+  {"id": "1", "title": "DATABASE_URL", "subtitle": "Connection string", "preview": "postgres://user:pass@localhost:5432/myapp", "icon": "🔗"},
+  {"id": "2", "title": "API_KEY", "subtitle": "External service auth", "preview": "sk-xxxxx...xxxxx (hidden)", "icon": "🔑"},
+  {"id": "3", "title": "NODE_ENV", "subtitle": "Environment mode", "preview": "development | staging | production", "icon": "🌍"},
+  {"id": "4", "title": "LOG_LEVEL", "subtitle": "Logging verbosity", "preview": "debug | info | warn | error", "icon": "📊"},
+  {"id": "5", "title": "REDIS_URL", "subtitle": "Cache connection", "preview": "redis://localhost:6379/0", "icon": "⚡"}
+]

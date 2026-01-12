@@ -1,0 +1,7 @@
+[
+  {"id": "1", "title": "GET /api/users", "subtitle": "List all users", "preview": "Returns paginated list of users. Params: page, limit, sort", "icon": "📥"},
+  {"id": "2", "title": "POST /api/users", "subtitle": "Create user", "preview": "Body: { name, email, role }. Returns created user.", "icon": "📤"},
+  {"id": "3", "title": "GET /api/users/:id", "subtitle": "Get user by ID", "preview": "Returns single user object or 404", "icon": "📥"},
+  {"id": "4", "title": "PUT /api/users/:id", "subtitle": "Update user", "preview": "Body: { name?, email?, role? }. Returns updated user.", "icon": "📝"},
+  {"id": "5", "title": "DELETE /api/users/:id", "subtitle": "Delete user", "preview": "Soft deletes user. Returns 204 No Content.", "icon": "🗑️"}
+]

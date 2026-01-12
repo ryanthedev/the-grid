@@ -1,0 +1,7 @@
+[
+  {"id": "1", "title": "Has an icon", "subtitle": "This one has an emoji", "preview": "Testing mixed icon presence", "icon": "✅"},
+  {"id": "2", "title": "No icon here", "subtitle": "This item is plain", "preview": "Should show blank in icon column"},
+  {"id": "3", "title": "Another with icon", "subtitle": "Back to having one", "preview": "Alternating pattern", "icon": "🎯"},
+  {"id": "4", "title": "Plain again", "subtitle": "Testing alignment", "preview": "Icon column should stay consistent"},
+  {"id": "5", "title": "Final with icon", "subtitle": "Last item has icon", "preview": "Verifying mixed rendering", "icon": "🏁"}
+]

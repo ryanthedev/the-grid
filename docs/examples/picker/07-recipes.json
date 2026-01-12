@@ -1,0 +1,7 @@
+[
+  {"id": "1", "title": "Spaghetti Carbonara", "subtitle": "Italian • 30 min • Easy", "preview": "Eggs, pecorino, guanciale, black pepper, spaghetti", "icon": "🍝"},
+  {"id": "2", "title": "Chicken Tikka Masala", "subtitle": "Indian • 45 min • Medium", "preview": "Chicken, yogurt, tomatoes, garam masala, cream", "icon": "🍛"},
+  {"id": "3", "title": "Caesar Salad", "subtitle": "American • 15 min • Easy", "preview": "Romaine, parmesan, croutons, caesar dressing", "icon": "🥗"},
+  {"id": "4", "title": "Beef Tacos", "subtitle": "Mexican • 25 min • Easy", "preview": "Ground beef, tortillas, lettuce, cheese, salsa", "icon": "🌮"},
+  {"id": "5", "title": "Miso Ramen", "subtitle": "Japanese • 60 min • Hard", "preview": "Pork broth, miso paste, noodles, chashu, egg", "icon": "🍜"}
+]

@@ -1,0 +1,7 @@
+[
+  {"id": "1", "title": "[ERROR] Connection refused", "subtitle": "2024-01-15 10:23:45 • api-server", "preview": "Failed to connect to database at localhost:5432", "icon": "🔴"},
+  {"id": "2", "title": "[WARN] Memory usage high", "subtitle": "2024-01-15 10:22:30 • worker-3", "preview": "Memory usage at 85% (3.4GB / 4GB)", "icon": "🟡"},
+  {"id": "3", "title": "[INFO] Request completed", "subtitle": "2024-01-15 10:22:15 • api-server", "preview": "GET /api/users - 200 OK - 45ms", "icon": "🟢"},
+  {"id": "4", "title": "[ERROR] Timeout exceeded", "subtitle": "2024-01-15 10:21:00 • scheduler", "preview": "Job 'daily-backup' exceeded 30s timeout", "icon": "🔴"},
+  {"id": "5", "title": "[DEBUG] Cache miss", "subtitle": "2024-01-15 10:20:45 • cache-layer", "preview": "Key 'user:12345' not found, fetching from DB", "icon": "⚪"}
+]

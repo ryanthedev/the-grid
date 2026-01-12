@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -29,6 +31,8 @@ import (
 	gridTypes "github.com/ryanthedev/grid-cli/internal/types"
 	gridWindow "github.com/ryanthedev/grid-cli/internal/window"
 	"github.com/ryanthedev/grid-cli/internal/xdg"
+	"github.com/ryanthedev/grid-cli/internal/process"
+	"github.com/ryanthedev/grid-cli/internal/tmux"
 	"gopkg.in/yaml.v3"
 )
 
@@ -1685,6 +1689,411 @@ Syncs border focus if the window is tileable.`,
 	},
 }
 
+// MARK: - the-grid Pick Commands
+
+// pickCmd is the parent command for pick subcommands
+var pickCmd = &cobra.Command{
+	Use:   "pick",
+	Short: "Interactive picker commands",
+	Long:  `Commands for displaying interactive picker interfaces.`,
+}
+
+// pickWindowCmd launches an interactive window picker
+var pickWindowCmd = &cobra.Command{
+	Use:   "window",
+	Short: "Pick a window interactively",
+	Long:  `Launches an interactive picker to select a window from a list.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runPickWindow()
+	},
+}
+
+// PickerItem represents an item for the grid-picker UI
+type PickerItem struct {
+	ID         string            `json:"id"`
+	Title      string            `json:"title"`
+	Subtitle   string            `json:"subtitle,omitempty"`
+	Preview    string            `json:"preview,omitempty"`
+	Icon       string            `json:"icon,omitempty"`
+	Searchable []string          `json:"searchable"`
+	Metadata   map[string]string `json:"metadata,omitempty"`
+}
+
+// PickerResult represents the outcome of a picker interaction
+type PickerResult struct {
+	Cancelled bool        `json:"cancelled"`
+	Selected  *PickerItem `json:"selected,omitempty"`
+}
+
+// findPickerExecutable locates the grid-picker binary by checking standard locations
+func findPickerExecutable() (string, error) {
+	// Build list of paths to check in order of preference
+	var searchPaths []string
+	var searchedLocations []string
+
+	// 1. XDG state home: ~/.local/state/thegrid/grid-picker
+	stateDir := filepath.Join(xdg.StateHome(), "thegrid")
+	statePath := filepath.Join(stateDir, "grid-picker")
+	searchPaths = append(searchPaths, statePath)
+	searchedLocations = append(searchedLocations, statePath)
+
+	// 2. Same directory as current executable
+	if execPath, err := os.Executable(); err == nil {
+		execDir := filepath.Dir(execPath)
+		execDirPath := filepath.Join(execDir, "grid-picker")
+		searchPaths = append(searchPaths, execDirPath)
+		searchedLocations = append(searchedLocations, execDirPath)
+	}
+
+	// 3. System PATH lookup
+	if pathExec, err := exec.LookPath("grid-picker"); err == nil {
+		searchPaths = append(searchPaths, pathExec)
+	}
+	searchedLocations = append(searchedLocations, "system PATH")
+
+	// Check each path for existence and executability
+	for _, path := range searchPaths {
+		info, err := os.Stat(path)
+		if err != nil {
+			continue
+		}
+		// Check if file is executable (has any execute bit set)
+		if info.Mode()&0111 != 0 {
+			return path, nil
+		}
+	}
+
+	// Build error message listing all searched locations
+	return "", fmt.Errorf("grid-picker not found in:\n  - %s", strings.Join(searchedLocations, "\n  - "))
+}
+
+// launchPicker spawns the picker executable with items and returns the selection result
+func launchPicker(items []PickerItem) (*PickerResult, error) {
+	// Find the picker executable
+	pickerPath, err := findPickerExecutable()
+	if err != nil {
+		return nil, err
+	}
+
+	// Create command with timeout context (5 min generous limit for interactive use)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, pickerPath)
+
+	// Set up pipes for stdin, stdout, stderr
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create stdin pipe: %w", err)
+	}
+
+	// Start the command
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("failed to start picker: %w", err)
+	}
+
+	// Encode items as JSON and write to stdin
+	encoder := json.NewEncoder(stdin)
+	if err := encoder.Encode(items); err != nil {
+		stdin.Close()
+		cmd.Wait()
+		return nil, fmt.Errorf("failed to write items to picker: %w", err)
+	}
+	stdin.Close()
+
+	// Wait for command to complete
+	waitErr := cmd.Wait()
+
+	// Check exit code
+	if waitErr != nil {
+		if exitErr, ok := waitErr.(*exec.ExitError); ok {
+			// Exit code 1 means user cancelled (not an error)
+			if exitErr.ExitCode() == 1 {
+				return &PickerResult{Cancelled: true, Selected: nil}, nil
+			}
+			// Other non-zero exit codes are errors
+			return nil, fmt.Errorf("picker failed (exit %d): %s", exitErr.ExitCode(), stderr.String())
+		}
+		return nil, fmt.Errorf("picker failed: %w", waitErr)
+	}
+
+	// Parse stdout as picker result JSON (wrapper with cancelled + selected fields)
+	var result PickerResult
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		return nil, fmt.Errorf("failed to parse picker output: %w", err)
+	}
+
+	return &result, nil
+}
+
+// getAllWindows fetches all windows from the server via dump RPC
+func getAllWindows(ctx context.Context, c *client.Client) ([]*models.Window, *models.State, error) {
+	result, err := c.Dump(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to dump state: %w", err)
+	}
+
+	state, err := models.ParseState(result)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to parse state: %w", err)
+	}
+
+	windows := filterWindows(state.GetWindows())
+	return windows, state, nil
+}
+
+// windowsToPickerItems transforms windows into PickerItem format for grid-picker
+func windowsToPickerItems(windows []*models.Window, state *models.State) []PickerItem {
+	items := make([]PickerItem, 0, len(windows))
+
+	// Get tmux clients and cache for enriching terminal windows
+	tmuxClients, _ := tmux.GetClients()
+	tmuxCache, _ := tmux.LoadCache()
+
+	// Refresh process tree once (single ps call instead of many pgrep calls)
+	process.RefreshProcessTree()
+
+	// Track which windows were enriched with tmux info
+	type tmuxEnrichment struct {
+		sessionName string
+		windowName  string
+		paneCommand string
+	}
+	tmuxInfo := make(map[int]*tmuxEnrichment)
+
+	// Track which PIDs have already been enriched (multiple windows can share same PID)
+	enrichedPIDs := make(map[int]bool)
+
+	for _, w := range windows {
+		// Get title with fallback
+		title := "Untitled"
+		if w.Title != nil && *w.Title != "" {
+			title = *w.Title
+		}
+
+		// Get app name with fallback
+		appName := "Unknown"
+		if w.AppName != nil && *w.AppName != "" {
+			appName = *w.AppName
+		}
+
+		// Get bundle identifier from application
+		bundleID := ""
+		if app := state.FindApplicationByPID(w.PID); app != nil {
+			bundleID = app.BundleIdentifier
+		}
+
+		// Try to enrich terminal windows with tmux session info
+		// Only enrich first window per PID to avoid duplicates (e.g., multiple Ghostty tabs)
+		if tmux.IsTerminalApp(bundleID) && len(tmuxClients) > 0 && !enrichedPIDs[w.PID] {
+			if info := enrichWithTmux(w, tmuxCache, tmuxClients); info != nil {
+				title = info.SessionName
+				tmuxInfo[w.ID] = &tmuxEnrichment{
+					sessionName: info.SessionName,
+					windowName:  info.WindowName,
+					paneCommand: info.PaneCommand,
+				}
+				enrichedPIDs[w.PID] = true
+			}
+		}
+
+		// Build searchable strings
+		searchable := []string{title, appName}
+		if bundleID != "" {
+			searchable = append(searchable, bundleID)
+		}
+
+		// Build icon string (bundle: prefix for app icons)
+		icon := ""
+		if bundleID != "" {
+			icon = "bundle:" + bundleID
+		}
+
+		// Build subtitle and preview
+		subtitle := appName
+		preview := ""
+		if enrichment, ok := tmuxInfo[w.ID]; ok {
+			subtitle = fmt.Sprintf("%s:%s", enrichment.sessionName, enrichment.windowName)
+			preview = enrichment.paneCommand
+			// Add tmux info to searchable
+			searchable = append(searchable, enrichment.sessionName, enrichment.windowName)
+		}
+
+		item := PickerItem{
+			ID:         strconv.Itoa(w.ID),
+			Title:      title,
+			Subtitle:   subtitle,
+			Preview:    preview,
+			Icon:       icon,
+			Searchable: searchable,
+			Metadata:   map[string]string{"wid": strconv.Itoa(w.ID)},
+		}
+		items = append(items, item)
+	}
+
+	// Prune and save cache
+	if len(tmuxClients) > 0 {
+		validClientPIDs := make(map[int]bool)
+		for pid := range tmuxClients {
+			validClientPIDs[pid] = true
+		}
+		tmuxCache.Prune(validClientPIDs)
+		tmuxCache.Save()
+	}
+
+	return items
+}
+
+// enrichWithTmux attempts to find tmux session info for a terminal window.
+// Returns the TmuxClientInfo if found, nil otherwise.
+func enrichWithTmux(w *models.Window, cache *tmux.Cache, clients map[int]tmux.TmuxClientInfo) *tmux.TmuxClientInfo {
+	// Try cache first
+	if clientPID, found := cache.Lookup(w.PID); found {
+		if info, ok := clients[clientPID]; ok {
+			return &info
+		}
+	}
+
+	// Cache miss - search process tree (depth 4 to handle login->shell->bash->tmux)
+	descendants, _ := process.GetDescendantPIDs(w.PID, 4)
+	for _, pid := range descendants {
+		if info, ok := clients[pid]; ok {
+			cache.Store(w.PID, pid)
+			return &info
+		}
+	}
+
+	return nil
+}
+
+// runPickWindow launches the interactive window picker
+func runPickWindow() error {
+	ctx := context.Background()
+	c := client.NewClient(socketPath, timeout)
+	defer c.Close()
+
+	jsonlog.Log("pick.start")
+
+	// Get windows from server
+	windows, serverState, err := getAllWindows(ctx, c)
+	if err != nil {
+		return err
+	}
+
+	if len(windows) == 0 {
+		return fmt.Errorf("no windows found")
+	}
+
+	// Load runtime state to get cell assignments
+	runtimeState, err := gridState.LoadState()
+	if err != nil {
+		return fmt.Errorf("failed to load state: %w", err)
+	}
+
+	// Load config for border sync
+	cfg, err := gridConfig.LoadConfig("")
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	// Collect all window IDs assigned to cells across ALL current spaces (one per display)
+	// Also track which display each window is on for border sync
+	assignedWindowIDs := make(map[uint32]bool)
+	windowToDisplay := make(map[uint32]string)
+	for _, display := range serverState.Displays {
+		spaceID := display.GetCurrentSpaceIDString()
+		if spaceID == "" {
+			continue
+		}
+		spaceState := runtimeState.GetSpaceReadOnly(spaceID)
+		if spaceState == nil {
+			continue
+		}
+		for _, cell := range spaceState.Cells {
+			for _, wid := range cell.Windows {
+				assignedWindowIDs[wid] = true
+				windowToDisplay[wid] = display.UUID
+			}
+		}
+	}
+
+	if len(assignedWindowIDs) == 0 {
+		return fmt.Errorf("no windows assigned to cells (run a layout first)")
+	}
+
+	// Filter windows to only those assigned to cells
+	filteredWindows := make([]*models.Window, 0, len(windows))
+	for _, w := range windows {
+		if assignedWindowIDs[uint32(w.ID)] {
+			filteredWindows = append(filteredWindows, w)
+		}
+	}
+
+	if len(filteredWindows) == 0 {
+		return fmt.Errorf("no windows assigned to cells (run a layout first)")
+	}
+
+	// Transform to picker items
+	items := windowsToPickerItems(filteredWindows, serverState)
+
+	// Launch picker with items
+	result, err := launchPicker(items)
+	if err != nil {
+		return err
+	}
+
+	// Handle cancellation (silent exit)
+	if result.Cancelled {
+		jsonlog.Log("pick.cancel")
+		return nil
+	}
+
+	// Extract window ID from metadata
+	if result.Selected == nil {
+		return nil
+	}
+
+	widStr, ok := result.Selected.Metadata["wid"]
+	if !ok || widStr == "" {
+		return fmt.Errorf("selected item missing window ID")
+	}
+
+	widInt, err := strconv.ParseUint(widStr, 10, 32)
+	if err != nil {
+		return fmt.Errorf("invalid window ID %q: %w", widStr, err)
+	}
+	windowID := uint32(widInt)
+
+	jsonlog.Log("pick.select", jsonlog.WithData(map[string]any{"wid": windowID}))
+
+	// Focus the selected window
+	if err := gridFocus.FocusWindow(ctx, c, windowID); err != nil {
+		// Check if window no longer exists
+		if strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "not found") {
+			return fmt.Errorf("window no longer exists")
+		}
+		return fmt.Errorf("focus failed: %w", err)
+	}
+
+	// Sync border focus so the active border updates to the newly focused window
+	if displayUUID := windowToDisplay[windowID]; displayUUID != "" {
+		gridReconcile.SyncBorderFocus(ctx, c, displayUUID, windowID, cfg)
+	}
+
+	// Warp mouse to window (non-fatal if it fails since focus succeeded)
+	if err := gridMouse.WarpToWindow(ctx, c, windowID); err != nil {
+		jsonlog.Log("pick.warp_warn", jsonlog.WithMsg("mouse warp failed after focus"), jsonlog.WithData(map[string]any{
+			"wid": windowID,
+			"err": err.Error(),
+		}))
+	}
+
+	return nil
+}
+
 // MARK: - the-grid Focus Commands
 
 // focusCmd is the parent command for focus subcommands
@@ -2901,6 +3310,10 @@ func init() {
 	// Add event commands (server→CLI callbacks)
 	rootCmd.AddCommand(eventCmd)
 	eventCmd.AddCommand(eventFocusCmd)
+
+	// Add the-grid pick commands
+	rootCmd.AddCommand(pickCmd)
+	pickCmd.AddCommand(pickWindowCmd)
 
 	// Add the-grid focus commands
 	rootCmd.AddCommand(focusCmd)

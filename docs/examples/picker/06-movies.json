@@ -1,0 +1,7 @@
+[
+  {"id": "1", "title": "The Matrix", "subtitle": "1999 • Sci-Fi/Action • 2h 16m", "preview": "A computer hacker learns about the true nature of reality", "icon": "💊"},
+  {"id": "2", "title": "Inception", "subtitle": "2010 • Sci-Fi/Thriller • 2h 28m", "preview": "A thief who steals corporate secrets through dream-sharing", "icon": "🌀"},
+  {"id": "3", "title": "Pulp Fiction", "subtitle": "1994 • Crime/Drama • 2h 34m", "preview": "The lives of two mob hitmen intertwine in four tales", "icon": "💼"},
+  {"id": "4", "title": "The Shawshank Redemption", "subtitle": "1994 • Drama • 2h 22m", "preview": "Two imprisoned men bond over a number of years", "icon": "🔓"},
+  {"id": "5", "title": "Interstellar", "subtitle": "2014 • Sci-Fi/Adventure • 2h 49m", "preview": "Explorers travel through a wormhole in space", "icon": "🚀"}
+]

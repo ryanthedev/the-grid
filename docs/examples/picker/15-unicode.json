@@ -1,0 +1,7 @@
+[
+  {"id": "1", "title": "日本語テスト", "subtitle": "Japanese text test", "preview": "これは日本語のテストです。文字化けがないか確認します。", "icon": "🇯🇵"},
+  {"id": "2", "title": "中文测试", "subtitle": "Chinese text test", "preview": "这是中文测试。检查字符是否正确显示。", "icon": "🇨🇳"},
+  {"id": "3", "title": "한국어 테스트", "subtitle": "Korean text test", "preview": "이것은 한국어 테스트입니다. 문자가 올바르게 표시되는지 확인합니다.", "icon": "🇰🇷"},
+  {"id": "4", "title": "العربية اختبار", "subtitle": "Arabic text test", "preview": "هذا اختبار للغة العربية. التحقق من العرض الصحيح.", "icon": "🇸🇦"},
+  {"id": "5", "title": "Ελληνικά τεστ", "subtitle": "Greek text test", "preview": "Αυτό είναι ένα τεστ στα ελληνικά. Έλεγχος εμφάνισης.", "icon": "🇬🇷"}
+]

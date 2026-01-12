@@ -1,0 +1,5 @@
+[
+  {"id": "1", "title": "This is a very long title that should probably be truncated at some point because it just keeps going and going", "subtitle": "~/very/deeply/nested/directory/structure/that/goes/on/forever/and/ever", "preview": "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris.", "icon": "📏"},
+  {"id": "2", "title": "Short", "subtitle": "Brief", "preview": "Tiny", "icon": "🔬"},
+  {"id": "3", "title": "Another extremely long title to test how the layout handles overflow and text wrapping in various edge cases", "subtitle": "medium length subtitle here", "preview": "The preview text is also quite long and should be truncated with an ellipsis when it exceeds the available width in the picker window", "icon": "📐"}
+]

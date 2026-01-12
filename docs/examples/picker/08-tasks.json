@@ -1,0 +1,7 @@
+[
+  {"id": "1", "title": "Review pull request #142", "subtitle": "Due today • High priority", "preview": "feat(auth): implement OAuth2 login flow", "icon": "🔴"},
+  {"id": "2", "title": "Update documentation", "subtitle": "Due tomorrow • Medium priority", "preview": "Add examples for new API endpoints", "icon": "🟡"},
+  {"id": "3", "title": "Fix memory leak in parser", "subtitle": "Due this week • High priority", "preview": "Investigate increasing memory usage in long sessions", "icon": "🔴"},
+  {"id": "4", "title": "Refactor database queries", "subtitle": "Due next week • Low priority", "preview": "Optimize N+1 queries in user listing", "icon": "🟢"},
+  {"id": "5", "title": "Write unit tests", "subtitle": "No due date • Medium priority", "preview": "Cover edge cases in fuzzy matcher", "icon": "🟡"}
+]

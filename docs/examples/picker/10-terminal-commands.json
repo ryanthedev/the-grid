@@ -1,0 +1,7 @@
+[
+  {"id": "1", "title": "git log --oneline -10", "subtitle": "Show last 10 commits", "preview": "Recent commit history in compact format", "icon": "📜"},
+  {"id": "2", "title": "docker ps -a", "subtitle": "List all containers", "preview": "Shows running and stopped containers", "icon": "🐳"},
+  {"id": "3", "title": "find . -name '*.swift'", "subtitle": "Find Swift files", "preview": "Recursively search for Swift source files", "icon": "🔍"},
+  {"id": "4", "title": "curl -X POST localhost:8080/api", "subtitle": "POST request", "preview": "Send HTTP POST to local server", "icon": "🌐"},
+  {"id": "5", "title": "ssh user@server.com", "subtitle": "Remote connection", "preview": "Open SSH session to remote server", "icon": "🔑"}
+]
