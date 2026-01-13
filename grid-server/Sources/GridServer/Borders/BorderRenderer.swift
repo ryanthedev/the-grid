@@ -97,12 +97,6 @@ enum BorderRenderer {
 
     /// Draw a border in the given context
     static func draw(in context: CGContext, bounds: CGRect, style: BorderStyle) {
-        // HACK: Log to verify draw is called
-        JSONLogger.shared.log("hack.draw", data: [
-            "bounds": [bounds.origin.x, bounds.origin.y, bounds.size.width, bounds.size.height],
-            "width": style.width
-        ])
-
         // Clear the context first
         context.clear(bounds)
 
@@ -261,80 +255,5 @@ enum BorderRenderer {
             context.restoreGState()
         }
 
-    }
-
-    /// Draw stack position indicator dots
-    private static func drawStackIndicator(
-        in context: CGContext,
-        bounds: CGRect,
-        style: BorderStyle,
-        indicator: StackIndicator
-    ) {
-        let dotDiameter: CGFloat = 6.0
-        let dotSpacing: CGFloat = 4.0
-        let dotRadius = dotDiameter / 2.0
-
-        let totalWidth = CGFloat(indicator.totalCount) * dotDiameter +
-                         CGFloat(indicator.totalCount - 1) * dotSpacing
-
-        // Calculate center position based on indicator position
-        let centerX: CGFloat
-        let centerY: CGFloat
-
-        switch indicator.position {
-        case .bottomCenter:
-            centerX = bounds.midX
-            centerY = bounds.maxY - style.width / 2
-        case .topCenter:
-            centerX = bounds.midX
-            centerY = bounds.minY + style.width / 2
-        case .leftCenter:
-            centerX = bounds.minX + style.width / 2
-            centerY = bounds.midY
-        case .rightCenter:
-            centerX = bounds.maxX - style.width / 2
-            centerY = bounds.midY
-        }
-
-        // Starting X for first dot (centered around centerX)
-        let startX = centerX - totalWidth / 2 + dotRadius
-
-        context.saveGState()
-
-        for i in 0..<indicator.totalCount {
-            let dotCenterX: CGFloat
-            let dotCenterY: CGFloat
-
-            // For left/right positions, stack dots vertically
-            if indicator.position == .leftCenter || indicator.position == .rightCenter {
-                dotCenterX = centerX
-                let startY = centerY - totalWidth / 2 + dotRadius
-                dotCenterY = startY + CGFloat(i) * (dotDiameter + dotSpacing)
-            } else {
-                dotCenterX = startX + CGFloat(i) * (dotDiameter + dotSpacing)
-                dotCenterY = centerY
-            }
-
-            let dotRect = CGRect(
-                x: dotCenterX - dotRadius,
-                y: dotCenterY - dotRadius,
-                width: dotDiameter,
-                height: dotDiameter
-            )
-
-            if i == indicator.currentIndex {
-                // Active dot: full color
-                context.setFillColor(style.color)
-                context.setAlpha(1.0)
-            } else {
-                // Inactive dots: dimmed
-                context.setFillColor(style.color)
-                context.setAlpha(0.3)
-            }
-
-            context.fillEllipse(in: dotRect)
-        }
-
-        context.restoreGState()
     }
 }
