@@ -155,8 +155,9 @@ func buildCellAssignments(spaceState *state.SpaceState) []client.CellAssignment 
 	for cellID, cellState := range spaceState.Cells {
 		for _, windowID := range cellState.Windows {
 			assignments = append(assignments, client.CellAssignment{
-				WindowID: windowID,
-				CellID:   cellID,
+				WindowID:  windowID,
+				CellID:    cellID,
+				StackMode: string(cellState.StackMode),
 			})
 		}
 	}

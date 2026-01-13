@@ -832,9 +832,20 @@ completion(Response(id: request.id, result: AnyCodable(["success": true])))
                 focusedWindowID = parsed
             }
 
+            // Parse optional cellStackModes (cellID -> stackMode)
+            let cellStackModes = params["cellStackModes"]?.value as? [String: String] ?? [:]
+
             // Update SimpleBorderManager with per-display data (and optional atomic focus)
             if let simpleBorderManager = self.simpleBorderManager {
-                simpleBorderManager.setCellAssignments(cellAssignments, forDisplay: displayUUID, focusedWindowID: focusedWindowID)
+                simpleBorderManager.setCellAssignments(cellAssignments, forDisplay: displayUUID, focusedWindowID: focusedWindowID, cellStackModes: cellStackModes)
+            }
+            completion(Response(id: request.id, result: AnyCodable(["success": true])))
+        }
+
+        // Debug: Cycle border through colors to test style updates
+        register(method: "borders.debug") { [weak self] request, completion in
+            if let simpleBorderManager = self?.simpleBorderManager {
+                simpleBorderManager.debugBorders()
             }
             completion(Response(id: request.id, result: AnyCodable(["success": true])))
         }

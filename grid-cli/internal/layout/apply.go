@@ -530,13 +530,23 @@ func sendBorderConfig(ctx context.Context, c *client.Client, cfg *config.Config)
 // Cell bounds are adjusted with padding to match actual window placement areas.
 // displayUUID is required for per-display caching in the server.
 func sendCellAssignments(ctx context.Context, c *client.Client, displayUUID string, layout *types.Layout, assignments map[string][]uint32, cellBounds map[string]types.Rect, baseSpacing float64, settingsPadding *types.Padding) error {
+	// Build cell ID -> stackMode lookup from layout
+	cellStackModes := make(map[string]types.StackMode)
+	if layout != nil {
+		for _, cell := range layout.Cells {
+			cellStackModes[cell.ID] = cell.StackMode
+		}
+	}
+
 	// Build cell assignments list
 	var cellAssignments []client.CellAssignment
 	for cellID, windowIDs := range assignments {
+		stackMode := cellStackModes[cellID]
 		for _, windowID := range windowIDs {
 			cellAssignments = append(cellAssignments, client.CellAssignment{
-				WindowID: windowID,
-				CellID:   cellID,
+				WindowID:  windowID,
+				CellID:    cellID,
+				StackMode: string(stackMode),
 			})
 		}
 	}

@@ -402,6 +402,8 @@ class BorderWindow {
                 if let drawContext = context {
                     let drawBounds = CGRect(origin: .zero, size: currentBounds.size)
                     BorderRenderer.draw(in: drawContext, bounds: drawBounds, style: style)
+                    // Must flush CGContext before window content region
+                    drawContext.flush()
                     _ = SLSFlushWindowContentRegion(connectionID, windowID, nil)
 
                     // Restore visibility
@@ -496,25 +498,22 @@ class BorderWindow {
             return
         }
 
-        // Create context if needed (after shape change)
-        if context == nil {
-            _ = SLSFlushWindowContentRegion(connectionID, windowID, nil)
-            context = SLWindowContextCreate(connectionID, windowID, nil)
-        }
+        // Recreate context for each style change (required for visual update)
+        context = nil
+        _ = SLSFlushWindowContentRegion(connectionID, windowID, nil)
+        context = SLWindowContextCreate(connectionID, windowID, nil)
 
-        // JankyBorders approach: just use the context without dimension validation
-        // CGContext.width/height may return 0 for window-backed contexts, but drawing still works
         guard let drawContext = context else {
             JSONLogger.shared.log("warn.bdr.no_ctx", data: ["wid": windowID])
             return
         }
 
-        // Draw using currentBounds (not context dimensions)
+        // Draw border with new style
         let drawBounds = CGRect(origin: .zero, size: currentBounds.size)
-
         BorderRenderer.draw(in: drawContext, bounds: drawBounds, style: newStyle)
 
-        // Flush to screen
+        // Flush CGContext before window content region (required for SkyLight)
+        drawContext.flush()
         _ = SLSFlushWindowContentRegion(connectionID, windowID, nil)
 
         currentStyle = newStyle

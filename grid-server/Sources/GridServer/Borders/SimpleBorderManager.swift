@@ -32,6 +32,10 @@ class SimpleBorderManager {
     /// displayUUID → (windowID → cellID)
     private var cellAssignmentsPerDisplay: [String: [UInt32: String]] = [:]
 
+    /// Cell stack modes received from CLI, keyed by display UUID
+    /// displayUUID → (cellID → stackMode)
+    private var cellStackModesPerDisplay: [String: [String: String]] = [:]
+
     /// Current display UUID for focused window (used for lookups)
     private var currentDisplayUUID: String?
 
@@ -95,16 +99,17 @@ class SimpleBorderManager {
     ///   - assignments: Window-to-cell mappings
     ///   - displayUUID: Target display
     ///   - focusedWindowID: Optional - if provided, updates focus atomically (prevents race conditions)
-    func setCellAssignments(_ assignments: [UInt32: String], forDisplay displayUUID: String, focusedWindowID: UInt32? = nil) {
+    ///   - cellStackModes: Optional - cellID → stackMode ("tabs", "vertical", "horizontal")
+    func setCellAssignments(_ assignments: [UInt32: String], forDisplay displayUUID: String, focusedWindowID: UInt32? = nil, cellStackModes: [String: String] = [:]) {
         let span = CurrentSpan.current
         DispatchQueue.main.async { [weak self, span] in
             CurrentSpan.$current.withValue(span) {
-                self?.setCellAssignmentsImpl(assignments, forDisplay: displayUUID, focusedWindowID: focusedWindowID)
+                self?.setCellAssignmentsImpl(assignments, forDisplay: displayUUID, focusedWindowID: focusedWindowID, cellStackModes: cellStackModes)
             }
         }
     }
 
-    private func setCellAssignmentsImpl(_ assignments: [UInt32: String], forDisplay displayUUID: String, focusedWindowID newFocusedWindow: UInt32? = nil) {
+    private func setCellAssignmentsImpl(_ assignments: [UInt32: String], forDisplay displayUUID: String, focusedWindowID newFocusedWindow: UInt32? = nil, cellStackModes: [String: String] = [:]) {
         // Reentrancy guard
         guard !isUpdating else { return }
         isUpdating = true
@@ -112,6 +117,7 @@ class SimpleBorderManager {
 
         let oldAssignments = cellAssignmentsPerDisplay[displayUUID]
         cellAssignmentsPerDisplay[displayUUID] = assignments
+        cellStackModesPerDisplay[displayUUID] = cellStackModes
 
         // If focusedWindowID is provided, update focus atomically (prevents race conditions)
         // This is the key fix: assignments + focus happen in single main queue dispatch
@@ -135,8 +141,9 @@ class SimpleBorderManager {
             let oldCellID = activeCellID
             if let focused = focusedWindowID, let cellID = assignments[focused] {
                 activeCellID = cellID
-                let windowsInCell = assignments.filter { $0.value == cellID }.map { $0.key }
-                isActiveCellTabbed = windowsInCell.count > 1
+                // Use actual stackMode instead of window count
+                let stackMode = cellStackModes[cellID] ?? "tabs"
+                isActiveCellTabbed = (stackMode == "tabs")
             }
 
             let assignmentsChanged = oldAssignments != assignments
@@ -315,8 +322,9 @@ class SimpleBorderManager {
     }
 
     private func handleDisplayDisconnectedImpl(displayUUID: String) {
-        // Remove cached assignments for this display
+        // Remove cached assignments and stack modes for this display
         cellAssignmentsPerDisplay.removeValue(forKey: displayUUID)
+        cellStackModesPerDisplay.removeValue(forKey: displayUUID)
 
         // If this was the active display, clear state and borders
         if currentDisplayUUID == displayUUID {
@@ -521,8 +529,10 @@ class SimpleBorderManager {
         let windowsInCell = assignments.filter { $0.value == cellID }.map { $0.key }
         let config = BorderConfigManager.shared
 
-        // Track if cell is tabbed (multiple windows stacked)
-        isActiveCellTabbed = windowsInCell.count > 1
+        // Determine if cell is tabbed using actual stackMode (not window count)
+        let stackModes = cellStackModesPerDisplay[displayUUID] ?? [:]
+        let stackMode = stackModes[cellID] ?? "tabs"
+        isActiveCellTabbed = (stackMode == "tabs")
 
         // Create borders for windows in cell
         // For tabbed cells: only create border for focused window (retarget on focus change)
@@ -587,6 +597,50 @@ class SimpleBorderManager {
 
         border.update(targetFrame: frame)
         return border
+    }
+
+    /// Debug: Cycle active border through colors to verify style updates work
+    func debugBorders() {
+        DispatchQueue.main.async { [weak self] in
+            self?.debugBordersImpl()
+        }
+    }
+
+    private func debugBordersImpl() {
+        guard let border = activeBorder else {
+            JSONLogger.shared.log("dbg.borders", msg: "no active border")
+            return
+        }
+
+        let colors: [(CGFloat, CGFloat, CGFloat, String)] = [
+            (1.0, 0.0, 0.0, "red"),
+            (0.0, 1.0, 0.0, "green"),
+            (0.0, 0.0, 1.0, "blue"),
+            (1.0, 1.0, 0.0, "yellow"),
+            (1.0, 0.0, 1.0, "magenta"),
+        ]
+
+        for (i, (r, g, b, name)) in colors.enumerated() {
+            DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) * 0.5) { [weak border] in
+                guard let border = border else { return }
+                let color = CGColor(red: r, green: g, blue: b, alpha: 1.0)
+                let style = BorderStyle(
+                    color: color,
+                    width: 5.0,
+                    cornerRadius: 12.0,
+                    opacity: 1.0,
+                    styleType: .round,
+                    glowRadius: nil, glowColor: nil, glowOpacity: nil, glowSpread: nil,
+                    shadowRadius: nil, shadowOffset: nil, shadowColor: nil, shadowOpacity: nil
+                )
+                border.updateStyle(style: style, styleType: "debug-\(name)")
+            }
+        }
+
+        // Restore original style after cycling
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
+            self?.handleConfigChangedImpl()
+        }
     }
 
     /// Handle config change - update styles only (no rebuild)

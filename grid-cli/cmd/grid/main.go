@@ -171,6 +171,31 @@ var pingCmd = &cobra.Command{
 	},
 }
 
+// debugCmd is the parent command for diagnostic tools
+var debugCmd = &cobra.Command{
+	Use:    "debug",
+	Short:  "Diagnostic tools for debugging",
+	Hidden: true,
+}
+
+// debugBordersCmd tests border rendering by cycling through colors
+var debugBordersCmd = &cobra.Command{
+	Use:   "borders",
+	Short: "Cycle active border through colors to test style updates",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		c := client.NewClient(socketPath, timeout)
+		defer c.Close()
+
+		if err := c.DebugBorders(context.Background()); err != nil {
+			printError(fmt.Sprintf("Debug borders failed: %v", err))
+			return err
+		}
+
+		fmt.Println("Border test triggered - watch it cycle through colors...")
+		return nil
+	},
+}
+
 // infoCmd gets server information
 var infoCmd = &cobra.Command{
 	Use:   "info",
@@ -3428,6 +3453,8 @@ func init() {
 
 	// Add top-level commands
 	rootCmd.AddCommand(pingCmd)
+	rootCmd.AddCommand(debugCmd)
+	debugCmd.AddCommand(debugBordersCmd)
 	rootCmd.AddCommand(infoCmd)
 	rootCmd.AddCommand(dumpCmd)
 	rootCmd.AddCommand(showCmd)
