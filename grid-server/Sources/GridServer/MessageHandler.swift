@@ -835,9 +835,43 @@ completion(Response(id: request.id, result: AnyCodable(["success": true])))
             // Parse optional cellStackModes (cellID -> stackMode)
             let cellStackModes = params["cellStackModes"]?.value as? [String: String] ?? [:]
 
+            // Parse optional windowOrder (cellID -> [windowID])
+            var windowOrder: [String: [UInt32]]?
+            if let windowOrderDict = params["windowOrder"]?.value as? [String: Any] {
+                var converted: [String: [UInt32]] = [:]
+                for (cellID, value) in windowOrderDict {
+                    if let windowIDs = value as? [Any] {
+                        let uintArray = windowIDs.compactMap { item -> UInt32? in
+                            if let intVal = item as? Int {
+                                return UInt32(intVal)
+                            } else if let strVal = item as? String, let parsed = UInt32(strVal) {
+                                return parsed
+                            }
+                            return nil
+                        }
+                        if !uintArray.isEmpty {
+                            converted[cellID] = uintArray
+                        }
+                    }
+                }
+                if !converted.isEmpty {
+                    windowOrder = converted
+                }
+            }
+
+            // Parse optional displayFrame {x, y, width, height}
+            var displayFrame: CGRect?
+            if let frameDict = params["displayFrame"]?.value as? [String: Any] {
+                let x = (frameDict["x"] as? Double) ?? (frameDict["x"] as? Int).map(Double.init) ?? 0
+                let y = (frameDict["y"] as? Double) ?? (frameDict["y"] as? Int).map(Double.init) ?? 0
+                let width = (frameDict["width"] as? Double) ?? (frameDict["width"] as? Int).map(Double.init) ?? 0
+                let height = (frameDict["height"] as? Double) ?? (frameDict["height"] as? Int).map(Double.init) ?? 0
+                displayFrame = CGRect(x: x, y: y, width: width, height: height)
+            }
+
             // Update SimpleBorderManager with per-display data (and optional atomic focus)
             if let simpleBorderManager = self.simpleBorderManager {
-                simpleBorderManager.setCellAssignments(cellAssignments, forDisplay: displayUUID, focusedWindowID: focusedWindowID, cellStackModes: cellStackModes)
+                simpleBorderManager.setCellAssignments(cellAssignments, forDisplay: displayUUID, focusedWindowID: focusedWindowID, cellStackModes: cellStackModes, windowOrder: windowOrder, displayFrame: displayFrame)
             }
             completion(Response(id: request.id, result: AnyCodable(["success": true])))
         }
