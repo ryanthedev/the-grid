@@ -24,7 +24,6 @@ type Settings struct {
 	BaseSpacing       float64                    `yaml:"baseSpacing" json:"baseSpacing"`                         // Base unit for "Nx" padding syntax
 	Padding           interface{}                `yaml:"padding,omitempty" json:"padding,omitempty"`             // Global default padding (supports shorthand)
 	WindowSpacing     interface{}                `yaml:"windowSpacing,omitempty" json:"windowSpacing,omitempty"` // Gap between stacked windows (supports shorthand)
-	TabIndicatorInset interface{}                `yaml:"tabIndicatorInset,omitempty" json:"tabIndicatorInset,omitempty"` // Inset for tab stack indicators (supports "Nx" syntax)
 	FocusFollowsMouse bool                       `yaml:"focusFollowsMouse" json:"focusFollowsMouse"`
 	Resize            ResizeSettings             `yaml:"resize,omitempty" json:"resize,omitempty"`
 	WindowExclusion   WindowExclusion            `yaml:"windowExclusion,omitempty" json:"windowExclusion,omitempty"`

@@ -137,19 +137,7 @@ func ApplyLayout(
 		}
 	}
 
-	// 7. Build focused indices for tab stack position indicators
-	focusedIndices := make(map[string]int)
-	for cellID, cellState := range spaceState.Cells {
-		focusedIndices[cellID] = cellState.LastFocusedIdx
-	}
-
-	// 7b. Resolve tab indicator inset
-	tabIndicatorInset := opts.BaseSpacing
-	if insetVal := cfg.GetTabIndicatorInset(); insetVal != nil {
-		tabIndicatorInset = insetVal.Resolve(opts.BaseSpacing)
-	}
-
-	// 8. Calculate window placements
+	// 7. Calculate window placements
 	placementCalcSpan := jsonlog.StartSpan("layout.placement_calc")
 	placements := CalculateAllWindowPlacements(
 		calculatedLayout,
@@ -161,8 +149,6 @@ func ApplyLayout(
 		opts.BaseSpacing,
 		opts.SettingsPadding,
 		opts.SettingsWindowSpacing,
-		focusedIndices,
-		tabIndicatorInset,
 	)
 	placementCalcSpan.End()
 
@@ -427,18 +413,7 @@ func ApplyCellLayout(
 		cellRatios[cellID] = cellState.SplitRatios
 	}
 
-	// 7. Build focused indices for tab positioning
-	focusedIndices := map[string]int{
-		cellID: cellState.LastFocusedIdx,
-	}
-
-	// 8. Resolve tab indicator inset
-	tabIndicatorInset := opts.BaseSpacing
-	if insetVal := cfg.GetTabIndicatorInset(); insetVal != nil {
-		tabIndicatorInset = insetVal.Resolve(opts.BaseSpacing)
-	}
-
-	// 9. Calculate placements for this cell only
+	// 7. Calculate placements for this cell only
 	placements := CalculateAllWindowPlacements(
 		calculatedLayout,
 		layout,
@@ -449,8 +424,6 @@ func ApplyCellLayout(
 		opts.BaseSpacing,
 		opts.SettingsPadding,
 		opts.SettingsWindowSpacing,
-		focusedIndices,
-		tabIndicatorInset,
 	)
 
 	// 9b. Apply per-display offset if configured
