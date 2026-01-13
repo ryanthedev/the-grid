@@ -726,7 +726,10 @@ class SimpleBorderManager {
         return StackIndicator(
             totalCount: windowsInCell.count,
             currentIndex: currentIndex,
-            position: position
+            position: position,
+            lineLength: 12,
+            lineWidth: 3,
+            spacing: 6
         )
     }
 
@@ -770,8 +773,38 @@ class SimpleBorderManager {
 
     /// Apply active style with stack indicator attached
     private func applyActiveStyle(to border: BorderWindow) {
-        var style = BorderConfigManager.shared.activeStyle
-        style.stackIndicator = computeStackIndicator()
+        let config = BorderConfigManager.shared
+        var style = config.activeStyle
+
+        if config.stackIndicatorEnabled {
+            if var indicator = computeStackIndicator() {
+                let configPosition = config.stackIndicatorPosition
+
+                if configPosition != "auto" {
+                    let overridePosition: StackIndicatorPosition
+                    switch configPosition.lowercased() {
+                    case "left":
+                        overridePosition = .leftCenter
+                    case "right":
+                        overridePosition = .rightCenter
+                    case "top":
+                        overridePosition = .topCenter
+                    case "bottom":
+                        overridePosition = .bottomCenter
+                    default:
+                        overridePosition = indicator.position
+                    }
+                    indicator.position = overridePosition
+                }
+
+                indicator.lineLength = config.stackIndicatorLineLength
+                indicator.lineWidth = config.stackIndicatorLineWidth
+                indicator.spacing = config.stackIndicatorSpacing
+
+                style.stackIndicator = indicator
+            }
+        }
+
         updateBorderStyle(border, style: style, isActive: true)
     }
 

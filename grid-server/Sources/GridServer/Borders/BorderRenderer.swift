@@ -15,6 +15,33 @@ enum BorderStyleType {
     case uniform
 }
 
+/// Position for stack indicator dots
+enum StackIndicatorPosition {
+    case bottomCenter
+    case topCenter
+    case leftCenter
+    case rightCenter
+}
+
+/// Stack indicator info for showing position in cell
+struct StackIndicator {
+    var totalCount: Int
+    var currentIndex: Int
+    var position: StackIndicatorPosition
+    var lineLength: CGFloat
+    var lineWidth: CGFloat
+    var spacing: CGFloat
+
+    init(totalCount: Int, currentIndex: Int, position: StackIndicatorPosition, lineLength: CGFloat = 12, lineWidth: CGFloat = 3, spacing: CGFloat = 6) {
+        self.totalCount = totalCount
+        self.currentIndex = currentIndex
+        self.position = position
+        self.lineLength = lineLength
+        self.lineWidth = lineWidth
+        self.spacing = spacing
+    }
+}
+
 /// Border rendering style parameters
 struct BorderStyle {
     var color: CGColor
@@ -22,14 +49,47 @@ struct BorderStyle {
     var cornerRadius: CGFloat
     var opacity: CGFloat
     var styleType: BorderStyleType
-    var glowRadius: CGFloat?      // nil = no glow
-    var glowColor: CGColor?       // defaults to border color if nil
-    var glowOpacity: CGFloat?     // defaults to 0.5 if nil
-    var glowSpread: CGFloat?      // multiplier for glow layer spread (defaults to 1.0)
-    var shadowRadius: CGFloat?    // nil = no shadow
-    var shadowOffset: CGSize?     // defaults to (2, 4) if nil
-    var shadowColor: CGColor?     // defaults to black if nil
-    var shadowOpacity: CGFloat?   // defaults to 0.5 if nil
+    var glowRadius: CGFloat?
+    var glowColor: CGColor?
+    var glowOpacity: CGFloat?
+    var glowSpread: CGFloat?
+    var shadowRadius: CGFloat?
+    var shadowOffset: CGSize?
+    var shadowColor: CGColor?
+    var shadowOpacity: CGFloat?
+    var stackIndicator: StackIndicator?
+
+    init(
+        color: CGColor,
+        width: CGFloat,
+        cornerRadius: CGFloat,
+        opacity: CGFloat,
+        styleType: BorderStyleType,
+        glowRadius: CGFloat? = nil,
+        glowColor: CGColor? = nil,
+        glowOpacity: CGFloat? = nil,
+        glowSpread: CGFloat? = nil,
+        shadowRadius: CGFloat? = nil,
+        shadowOffset: CGSize? = nil,
+        shadowColor: CGColor? = nil,
+        shadowOpacity: CGFloat? = nil,
+        stackIndicator: StackIndicator? = nil
+    ) {
+        self.color = color
+        self.width = width
+        self.cornerRadius = cornerRadius
+        self.opacity = opacity
+        self.styleType = styleType
+        self.glowRadius = glowRadius
+        self.glowColor = glowColor
+        self.glowOpacity = glowOpacity
+        self.glowSpread = glowSpread
+        self.shadowRadius = shadowRadius
+        self.shadowOffset = shadowOffset
+        self.shadowColor = shadowColor
+        self.shadowOpacity = shadowOpacity
+        self.stackIndicator = stackIndicator
+    }
 }
 
 /// Stateless border renderer using Core Graphics
@@ -37,6 +97,12 @@ enum BorderRenderer {
 
     /// Draw a border in the given context
     static func draw(in context: CGContext, bounds: CGRect, style: BorderStyle) {
+        // HACK: Log to verify draw is called
+        JSONLogger.shared.log("hack.draw", data: [
+            "bounds": [bounds.origin.x, bounds.origin.y, bounds.size.width, bounds.size.height],
+            "width": style.width
+        ])
+
         // Clear the context first
         context.clear(bounds)
 
@@ -136,5 +202,139 @@ enum BorderRenderer {
         // Draw the main border
         context.addPath(path)
         context.strokePath()
+
+        // Stack indicator: lines for each window, active is inverted
+        if let indicator = style.stackIndicator, indicator.totalCount >= 1 {
+            context.saveGState()
+            context.setAlpha(1.0)
+            context.setShadow(offset: .zero, blur: 0)
+
+            let lineLength = indicator.lineLength
+            let lineWidth = indicator.lineWidth
+            let spacing = indicator.spacing
+            let totalHeight = CGFloat(indicator.totalCount) * lineLength + CGFloat(indicator.totalCount - 1) * spacing
+
+            let position = indicator.position
+
+            // Calculate base position (centered on edge)
+            let baseX: CGFloat
+            let baseY: CGFloat
+
+            switch position {
+            case .leftCenter, .rightCenter:
+                baseX = (position == .leftCenter) ? style.width / 2 : bounds.maxX - style.width / 2
+                baseY = bounds.midY - totalHeight / 2
+            case .topCenter, .bottomCenter:
+                baseX = bounds.midX - totalHeight / 2
+                baseY = (position == .topCenter) ? style.width / 2 : bounds.maxY - style.width / 2
+            }
+
+            let borderColor = style.color
+            let black = CGColor(gray: 0, alpha: 1)
+
+            for i in 0..<indicator.totalCount {
+                let isActive = (i == indicator.currentIndex)
+                let fillColor = isActive ? borderColor : black
+                let strokeColor = isActive ? black : borderColor
+
+                let lineRect: CGRect
+                switch position {
+                case .leftCenter, .rightCenter:
+                    // Vertical lines stacked vertically
+                    let y = baseY + CGFloat(i) * (lineLength + spacing)
+                    lineRect = CGRect(x: baseX - lineWidth/2, y: y, width: lineWidth, height: lineLength)
+                case .topCenter, .bottomCenter:
+                    // Vertical lines arranged horizontally
+                    let x = baseX + CGFloat(i) * (lineLength + spacing)
+                    lineRect = CGRect(x: x, y: baseY - lineWidth/2, width: lineLength, height: lineWidth)
+                }
+
+                // Draw outline first
+                context.setFillColor(strokeColor)
+                context.fill(lineRect.insetBy(dx: -1, dy: -1))
+
+                // Draw fill
+                context.setFillColor(fillColor)
+                context.fill(lineRect)
+            }
+
+            context.restoreGState()
+        }
+
+    }
+
+    /// Draw stack position indicator dots
+    private static func drawStackIndicator(
+        in context: CGContext,
+        bounds: CGRect,
+        style: BorderStyle,
+        indicator: StackIndicator
+    ) {
+        let dotDiameter: CGFloat = 6.0
+        let dotSpacing: CGFloat = 4.0
+        let dotRadius = dotDiameter / 2.0
+
+        let totalWidth = CGFloat(indicator.totalCount) * dotDiameter +
+                         CGFloat(indicator.totalCount - 1) * dotSpacing
+
+        // Calculate center position based on indicator position
+        let centerX: CGFloat
+        let centerY: CGFloat
+
+        switch indicator.position {
+        case .bottomCenter:
+            centerX = bounds.midX
+            centerY = bounds.maxY - style.width / 2
+        case .topCenter:
+            centerX = bounds.midX
+            centerY = bounds.minY + style.width / 2
+        case .leftCenter:
+            centerX = bounds.minX + style.width / 2
+            centerY = bounds.midY
+        case .rightCenter:
+            centerX = bounds.maxX - style.width / 2
+            centerY = bounds.midY
+        }
+
+        // Starting X for first dot (centered around centerX)
+        let startX = centerX - totalWidth / 2 + dotRadius
+
+        context.saveGState()
+
+        for i in 0..<indicator.totalCount {
+            let dotCenterX: CGFloat
+            let dotCenterY: CGFloat
+
+            // For left/right positions, stack dots vertically
+            if indicator.position == .leftCenter || indicator.position == .rightCenter {
+                dotCenterX = centerX
+                let startY = centerY - totalWidth / 2 + dotRadius
+                dotCenterY = startY + CGFloat(i) * (dotDiameter + dotSpacing)
+            } else {
+                dotCenterX = startX + CGFloat(i) * (dotDiameter + dotSpacing)
+                dotCenterY = centerY
+            }
+
+            let dotRect = CGRect(
+                x: dotCenterX - dotRadius,
+                y: dotCenterY - dotRadius,
+                width: dotDiameter,
+                height: dotDiameter
+            )
+
+            if i == indicator.currentIndex {
+                // Active dot: full color
+                context.setFillColor(style.color)
+                context.setAlpha(1.0)
+            } else {
+                // Inactive dots: dimmed
+                context.setFillColor(style.color)
+                context.setAlpha(0.3)
+            }
+
+            context.fillEllipse(in: dotRect)
+        }
+
+        context.restoreGState()
     }
 }
