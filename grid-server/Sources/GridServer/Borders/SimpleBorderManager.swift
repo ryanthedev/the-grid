@@ -711,8 +711,13 @@ class SimpleBorderManager {
             return nil
         }
 
-        // TODO: Window ordering should match focus cycling order
-        let windowsInCell = assignments.filter { $0.value == cellID }.map { $0.key }.sorted()
+        // Use CLI-provided window order if available, otherwise fallback to sorted IDs
+        let windowsInCell: [UInt32]
+        if let providedOrder = windowOrderPerDisplay[displayUUID]?[cellID] {
+            windowsInCell = providedOrder
+        } else {
+            windowsInCell = assignments.filter { $0.value == cellID }.map { $0.key }.sorted()
+        }
         let currentIndex = windowsInCell.firstIndex(of: focused) ?? 0
 
         // Determine which edge faces screen center
