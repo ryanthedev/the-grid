@@ -758,15 +758,17 @@ class SimpleBorderManager {
             displayFrame = CGRect(x: 0, y: 0, width: screenWidth, height: screenHeight)
         }
 
-        // Window center relative to display center
-        let windowCenterX = windowFrame.midX
-        let windowCenterY = windowFrame.midY
-        let displayCenterX = displayFrame.midX
-        let displayCenterY = displayFrame.midY
+        // Window center relative to display origin (handles multi-monitor offsets)
+        let relativeWindowX = windowFrame.midX - displayFrame.origin.x
+        let relativeWindowY = windowFrame.midY - displayFrame.origin.y
+
+        // Display center relative to its own origin
+        let displayCenterX = displayFrame.width / 2
+        let displayCenterY = displayFrame.height / 2
 
         // Calculate offset from display center (signed)
-        let offsetX = windowCenterX - displayCenterX  // positive = right of center
-        let offsetY = windowCenterY - displayCenterY  // positive = below center (Quartz coords)
+        let offsetX = relativeWindowX - displayCenterX  // positive = right of center
+        let offsetY = relativeWindowY - displayCenterY  // positive = below center (Quartz coords)
 
         // Pick the axis with the larger offset - that's the more "outward" direction
         // The inward edge is opposite to the outward direction
