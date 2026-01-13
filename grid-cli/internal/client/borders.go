@@ -148,8 +148,9 @@ func (c *Client) SendBorderConfig(ctx context.Context, cfg *config.BorderConfig)
 
 // CellAssignment represents a window-to-cell mapping
 type CellAssignment struct {
-	WindowID uint32
-	CellID   string
+	WindowID  uint32
+	CellID    string
+	StackMode string // "tabs", "vertical", "horizontal"
 }
 
 // CellRect represents the bounds of a cell
@@ -167,13 +168,19 @@ type CellRect struct {
 func (c *Client) SendCellAssignments(ctx context.Context, displayUUID string, assignments []CellAssignment, focusedWindowID *uint32) error {
 	// Build assignment map (windowID as string -> cellID)
 	assignmentMap := make(map[string]string)
+	// Build stackMode map (cellID -> stackMode)
+	stackModeMap := make(map[string]string)
 	for _, a := range assignments {
 		assignmentMap[fmt.Sprintf("%d", a.WindowID)] = a.CellID
+		if a.StackMode != "" {
+			stackModeMap[a.CellID] = a.StackMode
+		}
 	}
 
 	params := map[string]interface{}{
-		"assignments": assignmentMap,
-		"displayUUID": displayUUID,
+		"assignments":    assignmentMap,
+		"displayUUID":    displayUUID,
+		"cellStackModes": stackModeMap,
 	}
 
 	// Include focused window for atomic update (prevents race conditions)
@@ -190,6 +197,18 @@ func (c *Client) SendCellAssignments(ctx context.Context, displayUUID string, as
 		return fmt.Errorf("server error: %s", resp.GetError())
 	}
 
+	return nil
+}
+
+// DebugBorders triggers a visual test that cycles the active border through colors.
+func (c *Client) DebugBorders(ctx context.Context) error {
+	resp, err := c.request(ctx, "borders.debug", map[string]interface{}{})
+	if err != nil {
+		return fmt.Errorf("failed to trigger border debug: %w", err)
+	}
+	if resp.IsError() {
+		return fmt.Errorf("server error: %s", resp.GetError())
+	}
 	return nil
 }
 

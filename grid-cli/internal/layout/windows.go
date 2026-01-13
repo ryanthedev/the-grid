@@ -153,8 +153,6 @@ func NormalizeRatios(ratios []float64) []float64 {
 //   - baseSpacing: Base spacing unit for resolving "Nx" padding/spacing values
 //   - settingsPadding: Global default padding from settings (nil = no default)
 //   - settingsWindowSpacing: Global default window spacing from settings (nil = no default)
-//   - focusedIndices: Map of cellID -> focused window index (nil = no insets)
-//   - tabIndicatorInset: Inset size for tab stack indicators (0 = use baseSpacing fallback)
 //
 // Returns: Array of WindowPlacement for all windows
 func CalculateAllWindowPlacements(
@@ -167,8 +165,6 @@ func CalculateAllWindowPlacements(
 	baseSpacing float64,
 	settingsPadding *types.Padding,
 	settingsWindowSpacing *types.PaddingValue,
-	focusedIndices map[string]int,
-	tabIndicatorInset float64,
 ) []types.WindowPlacement {
 	if calculatedLayout == nil {
 		return nil
@@ -214,48 +210,6 @@ func CalculateAllWindowPlacements(
 
 		// Calculate window bounds within the (possibly padded) cell
 		windowBounds := CalculateWindowBounds(cellBounds, len(windowIDs), mode, ratios, windowSpacing)
-
-		// Apply tab stack position insets (creates L-shaped reveals at corners)
-		// hasPrev: inset top-left (shift X,Y; reduce W,H to maintain right/bottom edges)
-		// hasNext: inset bottom-right (reduce W,H only)
-		if mode == types.StackTabs && len(windowIDs) > 1 && focusedIndices != nil {
-			focusedIdx, hasFocusInfo := focusedIndices[cellID]
-			if hasFocusInfo && focusedIdx >= 0 && focusedIdx < len(windowBounds) {
-				hasPrev := focusedIdx > 0
-				hasNext := focusedIdx < len(windowIDs)-1
-
-				if hasPrev || hasNext {
-					bounds := &windowBounds[focusedIdx]
-					originalBounds := *bounds
-
-					// Use tabIndicatorInset if provided, otherwise fall back to baseSpacing
-					insetSize := tabIndicatorInset
-					if insetSize == 0 {
-						insetSize = baseSpacing
-					}
-
-					// When both hasPrev AND hasNext are true, insets combine to create
-					// uniform margins on all 4 sides
-					if hasPrev {
-						bounds.X += insetSize
-						bounds.Y += insetSize
-						bounds.Width -= insetSize
-						bounds.Height -= insetSize
-					}
-					if hasNext {
-						bounds.Width -= insetSize
-						bounds.Height -= insetSize
-					}
-
-					// Minimum size prevents unusable windows when insetSize is large
-					// relative to cell size. 50px is a reasonable minimum for any content.
-					const minSize = 50.0
-					if bounds.Width < minSize || bounds.Height < minSize {
-						*bounds = originalBounds
-					}
-				}
-			}
-		}
 
 		// Create placements
 		for i, windowID := range windowIDs {
