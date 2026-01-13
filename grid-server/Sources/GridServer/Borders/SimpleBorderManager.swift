@@ -733,19 +733,30 @@ class SimpleBorderManager {
             return .leftCenter  // fallback
         }
 
-        // Get main display bounds (simplified - assumes main display)
-        guard let mainDisplay = CGMainDisplayID() as CGDirectDisplayID?,
-              mainDisplay != 0 else {
-            return .leftCenter
+        // Get display bounds for the current display (multi-monitor aware)
+        let displayFrame: CGRect
+        if let uuid = currentDisplayUUID,
+           let frame = displayFramePerDisplay[uuid] {
+            // Use actual display bounds from CLI
+            displayFrame = frame
+        } else {
+            // Fallback: use main display bounds (backward compatibility)
+            guard let mainDisplay = CGMainDisplayID() as CGDirectDisplayID?,
+                  mainDisplay != 0 else {
+                return .leftCenter
+            }
+            let screenWidth = CGFloat(CGDisplayPixelsWide(mainDisplay))
+            let screenHeight = CGFloat(CGDisplayPixelsHigh(mainDisplay))
+            displayFrame = CGRect(x: 0, y: 0, width: screenWidth, height: screenHeight)
         }
-        let screenWidth = CGFloat(CGDisplayPixelsWide(mainDisplay))
 
-        // Window center X
+        // Window center X relative to display
         let windowCenterX = windowFrame.midX
+        let displayCenterX = displayFrame.midX
 
-        // If window is on left half of screen, inward edge is right
-        // If window is on right half of screen, inward edge is left
-        if windowCenterX < screenWidth / 2 {
+        // If window is on left half of display, inward edge is right
+        // If window is on right half of display, inward edge is left
+        if windowCenterX < displayCenterX {
             return .rightCenter
         } else {
             return .leftCenter
