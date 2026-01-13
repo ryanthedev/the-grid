@@ -63,6 +63,15 @@ class BorderConfigManager {
     private var _styleString: String = "round"
     private var _hidpi: Bool = true
 
+    // Stack indicator configuration (backing storage)
+    private var _stackIndicatorEnabled: Bool = true
+    private var _stackIndicatorLineLength: CGFloat = 12.0
+    private var _stackIndicatorLineWidth: CGFloat = 3.0
+    private var _stackIndicatorSpacing: CGFloat = 6.0
+    private var _stackIndicatorPosition: String = "auto"
+    private var _stackIndicatorActiveColor: CGColor? = nil
+    private var _stackIndicatorInactiveColor: CGColor? = nil
+
     /// Callback invoked when config changes (for border refresh)
     private var _onConfigChanged: (() -> Void)?
     var onConfigChanged: (() -> Void)? {
@@ -88,6 +97,42 @@ class BorderConfigManager {
         lock.withLock {
             (_inactiveAnimationType, _inactiveAnimationDuration, _inactiveAnimationIntensity)
         }
+    }
+
+    /// Stack indicator configuration
+    var stackIndicatorEnabled: Bool {
+        get { lock.withLock { _stackIndicatorEnabled } }
+        set { lock.withLock { _stackIndicatorEnabled = newValue } }
+    }
+
+    var stackIndicatorLineLength: CGFloat {
+        get { lock.withLock { _stackIndicatorLineLength } }
+        set { lock.withLock { _stackIndicatorLineLength = newValue } }
+    }
+
+    var stackIndicatorLineWidth: CGFloat {
+        get { lock.withLock { _stackIndicatorLineWidth } }
+        set { lock.withLock { _stackIndicatorLineWidth = newValue } }
+    }
+
+    var stackIndicatorSpacing: CGFloat {
+        get { lock.withLock { _stackIndicatorSpacing } }
+        set { lock.withLock { _stackIndicatorSpacing = newValue } }
+    }
+
+    var stackIndicatorPosition: String {
+        get { lock.withLock { _stackIndicatorPosition } }
+        set { lock.withLock { _stackIndicatorPosition = newValue } }
+    }
+
+    var stackIndicatorActiveColor: CGColor? {
+        get { lock.withLock { _stackIndicatorActiveColor } }
+        set { lock.withLock { _stackIndicatorActiveColor = newValue } }
+    }
+
+    var stackIndicatorInactiveColor: CGColor? {
+        get { lock.withLock { _stackIndicatorInactiveColor } }
+        set { lock.withLock { _stackIndicatorInactiveColor = newValue } }
     }
 
     private init() {}
@@ -154,6 +199,10 @@ class BorderConfigManager {
 
             if let inactiveConfig = config["inactive"] as? [String: Any] {
                 updateInactiveStyleLocked(from: inactiveConfig)
+            }
+
+            if let stackIndicatorConfig = config["stackIndicator"] as? [String: Any] {
+                updateStackIndicatorConfigLocked(from: stackIndicatorConfig)
             }
 
             // Legacy flat schema (backwards compatibility)
@@ -327,6 +376,57 @@ class BorderConfigManager {
             }
             if let intensity = (animation["intensity"] as? NSNumber)?.doubleValue {
                 self._inactiveAnimationIntensity = clamp(CGFloat(intensity), min: 0, max: 1)
+            }
+        }
+    }
+
+    /// Update stack indicator config from config dictionary (must be called with lock held)
+    private func updateStackIndicatorConfigLocked(from config: [String: Any]) {
+        // If config contains "enabled" as Bool
+        if let enabled = config["enabled"] as? Bool {
+            self._stackIndicatorEnabled = enabled
+        }
+
+        // If config contains "lineLength" as number
+        if let lineLength = (config["lineLength"] as? NSNumber)?.doubleValue {
+            self._stackIndicatorLineLength = clamp(CGFloat(lineLength), min: 0, max: 100)
+        }
+
+        // If config contains "lineWidth" as number
+        if let lineWidth = (config["lineWidth"] as? NSNumber)?.doubleValue {
+            self._stackIndicatorLineWidth = clamp(CGFloat(lineWidth), min: 0, max: 20)
+        }
+
+        // If config contains "spacing" as number
+        if let spacing = (config["spacing"] as? NSNumber)?.doubleValue {
+            self._stackIndicatorSpacing = clamp(CGFloat(spacing), min: 0, max: 50)
+        }
+
+        // If config contains "position" as string
+        if let position = config["position"] as? String {
+            let validPositions = ["auto", "left", "right", "top", "bottom"]
+            let normalizedPosition = position.lowercased()
+            if validPositions.contains(normalizedPosition) {
+                self._stackIndicatorPosition = normalizedPosition
+            } else {
+                JSONLogger.shared.log("warn.config", data: [
+                    "msg": "invalid stack indicator position (expected auto/left/right/top/bottom)",
+                    "position": position
+                ])
+            }
+        }
+
+        // If config contains "activeColor" as string
+        if let activeColorStr = config["activeColor"] as? String {
+            if let color = parseHexColor(activeColorStr) {
+                self._stackIndicatorActiveColor = color
+            }
+        }
+
+        // If config contains "inactiveColor" as string
+        if let inactiveColorStr = config["inactiveColor"] as? String {
+            if let color = parseHexColor(inactiveColorStr) {
+                self._stackIndicatorInactiveColor = color
             }
         }
     }
