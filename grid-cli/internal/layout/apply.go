@@ -79,14 +79,14 @@ func ApplyLayout(
 	windows := convertWindows(tileableWindows)
 	filterSpan.End()
 
-	// 4. Get previous assignments from local state
+	// 5. Get previous assignments from local state
 	spaceState := rs.GetSpace(snap.SpaceID)
 	previousAssignments := make(map[string][]uint32)
 	for cellID, cellState := range spaceState.Cells {
 		previousAssignments[cellID] = cellState.Windows
 	}
 
-	// 5. Assign windows to cells
+	// 6. Assign windows to cells
 	assignSpan := jsonlog.StartSpan("layout.assign")
 	assignment := AssignWindows(
 		windows,
@@ -98,7 +98,7 @@ func ApplyLayout(
 	)
 	assignSpan.End()
 
-	// 6. Get cell modes and ratios from config/state
+	// 7. Get cell modes and ratios from config/state
 	cellModes := make(map[string]types.StackMode)
 	cellRatios := make(map[string][]float64)
 
@@ -127,7 +127,7 @@ func ApplyLayout(
 		}
 	}
 
-	// 6b. Adjust ratios to match actual assignment counts
+	// 7b. Adjust ratios to match actual assignment counts
 	// This handles cases where windows disappeared between state save and now
 	for cellID, windowIDs := range assignment.Assignments {
 		if existingRatios, ok := cellRatios[cellID]; ok {
@@ -137,7 +137,7 @@ func ApplyLayout(
 		}
 	}
 
-	// 7. Calculate window placements
+	// 8. Calculate window placements
 	placementCalcSpan := jsonlog.StartSpan("layout.placement_calc")
 	placements := CalculateAllWindowPlacements(
 		calculatedLayout,
@@ -152,7 +152,7 @@ func ApplyLayout(
 	)
 	placementCalcSpan.End()
 
-	// 8b. Apply per-display offset if configured
+	// 9. Apply per-display offset if configured
 	displayUUID := snap.GetCurrentDisplayUUID()
 	displayName := snap.GetCurrentDisplayName()
 	offset := cfg.GetDisplayOffset(displayUUID, displayName)
@@ -191,7 +191,7 @@ func ApplyLayout(
 		}
 	}
 
-	// 9. Apply placements via server
+	// 10. Apply placements via server
 	if err := ApplyPlacements(ctx, c, placements); err != nil {
 		return fmt.Errorf("failed to apply placements: %w", err)
 	}
@@ -206,7 +206,7 @@ func ApplyLayout(
 		"cells": cellIDs,
 	}))
 
-	// 9b. Send border config and cell assignments to server
+	// 11. Send border config and cell assignments to server
 	if opts.SendBorders {
 		borderSpan := jsonlog.StartSpan("borders.sync")
 		if err := sendBorderConfig(ctx, c, cfg); err != nil {
@@ -223,7 +223,7 @@ func ApplyLayout(
 		borderSpan.End()
 	}
 
-	// 10. Update local state
+	// 12. Update local state
 	// Only call SetCurrentLayout (which clears ratios) if switching to a different layout
 	if existingState == nil || existingState.CurrentLayoutID != layoutID {
 		spaceState.SetCurrentLayout(layoutID, findLayoutIndex(cfg, layoutID))
@@ -235,7 +235,7 @@ func ApplyLayout(
 	rs.SetWindowAssignments(snap.SpaceID, assignment.Assignments)
 	rs.MarkUpdated()
 
-	// 11. Save state
+	// 13. Save state
 	saveSpan := jsonlog.StartSpan("state.save")
 	if err := rs.Save(); err != nil {
 		saveSpan.EndWithError(err.Error())
@@ -426,7 +426,7 @@ func ApplyCellLayout(
 		opts.SettingsWindowSpacing,
 	)
 
-	// 9b. Apply per-display offset if configured
+	// 8. Apply per-display offset if configured
 	displayUUID := snap.GetCurrentDisplayUUID()
 	displayName := snap.GetCurrentDisplayName()
 	offset := cfg.GetDisplayOffset(displayUUID, displayName)
@@ -465,7 +465,7 @@ func ApplyCellLayout(
 		}
 	}
 
-	// 10. Apply placements
+	// 9. Apply placements
 	jsonlog.Log("layout.cell.placements", jsonlog.WithData(map[string]any{
 		"count": len(placements), "cellID": cellID,
 	}))
@@ -473,7 +473,7 @@ func ApplyCellLayout(
 		return fmt.Errorf("failed to apply placements: %w", err)
 	}
 
-	// 11. Send border updates for this cell
+	// 10. Send border updates for this cell
 	if opts.SendBorders {
 		if err := sendBorderConfig(ctx, c, cfg); err != nil {
 			jsonlog.Log("warn.border_config", jsonlog.WithData(map[string]any{"err": err.Error()}))
