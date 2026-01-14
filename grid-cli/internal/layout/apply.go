@@ -216,7 +216,7 @@ func ApplyLayout(
 
 		if displayUUID == "" {
 			jsonlog.Log("warn.display_uuid", jsonlog.WithMsg("could not determine display UUID"))
-		} else if err := sendCellAssignments(ctx, c, displayUUID, layout, assignment.Assignments, calculatedLayout.CellBounds, opts.BaseSpacing, opts.SettingsPadding); err != nil {
+		} else if err := sendCellAssignments(ctx, c, displayUUID, snap.DisplayBounds, layout, assignment.Assignments, calculatedLayout.CellBounds, opts.BaseSpacing, opts.SettingsPadding); err != nil {
 			// Log but don't fail - borders are optional
 			jsonlog.Log("warn.cell_assignments", jsonlog.WithData(map[string]any{"err": err.Error()}))
 		}
@@ -481,7 +481,7 @@ func ApplyCellLayout(
 
 		if displayUUID == "" {
 			jsonlog.Log("warn.display_uuid", jsonlog.WithMsg("could not determine display UUID"))
-		} else if err := sendCellAssignments(ctx, c, displayUUID, layout, singleCellAssignment,
+		} else if err := sendCellAssignments(ctx, c, displayUUID, snap.DisplayBounds, layout, singleCellAssignment,
 			calculatedLayout.CellBounds, opts.BaseSpacing, opts.SettingsPadding); err != nil {
 			jsonlog.Log("warn.cell_assignments", jsonlog.WithData(map[string]any{"err": err.Error()}))
 		}
@@ -502,7 +502,8 @@ func sendBorderConfig(ctx context.Context, c *client.Client, cfg *config.Config)
 // sendCellAssignments sends window-to-cell mappings to the server for border coloring.
 // Cell bounds are adjusted with padding to match actual window placement areas.
 // displayUUID is required for per-display caching in the server.
-func sendCellAssignments(ctx context.Context, c *client.Client, displayUUID string, layout *types.Layout, assignments map[string][]uint32, cellBounds map[string]types.Rect, baseSpacing float64, settingsPadding *types.Padding) error {
+// displayFrame is required for stack indicator edge calculation.
+func sendCellAssignments(ctx context.Context, c *client.Client, displayUUID string, displayFrame types.Rect, layout *types.Layout, assignments map[string][]uint32, cellBounds map[string]types.Rect, baseSpacing float64, settingsPadding *types.Padding) error {
 	// Build cell ID -> stackMode lookup from layout
 	cellStackModes := make(map[string]types.StackMode)
 	if layout != nil {
@@ -528,7 +529,11 @@ func sendCellAssignments(ctx context.Context, c *client.Client, displayUUID stri
 		return nil // No assignments to send
 	}
 
-	return c.SendCellAssignments(ctx, displayUUID, cellAssignments, nil)
+	opts := &client.SendCellAssignmentsOpts{
+		DisplayFrame: &displayFrame,
+		WindowOrder:  assignments,
+	}
+	return c.SendCellAssignments(ctx, displayUUID, cellAssignments, opts)
 }
 
 // reconcileSpace removes windows from state that no longer exist in the snapshot.

@@ -36,6 +36,14 @@ class SimpleBorderManager {
     /// displayUUID → (cellID → stackMode)
     private var cellStackModesPerDisplay: [String: [String: String]] = [:]
 
+    /// Window order per cell received from CLI, keyed by display UUID
+    /// displayUUID → (cellID → [windowID])
+    private var windowOrderPerDisplay: [String: [String: [UInt32]]] = [:]
+
+    /// Display frame received from CLI, keyed by display UUID
+    /// displayUUID → CGRect
+    private var displayFramePerDisplay: [String: CGRect] = [:]
+
     /// Current display UUID for focused window (used for lookups)
     private var currentDisplayUUID: String?
 
@@ -100,16 +108,18 @@ class SimpleBorderManager {
     ///   - displayUUID: Target display
     ///   - focusedWindowID: Optional - if provided, updates focus atomically (prevents race conditions)
     ///   - cellStackModes: Optional - cellID → stackMode ("tabs", "vertical", "horizontal")
-    func setCellAssignments(_ assignments: [UInt32: String], forDisplay displayUUID: String, focusedWindowID: UInt32? = nil, cellStackModes: [String: String] = [:]) {
+    ///   - windowOrder: Optional - cellID → [windowID] ordered array for focus cycling
+    ///   - displayFrame: Optional - display frame for layout context
+    func setCellAssignments(_ assignments: [UInt32: String], forDisplay displayUUID: String, focusedWindowID: UInt32? = nil, cellStackModes: [String: String] = [:], windowOrder: [String: [UInt32]]? = nil, displayFrame: CGRect? = nil) {
         let span = CurrentSpan.current
         DispatchQueue.main.async { [weak self, span] in
             CurrentSpan.$current.withValue(span) {
-                self?.setCellAssignmentsImpl(assignments, forDisplay: displayUUID, focusedWindowID: focusedWindowID, cellStackModes: cellStackModes)
+                self?.setCellAssignmentsImpl(assignments, forDisplay: displayUUID, focusedWindowID: focusedWindowID, cellStackModes: cellStackModes, windowOrder: windowOrder, displayFrame: displayFrame)
             }
         }
     }
 
-    private func setCellAssignmentsImpl(_ assignments: [UInt32: String], forDisplay displayUUID: String, focusedWindowID newFocusedWindow: UInt32? = nil, cellStackModes: [String: String] = [:]) {
+    private func setCellAssignmentsImpl(_ assignments: [UInt32: String], forDisplay displayUUID: String, focusedWindowID newFocusedWindow: UInt32? = nil, cellStackModes: [String: String] = [:], windowOrder: [String: [UInt32]]? = nil, displayFrame: CGRect? = nil) {
         // Reentrancy guard
         guard !isUpdating else { return }
         isUpdating = true
@@ -118,6 +128,14 @@ class SimpleBorderManager {
         let oldAssignments = cellAssignmentsPerDisplay[displayUUID]
         cellAssignmentsPerDisplay[displayUUID] = assignments
         cellStackModesPerDisplay[displayUUID] = cellStackModes
+
+        // Store optional window order and display frame
+        if let windowOrder = windowOrder {
+            windowOrderPerDisplay[displayUUID] = windowOrder
+        }
+        if let displayFrame = displayFrame {
+            displayFramePerDisplay[displayUUID] = displayFrame
+        }
 
         // If focusedWindowID is provided, update focus atomically (prevents race conditions)
         // This is the key fix: assignments + focus happen in single main queue dispatch
@@ -325,6 +343,8 @@ class SimpleBorderManager {
         // Remove cached assignments and stack modes for this display
         cellAssignmentsPerDisplay.removeValue(forKey: displayUUID)
         cellStackModesPerDisplay.removeValue(forKey: displayUUID)
+        windowOrderPerDisplay.removeValue(forKey: displayUUID)
+        displayFramePerDisplay.removeValue(forKey: displayUUID)
 
         // If this was the active display, clear state and borders
         if currentDisplayUUID == displayUUID {
@@ -453,6 +473,8 @@ class SimpleBorderManager {
         if isActiveCellTabbed {
             if let border = activeBorder {
                 border.retarget(to: newFocused)
+                // Update style with new stack indicator (index changed)
+                applyActiveStyle(to: border)
                 Task {
                     JSONLogger.shared.log("bdr.retarget_focus", data: [
                         "prev": previousFocused ?? 0,
@@ -472,8 +494,8 @@ class SimpleBorderManager {
                     return
                 }
                 if let border = createBorder(for: newFocused) {
-                    updateBorderStyle(border, style: config.activeStyle, isActive: true)
                     activeBorder = border
+                    applyActiveStyle(to: border)
                     Task {
                         JSONLogger.shared.log("warn.bdr.missing_tabbed", data: ["wid": newFocused])
                     }
@@ -496,8 +518,8 @@ class SimpleBorderManager {
         // Step 2: Promote border for newly focused window
         if let border = inactiveBorders.removeValue(forKey: newFocused) {
             // Border exists in inactive pool - promote it
-            updateBorderStyle(border, style: config.activeStyle, isActive: true)
             activeBorder = border
+            applyActiveStyle(to: border)
             Task {
                 JSONLogger.shared.log("bdr.promote", data: ["wid": newFocused])
             }
@@ -505,8 +527,8 @@ class SimpleBorderManager {
             // No border for this window (edge case: window appeared and auto-focused
             // before CLI sent assignments, then assignments arrived)
             if let border = createBorder(for: newFocused) {
-                updateBorderStyle(border, style: config.activeStyle, isActive: true)
                 activeBorder = border
+                applyActiveStyle(to: border)
                 Task {
                     JSONLogger.shared.log("warn.bdr.missing", data: ["wid": newFocused])
                 }
@@ -547,13 +569,12 @@ class SimpleBorderManager {
 
             guard let border = createBorder(for: windowID) else { continue }
 
-            let style = isFocused ? config.activeStyle : config.inactiveStyle
-            updateBorderStyle(border, style: style, isActive: isFocused)
-
             if isFocused {
                 activeBorder = border
+                applyActiveStyle(to: border)
             } else {
                 inactiveBorders[windowID] = border
+                updateBorderStyle(border, style: config.inactiveStyle, isActive: false)
             }
 
             Task {
@@ -651,9 +672,9 @@ class SimpleBorderManager {
 
         let config = BorderConfigManager.shared
 
-        // Update active border style
+        // Update active border style (with stack indicator)
         if let border = activeBorder {
-            updateBorderStyle(border, style: config.activeStyle, isActive: true)
+            applyActiveStyle(to: border)
         }
 
         // Update inactive border styles
@@ -678,6 +699,118 @@ class SimpleBorderManager {
         } else {
             border.updateStyle(style: nil, styleType: "hidden")
         }
+    }
+
+    /// Compute stack indicator for active border
+    /// Always returns indicator (for position), even for single window
+    private func computeStackIndicator() -> StackIndicator? {
+        guard let cellID = activeCellID,
+              let displayUUID = currentDisplayUUID,
+              let assignments = cellAssignmentsPerDisplay[displayUUID],
+              let focused = focusedWindowID else {
+            return nil
+        }
+
+        // Use CLI-provided window order if available, otherwise fallback to sorted IDs
+        let windowsInCell: [UInt32]
+        if let providedOrder = windowOrderPerDisplay[displayUUID]?[cellID] {
+            windowsInCell = providedOrder
+        } else {
+            windowsInCell = assignments.filter { $0.value == cellID }.map { $0.key }.sorted()
+        }
+        let currentIndex = windowsInCell.firstIndex(of: focused) ?? 0
+
+        // Determine which edge faces screen center
+        let position = computeInwardEdge(for: focused)
+
+        return StackIndicator(
+            totalCount: windowsInCell.count,
+            currentIndex: currentIndex,
+            position: position,
+            lineLength: 12,
+            lineWidth: 3,
+            spacing: 6
+        )
+    }
+
+    /// Compute which edge of the window faces toward screen center
+    private func computeInwardEdge(for windowID: UInt32) -> StackIndicatorPosition {
+        // Get window frame
+        var windowFrame = CGRect.zero
+        guard SLSGetWindowBounds(connectionID, windowID, &windowFrame) == .success else {
+            return .leftCenter  // fallback
+        }
+
+        // Get display bounds for the current display (multi-monitor aware)
+        guard let uuid = currentDisplayUUID,
+              let displayFrame = displayFramePerDisplay[uuid] else {
+            // No display frame available - CLI must send displayFrame
+            jlog("err.stack.noDisplayFrame", data: [
+                "currentDisplayUUID": currentDisplayUUID as Any,
+                "displayFramePerDisplayKeys": Array(displayFramePerDisplay.keys),
+                "windowID": windowID
+            ])
+            return .leftCenter
+        }
+
+        // Window center relative to display origin (handles multi-monitor offsets)
+        let relativeWindowX = windowFrame.midX - displayFrame.origin.x
+        let relativeWindowY = windowFrame.midY - displayFrame.origin.y
+
+        // Display center relative to its own origin
+        let displayCenterX = displayFrame.width / 2
+        let displayCenterY = displayFrame.height / 2
+
+        // Calculate offset from display center (signed)
+        let offsetX = relativeWindowX - displayCenterX  // positive = right of center
+        let offsetY = relativeWindowY - displayCenterY  // positive = below center (Quartz coords)
+
+        // Pick the axis with the larger offset - that's the more "outward" direction
+        // The inward edge is opposite to the outward direction
+        if abs(offsetX) >= abs(offsetY) {
+            // X axis dominates: left/right edge
+            return offsetX > 0 ? .leftCenter : .rightCenter
+        } else {
+            // Y axis dominates: top/bottom edge
+            return offsetY > 0 ? .topCenter : .bottomCenter
+        }
+    }
+
+    /// Apply active style with stack indicator attached
+    private func applyActiveStyle(to border: BorderWindow) {
+        let config = BorderConfigManager.shared
+        var style = config.activeStyle
+
+        if config.stackIndicatorEnabled {
+            if var indicator = computeStackIndicator() {
+                let configPosition = config.stackIndicatorPosition
+
+                if configPosition != "auto" {
+                    let overridePosition: StackIndicatorPosition
+                    switch configPosition.lowercased() {
+                    case "left":
+                        overridePosition = .leftCenter
+                    case "right":
+                        overridePosition = .rightCenter
+                    case "top":
+                        overridePosition = .topCenter
+                    case "bottom":
+                        overridePosition = .bottomCenter
+                    default:
+                        overridePosition = indicator.position
+                    }
+                    indicator.position = overridePosition
+                }
+
+                indicator.lineLength = config.stackIndicatorLineLength
+                indicator.lineWidth = config.stackIndicatorLineWidth
+                indicator.spacing = config.stackIndicatorSpacing
+
+                style.stackIndicator = indicator
+            }
+        }
+
+        updateBorderStyle(border, style: style, isActive: true)
     }
 
     // MARK: - Focus Query

@@ -194,6 +194,21 @@ func moveWindowToCell(
 		settingsWindowSpacing,
 	)
 
+	// Apply per-display offset if configured
+	displayUUID := snap.GetCurrentDisplayUUID()
+	displayName := snap.GetCurrentDisplayName()
+	if displayUUID == "" {
+		jsonlog.Log("warn.display_offset", jsonlog.WithMsg("could not determine display UUID, skipping offset"))
+	} else {
+		offset := cfg.GetDisplayOffset(displayUUID, displayName)
+		if offset.X != 0 || offset.Y != 0 {
+			for i := range placements {
+				placements[i].Bounds.X += offset.X
+				placements[i].Bounds.Y += offset.Y
+			}
+		}
+	}
+
 	if err := layout.ApplyPlacements(ctx, c, placements); err != nil {
 		return nil, fmt.Errorf("failed to apply placements: %w", err)
 	}
@@ -373,6 +388,19 @@ func moveWindowCrossDisplay(
 			settingsWindowSpacing,
 		)
 
+		// Apply per-display offset for target display
+		if adjacentDisplay.UUID == "" {
+			jsonlog.Log("warn.display_offset", jsonlog.WithMsg("target display UUID empty, skipping offset"))
+		} else {
+			targetOffset := cfg.GetDisplayOffset(adjacentDisplay.UUID, adjacentDisplay.Name)
+			if targetOffset.X != 0 || targetOffset.Y != 0 {
+				for i := range placements {
+					placements[i].Bounds.X += targetOffset.X
+					placements[i].Bounds.Y += targetOffset.Y
+				}
+			}
+		}
+
 		if err := layout.ApplyPlacements(ctx, c, placements); err != nil {
 			jsonlog.Log("warn.placements_target", jsonlog.WithData(map[string]any{"err": err.Error()}))
 		}
@@ -428,6 +456,26 @@ func moveWindowCrossDisplay(
 				srcSettingsPadding,
 				srcSettingsWindowSpacing,
 			)
+
+			// Apply per-display offset for source display
+			if currentDisplayUUID == "" {
+				jsonlog.Log("warn.display_offset", jsonlog.WithMsg("source display UUID empty, skipping offset"))
+			} else {
+				var sourceDisplayName string
+				for _, d := range snap.AllDisplays {
+					if d.UUID == currentDisplayUUID {
+						sourceDisplayName = d.Name
+						break
+					}
+				}
+				sourceOffset := cfg.GetDisplayOffset(currentDisplayUUID, sourceDisplayName)
+				if sourceOffset.X != 0 || sourceOffset.Y != 0 {
+					for i := range sourcePlacements {
+						sourcePlacements[i].Bounds.X += sourceOffset.X
+						sourcePlacements[i].Bounds.Y += sourceOffset.Y
+					}
+				}
+			}
 
 			if err := layout.ApplyPlacements(ctx, c, sourcePlacements); err != nil {
 				jsonlog.Log("warn.placements_source", jsonlog.WithData(map[string]any{"err": err.Error()}))

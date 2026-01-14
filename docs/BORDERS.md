@@ -65,6 +65,28 @@ Set `shadowRadius: 0` to disable shadow entirely.
 | `shadowColor` | string | #000000 | Shadow color |
 | `shadowOpacity` | 0-1 | 0.5 | Shadow intensity |
 
+### Stack Indicator
+
+Visual indicator showing which window is active within a tabbed/stacked cell. Displayed as small lines on the border edge facing the screen center.
+
+| Property | Range | Default | Description |
+|----------|-------|---------|-------------|
+| `enabled` | bool | true | Show/hide stack indicator |
+| `lineLength` | 1-100 | 12 | Length of each indicator line in pixels |
+| `lineWidth` | 1-20 | 3 | Width of each indicator line in pixels |
+| `spacing` | 0-50 | 6 | Space between indicator lines in pixels |
+| `position` | string | "auto" | Edge position: "auto", "left", "right", "top", "bottom" |
+| `activeColor` | string | border color | Color for the active window indicator |
+| `inactiveColor` | string | #000000 | Color for inactive window indicators |
+
+**Position behavior:**
+- `auto`: Automatically places indicator on the edge facing screen center (inward edge)
+- Fixed positions override automatic detection
+
+**Visual style:**
+- Active window: filled with border color, black outline
+- Inactive windows: filled with black, border color outline
+
 ### Animation (Not Yet Implemented)
 
 Config is parsed but not applied. Documented for future use.
@@ -179,11 +201,47 @@ borders:
     shadowRadius: 0
 ```
 
+### Custom Stack Indicator
+
+Larger indicator with custom colors:
+
+```yaml
+borders:
+  enabled: true
+  active:
+    color: "#3b82f6"
+    width: 3
+    cornerRadius: 12
+    opacity: 1.0
+    stackIndicator:
+      enabled: true
+      lineLength: 16
+      lineWidth: 4
+      spacing: 8
+      position: "auto"      # or "left", "right", "top", "bottom"
+      activeColor: "#22c55e"
+      inactiveColor: "#1e293b"
+```
+
+### Disable Stack Indicator
+
+Hide the indicator while keeping borders:
+
+```yaml
+borders:
+  active:
+    color: "#3b82f6"
+    stackIndicator:
+      enabled: false
+```
+
 ## Notes
 
 - **Disabling effects**: Set radius to 0 (e.g., `glowRadius: 0`, `shadowRadius: 0`)
 - **Hiding border stroke**: Set `opacity: 0` (width is still used for effect positioning)
 - **Disabling inactive borders**: Set `inactive.enabled: false`
 - **Disabling all borders**: Set top-level `enabled: false`
+- **Disabling stack indicator**: Set `stackIndicator.enabled: false`
 - Effects extend beyond the border stroke; overlay windows expand automatically
 - Values outside valid ranges are clamped automatically
+- Stack indicator only appears on active border when cell has multiple windows
