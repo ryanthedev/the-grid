@@ -742,20 +742,15 @@ class SimpleBorderManager {
         }
 
         // Get display bounds for the current display (multi-monitor aware)
-        let displayFrame: CGRect
-        if let uuid = currentDisplayUUID,
-           let frame = displayFramePerDisplay[uuid] {
-            // Use actual display bounds from CLI
-            displayFrame = frame
-        } else {
-            // Fallback: use main display bounds (backward compatibility)
-            guard let mainDisplay = CGMainDisplayID() as CGDirectDisplayID?,
-                  mainDisplay != 0 else {
-                return .leftCenter
-            }
-            let screenWidth = CGFloat(CGDisplayPixelsWide(mainDisplay))
-            let screenHeight = CGFloat(CGDisplayPixelsHigh(mainDisplay))
-            displayFrame = CGRect(x: 0, y: 0, width: screenWidth, height: screenHeight)
+        guard let uuid = currentDisplayUUID,
+              let displayFrame = displayFramePerDisplay[uuid] else {
+            // No display frame available - CLI must send displayFrame
+            jlog("err.stack.noDisplayFrame", data: [
+                "currentDisplayUUID": currentDisplayUUID as Any,
+                "displayFramePerDisplayKeys": Array(displayFramePerDisplay.keys),
+                "windowID": windowID
+            ])
+            return .leftCenter
         }
 
         // Window center relative to display origin (handles multi-monitor offsets)

@@ -213,7 +213,10 @@ func SyncBorders(ctx context.Context, c *client.Client, snap *server.Snapshot, r
 	}
 
 	// 9. Send to server (no focused window - caller handles focus separately)
-	if err := c.SendCellAssignments(ctx, displayUUID, assignments, nil); err != nil {
+	opts := &client.SendCellAssignmentsOpts{
+		DisplayFrame: &snap.DisplayBounds,
+	}
+	if err := c.SendCellAssignments(ctx, displayUUID, assignments, opts); err != nil {
 		jsonlog.Log("warn.sync_borders", jsonlog.WithData(map[string]any{"err": err.Error()}))
 		return
 	}
@@ -269,7 +272,10 @@ func SyncBordersForDisplay(ctx context.Context, c *client.Client, displayInfo se
 		return
 	}
 
-	if err := c.SendCellAssignments(ctx, displayInfo.UUID, assignments, nil); err != nil {
+	opts := &client.SendCellAssignmentsOpts{
+		DisplayFrame: &displayBounds,
+	}
+	if err := c.SendCellAssignments(ctx, displayInfo.UUID, assignments, opts); err != nil {
 		jsonlog.Log("warn.sync_borders_display", jsonlog.WithData(map[string]any{"err": err.Error()}))
 		return
 	}
@@ -318,7 +324,11 @@ func SyncBordersWithFocus(ctx context.Context, c *client.Client, displayInfo ser
 	}
 
 	// Send assignments with focused window atomically
-	if err := c.SendCellAssignments(ctx, displayInfo.UUID, assignments, &focusedWindowID); err != nil {
+	opts := &client.SendCellAssignmentsOpts{
+		FocusedWindowID: &focusedWindowID,
+		DisplayFrame:    &displayBounds,
+	}
+	if err := c.SendCellAssignments(ctx, displayInfo.UUID, assignments, opts); err != nil {
 		jsonlog.Log("warn.sync_borders_focus", jsonlog.WithData(map[string]any{"err": err.Error()}))
 		return
 	}

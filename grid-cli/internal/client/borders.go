@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/ryanthedev/grid-cli/internal/config"
+	"github.com/ryanthedev/grid-cli/internal/types"
 )
 
 // SendBorderConfig sends border configuration to the server
@@ -161,11 +162,17 @@ type CellRect struct {
 	Height float64 `json:"height"`
 }
 
+// SendCellAssignmentsOpts contains optional parameters for SendCellAssignments.
+type SendCellAssignmentsOpts struct {
+	FocusedWindowID *uint32
+	DisplayFrame    *types.Rect
+}
+
 // SendCellAssignments sends window-to-cell mappings to the server.
 // displayUUID is required for per-display caching in the server.
-// focusedWindowID is optional - if provided, server updates focus atomically with assignments.
-// This prevents race conditions when commands execute rapidly.
-func (c *Client) SendCellAssignments(ctx context.Context, displayUUID string, assignments []CellAssignment, focusedWindowID *uint32) error {
+// opts.FocusedWindowID - if provided, server updates focus atomically with assignments.
+// opts.DisplayFrame - if provided, server uses for stack indicator edge calculation.
+func (c *Client) SendCellAssignments(ctx context.Context, displayUUID string, assignments []CellAssignment, opts *SendCellAssignmentsOpts) error {
 	// Build assignment map (windowID as string -> cellID)
 	assignmentMap := make(map[string]string)
 	// Build stackMode map (cellID -> stackMode)
@@ -183,9 +190,20 @@ func (c *Client) SendCellAssignments(ctx context.Context, displayUUID string, as
 		"cellStackModes": stackModeMap,
 	}
 
-	// Include focused window for atomic update (prevents race conditions)
-	if focusedWindowID != nil {
-		params["focusedWindowId"] = *focusedWindowID
+	if opts != nil {
+		// Include focused window for atomic update (prevents race conditions)
+		if opts.FocusedWindowID != nil {
+			params["focusedWindowId"] = *opts.FocusedWindowID
+		}
+		// Include display frame for stack indicator edge calculation
+		if opts.DisplayFrame != nil {
+			params["displayFrame"] = map[string]interface{}{
+				"x":      opts.DisplayFrame.X,
+				"y":      opts.DisplayFrame.Y,
+				"width":  opts.DisplayFrame.Width,
+				"height": opts.DisplayFrame.Height,
+			}
+		}
 	}
 
 	resp, err := c.request(ctx, "borders.setCellAssignments", params)
