@@ -274,6 +274,13 @@ class BFDKeyHandler {
         lastExecutionTimeLock.lock()
         defer { lastExecutionTimeLock.unlock() }
 
+        // Periodic cleanup: remove entries older than 1 minute to prevent unbounded growth
+        // Only clean up every ~100 calls to avoid overhead
+        if lastExecutionTime.count > 50 {
+            let cutoff = now.addingTimeInterval(-60.0)
+            lastExecutionTime = lastExecutionTime.filter { $0.value > cutoff }
+        }
+
         if let lastTime = lastExecutionTime[key] {
             let elapsed = now.timeIntervalSince(lastTime) * 1000
             if elapsed < Double(rateLimit) {
