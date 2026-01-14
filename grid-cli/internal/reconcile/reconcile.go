@@ -165,6 +165,17 @@ func buildCellAssignments(spaceState *state.SpaceState) []client.CellAssignment 
 	return assignments
 }
 
+// buildWindowOrder builds a map of cellID -> ordered window IDs for stack indicators.
+func buildWindowOrder(spaceState *state.SpaceState) map[string][]uint32 {
+	order := make(map[string][]uint32)
+	for cellID, cellState := range spaceState.Cells {
+		if len(cellState.Windows) > 0 {
+			order[cellID] = cellState.Windows
+		}
+	}
+	return order
+}
+
 // SyncBorders sends cell assignments and bounds to the server for border rendering.
 // Call this after operations that change cell assignments or bounds.
 // Errors are logged but don't fail - borders are a visual enhancement.
@@ -215,6 +226,7 @@ func SyncBorders(ctx context.Context, c *client.Client, snap *server.Snapshot, r
 	// 9. Send to server (no focused window - caller handles focus separately)
 	opts := &client.SendCellAssignmentsOpts{
 		DisplayFrame: &snap.DisplayBounds,
+		WindowOrder:  buildWindowOrder(spaceState),
 	}
 	if err := c.SendCellAssignments(ctx, displayUUID, assignments, opts); err != nil {
 		jsonlog.Log("warn.sync_borders", jsonlog.WithData(map[string]any{"err": err.Error()}))
@@ -274,6 +286,7 @@ func SyncBordersForDisplay(ctx context.Context, c *client.Client, displayInfo se
 
 	opts := &client.SendCellAssignmentsOpts{
 		DisplayFrame: &displayBounds,
+		WindowOrder:  buildWindowOrder(spaceState),
 	}
 	if err := c.SendCellAssignments(ctx, displayInfo.UUID, assignments, opts); err != nil {
 		jsonlog.Log("warn.sync_borders_display", jsonlog.WithData(map[string]any{"err": err.Error()}))
@@ -327,6 +340,7 @@ func SyncBordersWithFocus(ctx context.Context, c *client.Client, displayInfo ser
 	opts := &client.SendCellAssignmentsOpts{
 		FocusedWindowID: &focusedWindowID,
 		DisplayFrame:    &displayBounds,
+		WindowOrder:     buildWindowOrder(spaceState),
 	}
 	if err := c.SendCellAssignments(ctx, displayInfo.UUID, assignments, opts); err != nil {
 		jsonlog.Log("warn.sync_borders_focus", jsonlog.WithData(map[string]any{"err": err.Error()}))

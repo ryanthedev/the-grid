@@ -531,6 +531,7 @@ func sendCellAssignments(ctx context.Context, c *client.Client, displayUUID stri
 
 	opts := &client.SendCellAssignmentsOpts{
 		DisplayFrame: &displayFrame,
+		WindowOrder:  assignments,
 	}
 	return c.SendCellAssignments(ctx, displayUUID, cellAssignments, opts)
 }

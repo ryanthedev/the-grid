@@ -166,6 +166,7 @@ type CellRect struct {
 type SendCellAssignmentsOpts struct {
 	FocusedWindowID *uint32
 	DisplayFrame    *types.Rect
+	WindowOrder     map[string][]uint32 // cellID -> ordered window IDs
 }
 
 // SendCellAssignments sends window-to-cell mappings to the server.
@@ -203,6 +204,10 @@ func (c *Client) SendCellAssignments(ctx context.Context, displayUUID string, as
 				"width":  opts.DisplayFrame.Width,
 				"height": opts.DisplayFrame.Height,
 			}
+		}
+		// Include window order for stack indicator position
+		if opts.WindowOrder != nil {
+			params["windowOrder"] = opts.WindowOrder
 		}
 	}
 
