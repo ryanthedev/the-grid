@@ -473,6 +473,16 @@ class SimpleBorderManager {
 
     /// Destroy all borders (active and inactive)
     private func destroyAllBorders() {
+        let activeCount = activeBorder != nil ? 1 : 0
+        let inactiveCount = inactiveBorders.count
+
+        Task {
+            JSONLogger.shared.log("bdr.destroyAll.enter", data: [
+                "activeCount": activeCount,
+                "inactiveCount": inactiveCount
+            ])
+        }
+
         if let border = activeBorder {
             border.destroy()
             activeBorder = nil

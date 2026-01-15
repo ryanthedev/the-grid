@@ -243,6 +243,13 @@ class BorderWindow {
 
     /// Destroy the overlay window
     func destroy() {
+        // Log entry with current state
+        JSONLogger.shared.log("bdr.destroy.enter", data: [
+            "wid": windowID,
+            "targetID": targetWindowID,
+            "wasZero": windowID == 0
+        ])
+
         guard windowID != 0 else { return }
 
         // Stop any animation
