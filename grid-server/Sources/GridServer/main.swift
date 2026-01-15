@@ -64,26 +64,15 @@ struct GridServerCommand: ParsableCommand {
         eventBroadcaster.setSocketServer(socketServer)
 
         // Set up signal handling for graceful shutdown
+        // Note: Handlers are re-wired after BFD initialization to include bfdManager cleanup
         let signalQueue = DispatchQueue(label: "com.thegrid.signals")
         var shouldShutdown = false
 
         let signalSource = DispatchSource.makeSignalSource(signal: SIGINT, queue: signalQueue)
-        signalSource.setEventHandler {
-            jlog("srv.sig.int")
-            shouldShutdown = true
-            socketServer.stop()
-            Darwin.exit(0)
-        }
         signalSource.resume()
         signal(SIGINT, SIG_IGN)
 
         let termSignalSource = DispatchSource.makeSignalSource(signal: SIGTERM, queue: signalQueue)
-        termSignalSource.setEventHandler {
-            jlog("srv.sig.term")
-            shouldShutdown = true
-            socketServer.stop()
-            Darwin.exit(0)
-        }
         termSignalSource.resume()
         signal(SIGTERM, SIG_IGN)
 
@@ -111,12 +100,38 @@ struct GridServerCommand: ParsableCommand {
             }
 
             // Initialize BFD hotkey daemon
+            // Note: bfdManager captured by shutdown closure - will be stopped on exit
             let bfdManager = BFDManager()
             Task {
                 if await bfdManager.start() {
                     jlog("bfd.ready")
                 } else {
                     jlog("warn.bfd.init", msg: "Failed to start BFD")
+                }
+            }
+
+            // Update shutdown handler to include BFD cleanup
+            // Re-wire the signal handlers with bfdManager in scope
+            signalSource.setEventHandler {
+                jlog("srv.sig.int")
+                shouldShutdown = true
+                Task {
+                    await StateManager.shared.shutdown()
+                    bfdManager.stop()
+                    socketServer.stop()
+                    jlog("srv.shutdown.done")
+                    Darwin.exit(0)
+                }
+            }
+            termSignalSource.setEventHandler {
+                jlog("srv.sig.term")
+                shouldShutdown = true
+                Task {
+                    await StateManager.shared.shutdown()
+                    bfdManager.stop()
+                    socketServer.stop()
+                    jlog("srv.shutdown.done")
+                    Darwin.exit(0)
                 }
             }
 

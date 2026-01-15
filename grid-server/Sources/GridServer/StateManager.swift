@@ -63,14 +63,26 @@ actor StateManager: StateEventHandler {
     /// Used to distinguish CLI-initiated focus from external (click) focus
     /// Also cleans up stale entries to prevent memory leaks
     private func wasRecentlyCliFocused(_ windowID: UInt32) -> Bool {
-        // Clean up stale entries opportunistically (prevents unbounded growth)
-        let cutoff = Date().addingTimeInterval(-cliFocusWindow * 2)
+        let now = Date()
+
+        // Aggressive cleanup: remove entries older than 5 seconds (10x the window)
+        // Also cap dictionary size to prevent unbounded growth
+        let maxAge: TimeInterval = 5.0
+        let maxEntries = 100
+        let cutoff = now.addingTimeInterval(-maxAge)
         cliFocusTimestamps = cliFocusTimestamps.filter { $0.value > cutoff }
+
+        // If still too many entries, keep only most recent
+        if cliFocusTimestamps.count > maxEntries {
+            let sorted = cliFocusTimestamps.sorted { $0.value > $1.value }
+            let trimmed = sorted.prefix(maxEntries).map { ($0.key, $0.value) }
+            cliFocusTimestamps = Dictionary(uniqueKeysWithValues: trimmed)
+        }
 
         guard let timestamp = cliFocusTimestamps[windowID] else {
             return false
         }
-        return Date().timeIntervalSince(timestamp) < cliFocusWindow
+        return now.timeIntervalSince(timestamp) < cliFocusWindow
     }
 
     // MARK: - Initialization
@@ -125,6 +137,36 @@ actor StateManager: StateEventHandler {
 
     func getState() -> WindowManagerState {
         return state
+    }
+
+    /// Graceful shutdown - cleanup all observers and timers
+    /// MUST be called before server termination to prevent resource leaks
+    func shutdown() async {
+        jlog("state.shutdown.start")
+
+        // Stop polling timer
+        stopPolling()
+
+        // Stop workspace observer (removes NSNotificationCenter registrations)
+        // Use nonisolated(unsafe) to allow sending to MainActor for cleanup
+        if let ws = workspaceObserver {
+            let wsRef = ws
+            await MainActor.run { @Sendable in
+                wsRef.stopObserving()
+            }
+        }
+        workspaceObserver = nil
+
+        // Stop all application observers synchronously to prevent race conditions
+        let pids = Array(applicationObservers.keys)
+        for pid in pids {
+            removeObserver(for: pid)
+        }
+
+        // Clear accumulated state dictionaries
+        cliFocusTimestamps.removeAll()
+
+        jlog("state.shutdown.done", data: ["observers_stopped": pids.count])
     }
 
     func getStateJSON() throws -> Data {
@@ -1083,14 +1125,18 @@ var windows: [String: WindowState] = [:]
     }
 
     /// Remove an AX observer for a specific application
+    /// IMPORTANT: Must stop observer BEFORE removing from dictionary to prevent race condition
+    /// where AX callback fires on a deallocated observer
     private func removeObserver(for pid: pid_t) {
         guard let observer = applicationObservers[pid] else { return }
 
-        // Stop observing on main thread (required for run loop)
-        Task { @MainActor in
+        // Stop observing FIRST (synchronously on main thread) to prevent race condition
+        // where AX notification arrives after dictionary removal but before stopObserving
+        DispatchQueue.main.sync {
             observer.stopObserving()
         }
 
+        // Now safe to remove - no more callbacks can arrive
         applicationObservers.removeValue(forKey: pid)
 
         jlog("ax.observer.stop", data: ["pid": pid])
@@ -1864,12 +1910,15 @@ return
     // MARK: - Mouse Position Helpers
 
     /// Get current mouse position in global screen coordinates (query-based, not event-driven)
+    /// Note: Wrapped in autoreleasepool to prevent CGEvent leaks in async contexts
     func getCurrentMousePosition() -> CGPoint {
-        guard let event = CGEvent(source: nil) else {
-            jlog("warn.mouse", msg: "failed to get position")
-            return .zero
+        return autoreleasepool {
+            guard let event = CGEvent(source: nil) else {
+                jlog("warn.mouse", msg: "failed to get position")
+                return .zero
+            }
+            return event.location
         }
-        return event.location
     }
 
     /// Determine which display contains a given point
