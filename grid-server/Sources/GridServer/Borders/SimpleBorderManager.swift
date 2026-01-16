@@ -70,6 +70,18 @@ class SimpleBorderManager {
     /// windowID → BorderWindow
     private var inactiveBorders: [UInt32: BorderWindow] = [:]
 
+    // MARK: - Border Pool (Memory Optimization)
+
+    /// Pool of hidden, reusable borders to avoid SkyLight window churn.
+    /// When borders are no longer needed, they're hidden and added here.
+    /// When new borders are needed, we pull from this pool and retarget.
+    private var freePool: [BorderWindow] = []
+
+    /// Maximum pool size - prevents unbounded memory growth.
+    /// 10 is chosen to handle typical workspace configurations (2-3 cells with 2-4 windows each)
+    /// while keeping CoreAnimation backing store memory bounded (~80MB max at 8MB per border).
+    private let maxPoolSize = 10
+
     init(connectionID: Int32) {
         self.connectionID = connectionID
 
@@ -91,9 +103,14 @@ class SimpleBorderManager {
             // Capture borders before async dispatch - don't block with sync
             let active = activeBorder
             let inactive = Array(inactiveBorders.values)
+            let pooled = freePool
             DispatchQueue.main.async {
                 active?.destroy()
                 for border in inactive {
+                    border.destroy()
+                }
+                // Also destroy pooled borders
+                for border in pooled {
                     border.destroy()
                 }
             }
@@ -346,9 +363,9 @@ class SimpleBorderManager {
         windowOrderPerDisplay.removeValue(forKey: displayUUID)
         displayFramePerDisplay.removeValue(forKey: displayUUID)
 
-        // If this was the active display, clear state and borders
+        // If this was the active display, release borders to pool
         if currentDisplayUUID == displayUUID {
-            destroyAllBorders()
+            releaseAllBordersToPool()
             currentDisplayUUID = nil
             activeCellID = nil
             // Keep focusedWindowID - focus will shift and trigger new state
@@ -445,8 +462,11 @@ class SimpleBorderManager {
         // Clear config callback to prevent retain issues
         BorderConfigManager.shared.onConfigChanged = nil
 
-        // Destroy all borders
+        // Destroy all active borders
         destroyAllBorders()
+
+        // Drain the pool (destroy all pooled borders)
+        drainPool()
     }
 
     // MARK: - Border Pool Management
@@ -482,7 +502,7 @@ class SimpleBorderManager {
                     ])
                 }
             } else {
-                // Edge case: no active border exists, create one
+                // Edge case: no active border exists, acquire one from pool
                 // First verify window is still in active cell
                 guard let cellID = activeCellID,
                       let displayUUID = currentDisplayUUID,
@@ -493,7 +513,7 @@ class SimpleBorderManager {
                     }
                     return
                 }
-                if let border = createBorder(for: newFocused) {
+                if let border = acquireBorder(for: newFocused) {
                     activeBorder = border
                     applyActiveStyle(to: border)
                     Task {
@@ -510,9 +530,6 @@ class SimpleBorderManager {
             updateBorderStyle(border, style: config.inactiveStyle)
             inactiveBorders[prevWindow] = border
             activeBorder = nil
-            Task {
-                JSONLogger.shared.log("bdr.demote", data: ["wid": prevWindow])
-            }
         }
 
         // Step 2: Promote border for newly focused window
@@ -520,13 +537,10 @@ class SimpleBorderManager {
             // Border exists in inactive pool - promote it
             activeBorder = border
             applyActiveStyle(to: border)
-            Task {
-                JSONLogger.shared.log("bdr.promote", data: ["wid": newFocused])
-            }
         } else {
             // No border for this window (edge case: window appeared and auto-focused
             // before CLI sent assignments, then assignments arrived)
-            if let border = createBorder(for: newFocused) {
+            if let border = acquireBorder(for: newFocused) {
                 activeBorder = border
                 applyActiveStyle(to: border)
                 Task {
@@ -538,8 +552,8 @@ class SimpleBorderManager {
 
     /// Rebuild the entire border pool (called on cell change or layout apply)
     private func rebuildBorderPool(source: String = "unknown") {
-        // Destroy all existing borders
-        destroyAllBorders()
+        // Release existing borders to pool (hide, don't destroy)
+        releaseAllBordersToPool()
 
         // Get windows in active cell
         guard let cellID = activeCellID,
@@ -556,9 +570,9 @@ class SimpleBorderManager {
         let stackMode = stackModes[cellID] ?? "tabs"
         isActiveCellTabbed = (stackMode == "tabs")
 
-        // Create borders for windows in cell
-        // For tabbed cells: only create border for focused window (retarget on focus change)
-        // For non-tabbed cells: create borders for all windows (active + inactive)
+        // Acquire borders for windows in cell (from pool or create new)
+        // For tabbed cells: only acquire border for focused window (retarget on focus change)
+        // For non-tabbed cells: acquire borders for all windows (active + inactive)
         for windowID in windowsInCell {
             let isFocused = (windowID == focusedWindowID)
 
@@ -567,7 +581,7 @@ class SimpleBorderManager {
                 continue
             }
 
-            guard let border = createBorder(for: windowID) else { continue }
+            guard let border = acquireBorder(for: windowID) else { continue }
 
             if isFocused {
                 activeBorder = border
@@ -575,13 +589,6 @@ class SimpleBorderManager {
             } else {
                 inactiveBorders[windowID] = border
                 updateBorderStyle(border, style: config.inactiveStyle, isActive: false)
-            }
-
-            Task {
-                JSONLogger.shared.log("bdr.create", data: [
-                    "wid": windowID,
-                    "role": isFocused ? "active" : "inactive"
-                ])
             }
         }
 
@@ -591,7 +598,8 @@ class SimpleBorderManager {
                 "cell": cellID,
                 "count": windowsInCell.count,
                 "focused": focusedWindowID ?? 0,
-                "tabbed": isActiveCellTabbed
+                "tabbed": isActiveCellTabbed,
+                "poolSize": freePool.count
             ])
         }
     }
@@ -618,6 +626,100 @@ class SimpleBorderManager {
 
         border.update(targetFrame: frame)
         return border
+    }
+
+    /// Acquire a border from the pool, or create a new one if pool is empty.
+    /// This is the primary way to get a border - avoids SkyLight window churn.
+    private func acquireBorder(for windowID: UInt32) -> BorderWindow? {
+        // Thread safety: all pool operations must run on main queue
+        dispatchPrecondition(condition: .onQueue(.main))
+
+        // Try to reuse a pooled border first
+        if let pooledBorder = freePool.popLast() {
+            // Retarget the pooled border to the new window
+            pooledBorder.retarget(to: windowID)
+
+            // Get current frame for the new target
+            var frame = CGRect.zero
+            guard SLSGetWindowBounds(connectionID, windowID, &frame) == .success else {
+                // Can't get bounds - destroy border to avoid corrupted state
+                pooledBorder.destroy()
+                Task {
+                    JSONLogger.shared.log("err.bdr.acquire_bounds", data: ["wid": windowID])
+                }
+                return nil
+            }
+
+            pooledBorder.update(targetFrame: frame)
+            return pooledBorder
+        }
+
+        // Pool empty - create a new border
+        return createBorder(for: windowID)
+    }
+
+    /// Release a border back to the pool instead of destroying it.
+    /// If the pool is full, the border is destroyed.
+    private func releaseBorder(_ border: BorderWindow) {
+        // Thread safety: all pool operations must run on main queue
+        dispatchPrecondition(condition: .onQueue(.main))
+
+        // Hide the border immediately
+        border.hide(reason: "pool_release")
+
+        // If pool is full, destroy the oldest border to make room
+        if freePool.count >= maxPoolSize {
+            let oldest = freePool.removeFirst()
+            oldest.destroy()
+            Task {
+                JSONLogger.shared.log("bdr.pool.evict", data: [
+                    "wid": oldest.windowID,
+                    "poolSize": freePool.count
+                ])
+            }
+        }
+
+        // Add to pool
+        freePool.append(border)
+    }
+
+    /// Release all active borders to the pool (used when switching cells)
+    private func releaseAllBordersToPool() {
+        let activeCount = activeBorder != nil ? 1 : 0
+        let inactiveCount = inactiveBorders.count
+
+        // Release active border
+        if let border = activeBorder {
+            releaseBorder(border)
+            activeBorder = nil
+        }
+
+        // Release inactive borders
+        for (_, border) in inactiveBorders {
+            releaseBorder(border)
+        }
+        inactiveBorders.removeAll()
+
+        Task {
+            JSONLogger.shared.log("bdr.pool.releaseAll", data: [
+                "activeCount": activeCount,
+                "inactiveCount": inactiveCount,
+                "poolSize": freePool.count
+            ])
+        }
+    }
+
+    /// Drain the pool - destroy all pooled borders (used on shutdown)
+    private func drainPool() {
+        let count = freePool.count
+        for border in freePool {
+            border.destroy()
+        }
+        freePool.removeAll()
+
+        Task {
+            JSONLogger.shared.log("bdr.pool.drain", data: ["count": count])
+        }
     }
 
     /// Debug: Cycle active border through colors to verify style updates work

@@ -82,7 +82,7 @@ class BFDKeyHandler {
             options: .defaultTap,
             eventsOfInterest: eventMask,
             callback: { (proxy, type, event, refcon) -> Unmanaged<CGEvent>? in
-                guard let refcon = refcon else { return Unmanaged.passRetained(event) }
+                guard let refcon = refcon else { return Unmanaged.passUnretained(event) }
                 let handler = Unmanaged<BFDKeyHandler>.fromOpaque(refcon).takeUnretainedValue()
                 return handler.handleEvent(proxy: proxy, type: type, event: event)
             },
@@ -190,11 +190,11 @@ class BFDKeyHandler {
                     ])
                 }
             }
-            return Unmanaged.passRetained(event)
+            return Unmanaged.passUnretained(event)
         }
 
         guard type == .keyDown else {
-            return Unmanaged.passRetained(event)
+            return Unmanaged.passUnretained(event)
         }
 
         // Check for key repeat
@@ -206,7 +206,7 @@ class BFDKeyHandler {
 
         // Check blacklist
         if blacklist.contains(appName) {
-            return Unmanaged.passRetained(event)
+            return Unmanaged.passUnretained(event)
         }
 
         // Look up hotkey
@@ -219,7 +219,7 @@ class BFDKeyHandler {
                    bfdModifiersMatch(config: configKey.modifiers, event: eventKey.modifiers) {
                     switch appHk {
                     case .passthrough:
-                        return Unmanaged.passRetained(event)
+                        return Unmanaged.passUnretained(event)
                     case .command(let cmd):
                         let def = BFDHotkeyDef(run: cmd)
                         if shouldExecute(key: configKey, def: def, isRepeat: isRepeat) {
@@ -255,7 +255,7 @@ class BFDKeyHandler {
         }
 
         // No match, pass through
-        return Unmanaged.passRetained(event)
+        return Unmanaged.passUnretained(event)
     }
 
     private func shouldExecute(key: BFDHotkeyKey, def: BFDHotkeyDef, isRepeat: Bool) -> Bool {

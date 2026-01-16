@@ -139,6 +139,7 @@ class BorderWindow {
     init(connectionID: Int32, targetWindowID: UInt32) {
         self.connectionID = connectionID
         self.targetWindowID = targetWindowID
+        JSONLogger.shared.log("bdr.init", data: ["targetID": targetWindowID])
     }
 
     deinit {
@@ -289,8 +290,6 @@ class BorderWindow {
         _ = SLSOrderWindow(connectionID, windowID, 0, 0)  // Remove from ordering
 
         isVisible = false
-
-        JSONLogger.shared.log("bdr.hide", data: ["wid": windowID, "targetID": targetWindowID, "reason": reason])
     }
 
     // MARK: - Update
@@ -346,8 +345,6 @@ class BorderWindow {
         // Move the window
         var origin = borderBounds.origin
         _ = SLSMoveWindow(connectionID, windowID, &origin)
-
-        JSONLogger.shared.log("bdr.move", data: ["wid": windowID, "targetID": targetWindowID, "frame": [borderBounds.origin.x, borderBounds.origin.y, borderBounds.size.width, borderBounds.size.height]])
 
         // Update shape if size changed
         let needsResize = borderBounds.size != currentBounds.size

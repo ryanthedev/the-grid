@@ -113,7 +113,7 @@ class MouseHandler {
             options: .defaultTap,
             eventsOfInterest: eventMask,
             callback: { (proxy, type, event, refcon) -> Unmanaged<CGEvent>? in
-                guard let refcon = refcon else { return Unmanaged.passRetained(event) }
+                guard let refcon = refcon else { return Unmanaged.passUnretained(event) }
                 let handler = Unmanaged<MouseHandler>.fromOpaque(refcon).takeUnretainedValue()
                 return handler.handleEvent(proxy: proxy, type: type, event: event)
             },
@@ -190,7 +190,7 @@ class MouseHandler {
                 JSONLogger.shared.log("warn.mouse.tap_disabled", data: [:])
                 CGEvent.tapEnable(tap: tap, enable: true)
             }
-            return Unmanaged.passRetained(event)
+            return Unmanaged.passUnretained(event)
 
         case .leftMouseDown:
             return handleMouseDown(event: event)
@@ -202,7 +202,7 @@ class MouseHandler {
             return handleMouseDragged(event: event)
 
         default:
-            return Unmanaged.passRetained(event)
+            return Unmanaged.passUnretained(event)
         }
     }
 
@@ -213,7 +213,7 @@ class MouseHandler {
 
         // Use cached state for edge hit detection (can't use async in event callback)
         guard let state = cachedState else {
-            return Unmanaged.passRetained(event)
+            return Unmanaged.passUnretained(event)
         }
 
         if let hit = edgeDetector.detectEdge(point: point, state: state) {
@@ -241,13 +241,13 @@ class MouseHandler {
         }
 
         // No edge hit, pass event through
-        return Unmanaged.passRetained(event)
+        return Unmanaged.passUnretained(event)
     }
 
     private func handleMouseDragged(event: CGEvent) -> Unmanaged<CGEvent>? {
         guard var state = dragState else {
             // Not in a resize drag
-            return Unmanaged.passRetained(event)
+            return Unmanaged.passUnretained(event)
         }
 
         let point = event.location
@@ -287,7 +287,7 @@ class MouseHandler {
     private func handleMouseUp(event: CGEvent) -> Unmanaged<CGEvent>? {
         guard dragState != nil else {
             // Not in a resize drag
-            return Unmanaged.passRetained(event)
+            return Unmanaged.passUnretained(event)
         }
 
         let point = event.location
