@@ -1759,12 +1759,27 @@ return
         // Capture old display UUIDs before refresh
         let oldDisplayUUIDs = Set(state.displays.map { $0.uuid })
 
+        // Debug: log state before refresh
+        JSONLogger.shared.log("dbg.dsp.reconfig.start", data: [
+            "oldCount": oldDisplayUUIDs.count,
+            "oldUUIDs": Array(oldDisplayUUIDs)
+        ])
+
         refreshDisplays()
         refreshSpaces()
 
-        // Detect disconnected displays and emit events
+        // Detect disconnected/connected displays
         let newDisplayUUIDs = Set(state.displays.map { $0.uuid })
         let disconnectedDisplays = oldDisplayUUIDs.subtracting(newDisplayUUIDs)
+        let connectedDisplays = newDisplayUUIDs.subtracting(oldDisplayUUIDs)
+
+        // Debug: log diff after refresh
+        JSONLogger.shared.log("dbg.dsp.reconfig.diff", data: [
+            "newCount": newDisplayUUIDs.count,
+            "newUUIDs": Array(newDisplayUUIDs),
+            "disconnected": Array(disconnectedDisplays),
+            "connected": Array(connectedDisplays)
+        ])
 
         for displayUUID in disconnectedDisplays {
             await EventRouter.shared.route(
@@ -1774,8 +1789,6 @@ return
         }
 
         state.metadata.update()
-
-        // EventRouter handles logging for individual disconnects
     }
 
     private func handleApplicationLaunched(_ app: NSRunningApplication) async {
@@ -1903,8 +1916,19 @@ return
     }
 
     private func handleSystemWoke() async {
-        JSONLogger.shared.log("state.wake")
+        // Debug: log wake entry with current display state
+        JSONLogger.shared.log("dbg.wake.start", data: [
+            "displayCount": state.displays.count,
+            "displayUUIDs": state.displays.map { $0.uuid }
+        ])
+
         await refreshCompleteState()
+
+        // Debug: log wake complete with new display state
+        JSONLogger.shared.log("dbg.wake.complete", data: [
+            "displayCount": state.displays.count,
+            "displayUUIDs": state.displays.map { $0.uuid }
+        ])
     }
 
     // MARK: - Mouse Position Helpers

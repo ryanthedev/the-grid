@@ -243,13 +243,6 @@ class BorderWindow {
 
     /// Destroy the overlay window
     func destroy() {
-        // Log entry with current state
-        JSONLogger.shared.log("bdr.destroy.enter", data: [
-            "wid": windowID,
-            "targetID": targetWindowID,
-            "wasZero": windowID == 0
-        ])
-
         guard windowID != 0 else { return }
 
         // Stop any animation
@@ -297,8 +290,6 @@ class BorderWindow {
         _ = SLSOrderWindow(connectionID, windowID, 0, 0)  // Remove from ordering
 
         isVisible = false
-
-        JSONLogger.shared.log("bdr.hide", data: ["wid": windowID, "targetID": targetWindowID, "reason": reason])
     }
 
     // MARK: - Update
@@ -354,8 +345,6 @@ class BorderWindow {
         // Move the window
         var origin = borderBounds.origin
         _ = SLSMoveWindow(connectionID, windowID, &origin)
-
-        JSONLogger.shared.log("bdr.move", data: ["wid": windowID, "targetID": targetWindowID, "frame": [borderBounds.origin.x, borderBounds.origin.y, borderBounds.size.width, borderBounds.size.height]])
 
         // Update shape if size changed
         let needsResize = borderBounds.size != currentBounds.size
