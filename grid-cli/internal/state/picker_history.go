@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -191,16 +192,71 @@ func (h *PickerHistory) FrecencyScore(id string) float64 {
 	return float64(freq) * recencyWeight
 }
 
+// SourceBoosts defines priority multipliers for different source types.
+// Higher values = higher priority in the picker.
+type SourceBoosts struct {
+	Windows float64 // Active windows (highest - represents current work)
+	Apps    float64 // Applications
+	Chrome  float64 // Chrome profiles
+	Actions float64 // Custom actions
+	Zoxide  float64 // Directories from zoxide
+	Default float64 // Fallback for unknown sources
+}
+
+// DefaultSourceBoosts returns sensible defaults for source prioritization.
+// Windows get highest priority since they represent active work.
+func DefaultSourceBoosts() SourceBoosts {
+	return SourceBoosts{
+		Windows: 10.0, // Active work gets highest priority
+		Apps:    1.0,
+		Chrome:  1.0,
+		Actions: 1.5, // Slightly boost custom actions
+		Zoxide:  0.5, // Directories lower than active windows
+		Default: 1.0,
+	}
+}
+
+// getSourceBoost returns the boost multiplier for an item ID based on its prefix.
+func (b SourceBoosts) getSourceBoost(id string) float64 {
+	switch {
+	case strings.HasPrefix(id, "app:"):
+		return b.Apps
+	case strings.HasPrefix(id, "chrome:"):
+		return b.Chrome
+	case strings.HasPrefix(id, "action:"):
+		return b.Actions
+	case strings.HasPrefix(id, "zoxide:"):
+		return b.Zoxide
+	default:
+		// No prefix = window (window IDs are like "tmux:session:pane" or app-based)
+		return b.Windows
+	}
+}
+
 // SortByFrecency sorts a slice of items by their frecency scores in descending order.
 // getID is a function that extracts the ID from each item for history lookup.
 // Falls back to maintaining original order for items with equal scores.
 func SortByFrecency[T any](items []T, getID func(T) string, history *PickerHistory) {
+	SortByFrecencyWithBoosts(items, getID, history, DefaultSourceBoosts())
+}
+
+// SortByFrecencyWithBoosts sorts items by frecency with source-based priority boosts.
+// Source boosts allow prioritizing certain source types (e.g., windows over directories).
+func SortByFrecencyWithBoosts[T any](items []T, getID func(T) string, history *PickerHistory, boosts SourceBoosts) {
 	if history == nil {
+		// Still apply source boosts even without history
+		sort.SliceStable(items, func(i, j int) bool {
+			boostI := boosts.getSourceBoost(getID(items[i]))
+			boostJ := boosts.getSourceBoost(getID(items[j]))
+			return boostI > boostJ
+		})
 		return
 	}
 	sort.SliceStable(items, func(i, j int) bool {
-		scoreI := history.FrecencyScore(getID(items[i]))
-		scoreJ := history.FrecencyScore(getID(items[j]))
+		idI := getID(items[i])
+		idJ := getID(items[j])
+		scoreI := history.FrecencyScore(idI) * boosts.getSourceBoost(idI)
+		scoreJ := history.FrecencyScore(idJ) * boosts.getSourceBoost(idJ)
 		return scoreI > scoreJ
 	})
 }
