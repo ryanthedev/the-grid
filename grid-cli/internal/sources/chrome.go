@@ -46,6 +46,10 @@ func DiscoverChromeProfiles() []SourceItem {
 		return nil
 	}
 
+	if state.Profile.InfoCache == nil {
+		return nil
+	}
+
 	var items []SourceItem
 	for profileDir, info := range state.Profile.InfoCache {
 		// Determine best display name

@@ -2623,6 +2623,26 @@ func handleOpenDir(ctx context.Context, selected *PickerItem, cfg *gridConfig.Co
 		return fmt.Errorf("selected item missing dirPath")
 	}
 
+	c := client.NewClient(socketPath, timeout)
+	defer c.Close()
+
+	// Get snapshot BEFORE spawning to track existing Ghostty windows
+	preSnap, err := gridServer.Fetch(ctx, c)
+	if err != nil {
+		jsonlog.Log("pick.opendir.presnap_err", jsonlog.WithMsg(err.Error()))
+		// Continue anyway - we'll try to find the window
+	}
+
+	// Track existing Ghostty window IDs before spawn
+	existingGhosttyWindows := make(map[uint32]bool)
+	if preSnap != nil {
+		for _, w := range preSnap.Windows {
+			if w.AppName == "Ghostty" || w.BundleID == "com.mitchellh.ghostty" {
+				existingGhosttyWindows[w.ID] = true
+			}
+		}
+	}
+
 	// Execute the open-dir action (spawns Ghostty with tmux)
 	action := parseActionFromMetadata(selected.Metadata)
 	if err := sources.ExecuteAction(ctx, action); err != nil {
@@ -2635,9 +2655,6 @@ func handleOpenDir(ctx context.Context, selected *PickerItem, cfg *gridConfig.Co
 		jsonlog.Log("pick.opendir.state_err", jsonlog.WithMsg(err.Error()))
 		return nil // Don't fail - the window is open, just not assigned
 	}
-
-	c := client.NewClient(socketPath, timeout)
-	defer c.Close()
 
 	// Get current space
 	snap, err := gridServer.Fetch(ctx, c)
@@ -2655,6 +2672,7 @@ func handleOpenDir(ctx context.Context, selected *PickerItem, cfg *gridConfig.Co
 	activeCellID := spaceState.FocusedCell
 
 	// Poll for the new Ghostty window (up to 3 seconds)
+	// Only accept windows that didn't exist before spawn
 	var newWindowID uint32
 	for i := 0; i < 30; i++ {
 		time.Sleep(100 * time.Millisecond)
@@ -2664,15 +2682,15 @@ func handleOpenDir(ctx context.Context, selected *PickerItem, cfg *gridConfig.Co
 			continue
 		}
 
-		// Find new Ghostty window not in our state
+		// Find new Ghostty window that didn't exist before spawn
 		for _, w := range newSnap.Windows {
 			if w.AppName == "Ghostty" || w.BundleID == "com.mitchellh.ghostty" {
-				// Check if this window is already assigned
-				existingCell := spaceState.GetWindowCell(w.ID)
-				if existingCell == "" {
-					newWindowID = w.ID
-					break
+				// Skip windows that existed before we spawned
+				if existingGhosttyWindows[w.ID] {
+					continue
 				}
+				newWindowID = w.ID
+				break
 			}
 		}
 
@@ -2689,7 +2707,7 @@ func handleOpenDir(ctx context.Context, selected *PickerItem, cfg *gridConfig.Co
 	// Get the current focused index in this cell
 	cellState := spaceState.Cells[activeCellID]
 	insertIdx := 0
-	if cellState != nil {
+	if cellState != nil && len(cellState.Windows) > 0 {
 		insertIdx = cellState.LastFocusedIdx
 	}
 

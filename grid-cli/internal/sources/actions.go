@@ -13,7 +13,7 @@ func DiscoverActions(configs []gridConfig.ActionConfig) []SourceItem {
 	}
 
 	items := make([]SourceItem, 0, len(configs))
-	for i, cfg := range configs {
+	for _, cfg := range configs {
 		if cfg.Name == "" || cfg.Command == "" {
 			continue
 		}
@@ -44,7 +44,7 @@ func DiscoverActions(configs []gridConfig.ActionConfig) []SourceItem {
 		}
 
 		items = append(items, SourceItem{
-			ID:         actionID(cfg.Name, i),
+			ID:         actionID(cfg.Name),
 			Title:      cfg.Name,
 			Subtitle:   subtitle,
 			Icon:       icon,
@@ -63,7 +63,7 @@ func DiscoverActions(configs []gridConfig.ActionConfig) []SourceItem {
 	return items
 }
 
-func actionID(name string, index int) string {
+func actionID(name string) string {
 	// Create a stable ID from the action name
 	slug := strings.ToLower(name)
 	slug = strings.ReplaceAll(slug, " ", "-")
