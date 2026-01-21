@@ -3,10 +3,28 @@ package sources
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"strings"
 
 	"github.com/ryanthedev/grid-cli/internal/jsonlog"
 )
+
+// cleanEnv returns the current environment with tmux-related variables removed.
+// This prevents spawned apps from inheriting the tmux session.
+func cleanEnv() []string {
+	var clean []string
+	for _, env := range os.Environ() {
+		key := strings.SplitN(env, "=", 2)[0]
+		switch key {
+		case "TMUX", "TMUX_PANE", "TMUX_PLUGIN_MANAGER_PATH":
+			continue
+		default:
+			clean = append(clean, env)
+		}
+	}
+	return clean
+}
 
 // ExecuteAction performs the action associated with a selected item.
 // The client parameter is optional - only needed for focus-window actions.
@@ -27,6 +45,7 @@ func ExecuteAction(ctx context.Context, action Action) error {
 			"path": action.AppPath,
 		}))
 		cmd := exec.CommandContext(ctx, "open", "-na", action.AppPath)
+		cmd.Env = cleanEnv()
 		return cmd.Run()
 
 	case "open-chrome-profile":
@@ -39,6 +58,7 @@ func ExecuteAction(ctx context.Context, action Action) error {
 		}))
 		cmd := exec.CommandContext(ctx, "open", "-na", "Google Chrome", "--args",
 			"--profile-directory="+action.ProfileDir)
+		cmd.Env = cleanEnv()
 		return cmd.Run()
 
 	case "exec":
@@ -50,6 +70,7 @@ func ExecuteAction(ctx context.Context, action Action) error {
 			"cmd": action.Command,
 		}))
 		cmd := exec.CommandContext(ctx, "sh", "-c", action.Command)
+		cmd.Env = cleanEnv()
 		return cmd.Run()
 
 	default:
