@@ -149,6 +149,7 @@ func builtinDefaults() map[string]any {
 					"stateFile": "",
 				},
 				"actions": true,
+				"zoxide":  true,
 			},
 			"actions": []any{},
 		},

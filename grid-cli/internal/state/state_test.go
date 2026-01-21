@@ -167,6 +167,36 @@ func TestRemoveWindow(t *testing.T) {
 	}
 }
 
+func TestInsertWindowAtIndex(t *testing.T) {
+	state := NewRuntimeState()
+	space := state.GetSpace("1")
+
+	// Setup: windows [A, B, C] with B focused (index 1)
+	space.AssignWindow(100, "left") // A
+	space.AssignWindow(200, "left") // B
+	space.AssignWindow(300, "left") // C
+	space.SetFocus("left", 1)       // Focus B
+
+	// Insert D at index 1 (above B)
+	space.InsertWindowAtIndex(400, "left", 1)
+
+	cell := space.Cells["left"]
+	// Should be [A, D, B, C]
+	expected := []uint32{100, 400, 200, 300}
+	if len(cell.Windows) != 4 {
+		t.Fatalf("expected 4 windows, got %d", len(cell.Windows))
+	}
+	for i, wid := range expected {
+		if cell.Windows[i] != wid {
+			t.Errorf("window[%d] = %d, want %d", i, cell.Windows[i], wid)
+		}
+	}
+	// D should now be focused (index 1)
+	if cell.LastFocusedIdx != 1 {
+		t.Errorf("LastFocusedIdx = %d, want 1", cell.LastFocusedIdx)
+	}
+}
+
 func TestGetWindowCell(t *testing.T) {
 	state := NewRuntimeState()
 	space := state.GetSpace("1")

@@ -204,6 +204,31 @@ func (ss *SpaceState) PrependWindowToCell(windowID uint32, cellID string) {
 	cell.SplitRatios = equalRatios(len(cell.Windows))
 }
 
+// InsertWindowAtIndex adds a window to a cell at a specific index.
+// If the window is already in another cell, it's moved.
+// The index is clamped to valid bounds.
+func (ss *SpaceState) InsertWindowAtIndex(windowID uint32, cellID string, index int) {
+	cell := ss.GetCell(cellID)
+
+	// Remove from any other cell first
+	ss.RemoveWindow(windowID)
+
+	// Clamp index to valid range
+	if index < 0 {
+		index = 0
+	}
+	if index > len(cell.Windows) {
+		index = len(cell.Windows)
+	}
+
+	// Insert at index
+	cell.Windows = append(cell.Windows[:index], append([]uint32{windowID}, cell.Windows[index:]...)...)
+	cell.LastFocusedIdx = index
+
+	// Update split ratios to be equal
+	cell.SplitRatios = equalRatios(len(cell.Windows))
+}
+
 // RemoveWindow removes a window from all cells
 func (ss *SpaceState) RemoveWindow(windowID uint32) {
 	for _, cell := range ss.Cells {

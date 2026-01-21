@@ -1,6 +1,7 @@
 package sources
 
 import (
+	"strings"
 	"testing"
 
 	gridConfig "github.com/ryanthedev/grid-cli/internal/config"
@@ -72,11 +73,30 @@ func TestDiscoverActions(t *testing.T) {
 	}
 }
 
+func TestDiscoverZoxide(t *testing.T) {
+	items := DiscoverZoxide()
+	// Zoxide may or may not have entries, just verify no panic and correct structure
+	t.Logf("found %d zoxide paths", len(items))
+
+	for _, item := range items {
+		if item.Action.Type != "open-dir" {
+			t.Errorf("expected action type 'open-dir', got %q", item.Action.Type)
+		}
+		if item.Action.DirPath == "" {
+			t.Error("DirPath should not be empty")
+		}
+		if item.ID == "" || !strings.HasPrefix(item.ID, "zoxide:") {
+			t.Errorf("ID should start with 'zoxide:', got %q", item.ID)
+		}
+	}
+}
+
 func TestDiscoverAll(t *testing.T) {
 	enabled := EnabledSources{
 		Apps:    true,
 		Chrome:  true,
 		Actions: true,
+		Zoxide:  true,
 	}
 	cfg := Config{
 		Actions: []gridConfig.ActionConfig{
@@ -89,15 +109,18 @@ func TestDiscoverAll(t *testing.T) {
 		t.Fatal("expected to find at least one item")
 	}
 
-	// Should have at least one app and one action
+	// Should have at least one app, one action, and one zoxide dir
 	hasApp := false
 	hasAction := false
+	hasZoxide := false
 	for _, item := range items {
 		switch item.Action.Type {
 		case "open-app":
 			hasApp = true
 		case "exec":
 			hasAction = true
+		case "open-dir":
+			hasZoxide = true
 		}
 	}
 
@@ -106,6 +129,9 @@ func TestDiscoverAll(t *testing.T) {
 	}
 	if !hasAction {
 		t.Error("expected at least one action")
+	}
+	if !hasZoxide {
+		t.Error("expected at least one zoxide directory")
 	}
 
 	t.Logf("found %d total items", len(items))

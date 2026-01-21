@@ -13,6 +13,7 @@ type EnabledSources struct {
 	Apps    bool
 	Chrome  bool
 	Actions bool
+	Zoxide  bool
 }
 
 // Config holds configuration for source discovery
@@ -23,7 +24,7 @@ type Config struct {
 // DiscoverAll runs enabled sources in parallel and aggregates results
 func DiscoverAll(enabled EnabledSources, cfg Config) []SourceItem {
 	var wg sync.WaitGroup
-	results := make(chan []SourceItem, 4)
+	results := make(chan []SourceItem, 5)
 
 	// Apps source
 	if enabled.Apps {
@@ -66,6 +67,17 @@ func DiscoverAll(enabled EnabledSources, cfg Config) []SourceItem {
 			// Windows discovery will come from server state
 			// This is a placeholder that returns empty
 			results <- nil
+		}()
+	}
+
+	// Zoxide source (frecency-ranked directories)
+	if enabled.Zoxide {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			items := DiscoverZoxide()
+			jsonlog.Log("sources.zoxide.done", jsonlog.WithData(map[string]any{"count": len(items)}))
+			results <- items
 		}()
 	}
 

@@ -310,6 +310,7 @@ type SourcesConfig struct {
 	Apps    bool         `yaml:"apps" json:"apps"`
 	Chrome  ChromeConfig `yaml:"chrome" json:"chrome"`
 	Actions bool         `yaml:"actions" json:"actions"`
+	Zoxide  bool         `yaml:"zoxide" json:"zoxide"`
 }
 
 // ChromeConfig controls Chrome profile discovery

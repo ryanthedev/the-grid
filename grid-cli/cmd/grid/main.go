@@ -2296,6 +2296,7 @@ func runUnifiedPick(cmd *cobra.Command, args []string) error {
 		"apps":    enabled.Apps,
 		"chrome":  enabled.Chrome,
 		"actions": enabled.Actions,
+		"zoxide":  enabled.Zoxide,
 	}))
 
 	// Build source config
@@ -2306,12 +2307,13 @@ func runUnifiedPick(cmd *cobra.Command, args []string) error {
 
 	var allItems []sources.SourceItem
 
-	// Discover apps/chrome/actions (no RPC needed)
+	// Discover apps/chrome/actions/zoxide (no RPC needed)
 	nonWindowEnabled := sources.EnabledSources{
 		Windows: false,
 		Apps:    enabled.Apps,
 		Chrome:  enabled.Chrome,
 		Actions: enabled.Actions,
+		Zoxide:  enabled.Zoxide,
 	}
 	allItems = sources.DiscoverAll(nonWindowEnabled, sourceCfg)
 
@@ -2370,6 +2372,8 @@ func runUnifiedPick(cmd *cobra.Command, args []string) error {
 	switch actionType {
 	case "focus-window":
 		return handleWindowFocus(ctx, result.Selected, cfg)
+	case "open-dir":
+		return handleOpenDir(ctx, result.Selected, cfg)
 	default:
 		action := parseActionFromMetadata(result.Selected.Metadata)
 		return sources.ExecuteAction(ctx, action)
@@ -2384,6 +2388,7 @@ func resolveEnabledSources(picker *gridConfig.PickerConfig, only, exclude []stri
 		Apps:    true,
 		Chrome:  true,
 		Actions: true,
+		Zoxide:  true,
 	}
 
 	// Apply config settings if present
@@ -2392,6 +2397,7 @@ func resolveEnabledSources(picker *gridConfig.PickerConfig, only, exclude []stri
 		enabled.Apps = picker.Sources.Apps
 		enabled.Chrome = picker.Sources.Chrome.Enabled
 		enabled.Actions = picker.Sources.Actions
+		enabled.Zoxide = picker.Sources.Zoxide
 	}
 
 	// If --only is specified, start with all false and enable only those
@@ -2407,6 +2413,8 @@ func resolveEnabledSources(picker *gridConfig.PickerConfig, only, exclude []stri
 				enabled.Chrome = true
 			case "actions":
 				enabled.Actions = true
+			case "zoxide", "dirs":
+				enabled.Zoxide = true
 			}
 		}
 	}
@@ -2422,6 +2430,8 @@ func resolveEnabledSources(picker *gridConfig.PickerConfig, only, exclude []stri
 			enabled.Chrome = false
 		case "actions":
 			enabled.Actions = false
+		case "zoxide", "dirs":
+			enabled.Zoxide = false
 		}
 	}
 
@@ -2532,6 +2542,9 @@ func convertSourceItemsToPickerItems(items []sources.SourceItem) []PickerItem {
 		if si.Action.ProfileDir != "" {
 			metadata["profileDir"] = si.Action.ProfileDir
 		}
+		if si.Action.DirPath != "" {
+			metadata["dirPath"] = si.Action.DirPath
+		}
 
 		pickerItems[i] = PickerItem{
 			ID:         si.ID,
@@ -2559,6 +2572,7 @@ func parseActionFromMetadata(metadata map[string]string) sources.Action {
 		AppPath:    metadata["appPath"],
 		Command:    metadata["command"],
 		ProfileDir: metadata["profileDir"],
+		DirPath:    metadata["dirPath"],
 	}
 }
 
@@ -2596,6 +2610,131 @@ func handleWindowFocus(ctx context.Context, selected *PickerItem, cfg *gridConfi
 			"wid": windowID,
 			"err": err.Error(),
 		}))
+	}
+
+	return nil
+}
+
+// handleOpenDir opens a directory in a new Ghostty window with tmux,
+// then assigns the window to the current active cell.
+func handleOpenDir(ctx context.Context, selected *PickerItem, cfg *gridConfig.Config) error {
+	dirPath := selected.Metadata["dirPath"]
+	if dirPath == "" {
+		return fmt.Errorf("selected item missing dirPath")
+	}
+
+	// Execute the open-dir action (spawns Ghostty with tmux)
+	action := parseActionFromMetadata(selected.Metadata)
+	if err := sources.ExecuteAction(ctx, action); err != nil {
+		return fmt.Errorf("failed to open directory: %w", err)
+	}
+
+	// Get current state to find active cell
+	runtimeState, err := gridState.LoadState()
+	if err != nil {
+		jsonlog.Log("pick.opendir.state_err", jsonlog.WithMsg(err.Error()))
+		return nil // Don't fail - the window is open, just not assigned
+	}
+
+	c := client.NewClient(socketPath, timeout)
+	defer c.Close()
+
+	// Get current space
+	snap, err := gridServer.Fetch(ctx, c)
+	if err != nil {
+		jsonlog.Log("pick.opendir.snap_err", jsonlog.WithMsg(err.Error()))
+		return nil
+	}
+
+	spaceState := runtimeState.GetSpaceReadOnly(snap.SpaceID)
+	if spaceState == nil || spaceState.FocusedCell == "" {
+		jsonlog.Log("pick.opendir.no_cell", jsonlog.WithMsg("no focused cell"))
+		return nil
+	}
+
+	activeCellID := spaceState.FocusedCell
+
+	// Poll for the new Ghostty window (up to 3 seconds)
+	var newWindowID uint32
+	for i := 0; i < 30; i++ {
+		time.Sleep(100 * time.Millisecond)
+
+		newSnap, err := gridServer.Fetch(ctx, c)
+		if err != nil {
+			continue
+		}
+
+		// Find new Ghostty window not in our state
+		for _, w := range newSnap.Windows {
+			if w.AppName == "Ghostty" || w.BundleID == "com.mitchellh.ghostty" {
+				// Check if this window is already assigned
+				existingCell := spaceState.GetWindowCell(w.ID)
+				if existingCell == "" {
+					newWindowID = w.ID
+					break
+				}
+			}
+		}
+
+		if newWindowID != 0 {
+			break
+		}
+	}
+
+	if newWindowID == 0 {
+		jsonlog.Log("pick.opendir.no_window", jsonlog.WithMsg("new window not found"))
+		return nil
+	}
+
+	// Get the current focused index in this cell
+	cellState := spaceState.Cells[activeCellID]
+	insertIdx := 0
+	if cellState != nil {
+		insertIdx = cellState.LastFocusedIdx
+	}
+
+	jsonlog.Log("pick.opendir.found", jsonlog.WithData(map[string]any{
+		"wid":  newWindowID,
+		"cell": activeCellID,
+		"idx":  insertIdx,
+	}))
+
+	// Assign window to active cell above the currently focused window
+	mutableSpaceState := runtimeState.GetSpace(snap.SpaceID)
+	mutableSpaceState.InsertWindowAtIndex(newWindowID, activeCellID, insertIdx)
+	mutableSpaceState.SetFocus(activeCellID, insertIdx)
+	runtimeState.MarkUpdated()
+
+	if err := runtimeState.Save(); err != nil {
+		jsonlog.Log("pick.opendir.save_err", jsonlog.WithMsg(err.Error()))
+	}
+
+	// Refresh snapshot and apply layout for this cell
+	newSnap, err := gridServer.Fetch(ctx, c)
+	if err != nil {
+		jsonlog.Log("pick.opendir.snap2_err", jsonlog.WithMsg(err.Error()))
+		return nil
+	}
+
+	opts := gridLayout.DefaultApplyOptions()
+	opts.Strategy = gridTypes.AssignPreserve
+	if cfg.Settings.BaseSpacing > 0 {
+		opts.BaseSpacing = cfg.Settings.BaseSpacing
+	}
+	if settingsPadding, err := cfg.GetSettingsPadding(); err == nil {
+		opts.SettingsPadding = settingsPadding
+	}
+	if settingsWindowSpacing, err := cfg.GetSettingsWindowSpacing(); err == nil {
+		opts.SettingsWindowSpacing = settingsWindowSpacing
+	}
+
+	if err := gridLayout.ApplyCellLayout(ctx, c, newSnap, cfg, runtimeState, activeCellID, opts); err != nil {
+		jsonlog.Log("pick.opendir.layout_err", jsonlog.WithMsg(err.Error()))
+	}
+
+	// Focus the new window
+	if err := gridFocus.FocusWindow(ctx, c, newWindowID); err != nil {
+		jsonlog.Log("pick.opendir.focus_err", jsonlog.WithMsg(err.Error()))
 	}
 
 	return nil

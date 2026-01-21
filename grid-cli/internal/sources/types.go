@@ -20,4 +20,5 @@ type Action struct {
 	AppPath    string `json:"appPath,omitempty"`
 	Command    string `json:"command,omitempty"`
 	ProfileDir string `json:"profileDir,omitempty"`
+	DirPath    string `json:"dirPath,omitempty"`
 }

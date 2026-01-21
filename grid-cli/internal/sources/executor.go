@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/ryanthedev/grid-cli/internal/jsonlog"
@@ -73,7 +74,50 @@ func ExecuteAction(ctx context.Context, action Action) error {
 		cmd.Env = cleanEnv()
 		return cmd.Run()
 
+	case "open-dir":
+		// Open directory in tmux session (like the t command)
+		if action.DirPath == "" {
+			return fmt.Errorf("open-dir action missing dirPath")
+		}
+		return openDirInTmux(ctx, action.DirPath)
+
 	default:
 		return fmt.Errorf("unknown action type: %s", action.Type)
 	}
+}
+
+// openDirInTmux creates or switches to a tmux session for the given directory.
+// Opens a new Ghostty window with the tmux session attached.
+func openDirInTmux(ctx context.Context, dirPath string) error {
+	// Derive session name from directory name
+	sessionName := filepath.Base(dirPath)
+	// Sanitize: tmux doesn't like dots or colons in session names
+	sessionName = strings.ReplaceAll(sessionName, ".", "_")
+	sessionName = strings.ReplaceAll(sessionName, ":", "_")
+
+	jsonlog.Log("exec.open-dir", jsonlog.WithData(map[string]any{
+		"path":    dirPath,
+		"session": sessionName,
+	}))
+
+	// Boost frecency in zoxide
+	zoxideAdd := exec.CommandContext(ctx, "zoxide", "add", dirPath)
+	_ = zoxideAdd.Run() // ignore errors - zoxide may not be installed
+
+	// Check if session already exists
+	hasSession := exec.CommandContext(ctx, "tmux", "has-session", "-t", sessionName)
+	sessionExists := hasSession.Run() == nil
+
+	if !sessionExists {
+		// Create new detached session
+		newSession := exec.CommandContext(ctx, "tmux", "new-session", "-d", "-s", sessionName, "-c", dirPath)
+		if err := newSession.Run(); err != nil {
+			return fmt.Errorf("failed to create tmux session: %w", err)
+		}
+	}
+
+	// Open new Ghostty window with tmux attach
+	cmd := exec.CommandContext(ctx, "open", "-na", "Ghostty", "--args", "-e", "tmux", "attach", "-t", sessionName)
+	cmd.Env = cleanEnv()
+	return cmd.Run()
 }

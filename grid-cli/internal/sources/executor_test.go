@@ -28,6 +28,7 @@ func TestExecuteAction_MissingFields(t *testing.T) {
 		{"open-app missing path", Action{Type: "open-app"}},
 		{"chrome missing profile", Action{Type: "open-chrome-profile"}},
 		{"exec missing command", Action{Type: "exec"}},
+		{"open-dir missing dirPath", Action{Type: "open-dir"}},
 	}
 
 	for _, tt := range tests {
