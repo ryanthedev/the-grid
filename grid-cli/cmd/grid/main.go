@@ -30,6 +30,7 @@ import (
 	"github.com/ryanthedev/grid-cli/internal/output"
 	gridReconcile "github.com/ryanthedev/grid-cli/internal/reconcile"
 	gridServer "github.com/ryanthedev/grid-cli/internal/server"
+	"github.com/ryanthedev/grid-cli/internal/sources"
 	gridState "github.com/ryanthedev/grid-cli/internal/state"
 	"github.com/ryanthedev/grid-cli/internal/tracing"
 	gridTypes "github.com/ryanthedev/grid-cli/internal/types"
@@ -1721,11 +1722,12 @@ Syncs border focus if the window is tileable.`,
 
 // MARK: - the-grid Pick Commands
 
-// pickCmd is the parent command for pick subcommands
+// pickCmd is the unified launcher entry point
 var pickCmd = &cobra.Command{
 	Use:   "pick",
-	Short: "Interactive picker commands",
-	Long:  `Commands for displaying interactive picker interfaces.`,
+	Short: "Unified launcher - search windows, apps, actions",
+	Long:  `Launches a unified picker to search and select windows, applications, Chrome profiles, and custom actions.`,
+	RunE:  runUnifiedPick,
 }
 
 // pickWindowCmd launches an interactive window picker
@@ -2266,6 +2268,331 @@ func runPickWindow() error {
 	// Warp mouse to window (non-fatal if it fails since focus succeeded)
 	if err := gridMouse.WarpToWindow(ctx, c, windowID); err != nil {
 		jsonlog.Log("pick.warp_warn", jsonlog.WithMsg("mouse warp failed after focus"), jsonlog.WithData(map[string]any{
+			"wid": windowID,
+			"err": err.Error(),
+		}))
+	}
+
+	return nil
+}
+
+// runUnifiedPick launches the unified picker with all sources
+func runUnifiedPick(cmd *cobra.Command, args []string) error {
+	ctx := context.Background()
+
+	// Load config
+	cfg, err := gridConfig.LoadConfig("")
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	// Resolve enabled sources
+	onlyFlag, _ := cmd.Flags().GetStringSlice("only")
+	excludeFlag, _ := cmd.Flags().GetStringSlice("exclude")
+	enabled := resolveEnabledSources(cfg.Picker, onlyFlag, excludeFlag)
+
+	jsonlog.Log("pick.start", jsonlog.WithData(map[string]any{
+		"windows": enabled.Windows,
+		"apps":    enabled.Apps,
+		"chrome":  enabled.Chrome,
+		"actions": enabled.Actions,
+	}))
+
+	// Build source config
+	sourceCfg := sources.Config{}
+	if cfg.Picker != nil {
+		sourceCfg.Actions = cfg.Picker.Actions
+	}
+
+	var allItems []sources.SourceItem
+
+	// Discover apps/chrome/actions (no RPC needed)
+	nonWindowEnabled := sources.EnabledSources{
+		Windows: false,
+		Apps:    enabled.Apps,
+		Chrome:  enabled.Chrome,
+		Actions: enabled.Actions,
+	}
+	allItems = sources.DiscoverAll(nonWindowEnabled, sourceCfg)
+
+	// Discover windows if enabled (needs RPC client)
+	if enabled.Windows {
+		windowItems, err := discoverWindowsAsSourceItems(ctx, cfg)
+		if err != nil {
+			jsonlog.Log("pick.windows.err", jsonlog.WithMsg(err.Error()))
+			// Continue with other sources
+		} else {
+			allItems = append(allItems, windowItems...)
+		}
+	}
+
+	if len(allItems) == 0 {
+		return fmt.Errorf("no items found from any source")
+	}
+
+	// Convert to PickerItems (the type expected by launchPicker)
+	pickerItems := convertSourceItemsToPickerItems(allItems)
+
+	// Load history and sort by frecency
+	history, _ := gridState.LoadPickerHistory()
+	gridState.SortByFrecency(pickerItems, func(item PickerItem) string {
+		return item.ID
+	}, history)
+
+	// Launch picker
+	result, err := launchPicker(pickerItems, cfg.Settings.PickerPath)
+	if err != nil {
+		return err
+	}
+
+	if result.Cancelled {
+		jsonlog.Log("pick.cancel")
+		return nil
+	}
+
+	if result.Selected == nil {
+		return nil
+	}
+
+	// Record selection in history
+	history.RecordSelection(result.Selected.ID)
+	if err := history.Save(); err != nil {
+		jsonlog.Log("pick.history.save_err", jsonlog.WithMsg(err.Error()))
+	}
+
+	jsonlog.Log("pick.select", jsonlog.WithData(map[string]any{
+		"id":   result.Selected.ID,
+		"type": result.Selected.Metadata["actionType"],
+	}))
+
+	// Execute action based on type
+	actionType := result.Selected.Metadata["actionType"]
+	switch actionType {
+	case "focus-window":
+		return handleWindowFocus(ctx, result.Selected, cfg)
+	default:
+		action := parseActionFromMetadata(result.Selected.Metadata)
+		return sources.ExecuteAction(ctx, action)
+	}
+}
+
+// resolveEnabledSources combines config defaults with command-line flags
+func resolveEnabledSources(picker *gridConfig.PickerConfig, only, exclude []string) sources.EnabledSources {
+	// Start with defaults (all enabled)
+	enabled := sources.EnabledSources{
+		Windows: true,
+		Apps:    true,
+		Chrome:  true,
+		Actions: true,
+	}
+
+	// Apply config settings if present
+	if picker != nil {
+		enabled.Windows = picker.Sources.Windows
+		enabled.Apps = picker.Sources.Apps
+		enabled.Chrome = picker.Sources.Chrome.Enabled
+		enabled.Actions = picker.Sources.Actions
+	}
+
+	// If --only is specified, start with all false and enable only those
+	if len(only) > 0 {
+		enabled = sources.EnabledSources{}
+		for _, src := range only {
+			switch strings.ToLower(src) {
+			case "windows":
+				enabled.Windows = true
+			case "apps":
+				enabled.Apps = true
+			case "chrome":
+				enabled.Chrome = true
+			case "actions":
+				enabled.Actions = true
+			}
+		}
+	}
+
+	// Apply --exclude to disable specific sources
+	for _, src := range exclude {
+		switch strings.ToLower(src) {
+		case "windows":
+			enabled.Windows = false
+		case "apps":
+			enabled.Apps = false
+		case "chrome":
+			enabled.Chrome = false
+		case "actions":
+			enabled.Actions = false
+		}
+	}
+
+	return enabled
+}
+
+// discoverWindowsAsSourceItems discovers windows and returns them as SourceItems
+func discoverWindowsAsSourceItems(ctx context.Context, cfg *gridConfig.Config) ([]sources.SourceItem, error) {
+	c := client.NewClient(socketPath, timeout)
+	defer c.Close()
+
+	windows, serverState, err := getAllWindows(ctx, c)
+	if err != nil {
+		return nil, err
+	}
+
+	// Load runtime state for cell assignments
+	runtimeState, err := gridState.LoadState()
+	if err != nil {
+		return nil, err
+	}
+
+	// Filter to windows assigned to cells
+	assignedWindowIDs := make(map[uint32]bool)
+	windowToDisplay := make(map[uint32]string)
+	for _, display := range serverState.Displays {
+		spaceID := display.GetCurrentSpaceIDString()
+		if spaceID == "" {
+			continue
+		}
+		spaceState := runtimeState.GetSpaceReadOnly(spaceID)
+		if spaceState == nil {
+			continue
+		}
+		for _, cell := range spaceState.Cells {
+			for _, wid := range cell.Windows {
+				assignedWindowIDs[wid] = true
+				windowToDisplay[wid] = display.UUID
+			}
+		}
+	}
+
+	filteredWindows := make([]*models.Window, 0, len(windows))
+	for _, w := range windows {
+		if assignedWindowIDs[uint32(w.ID)] {
+			filteredWindows = append(filteredWindows, w)
+		}
+	}
+
+	if len(filteredWindows) == 0 {
+		return nil, nil
+	}
+
+	// Convert to PickerItems first (reuse existing function), then to SourceItems
+	pickerItems, pctx := windowsToPickerItems(filteredWindows, serverState)
+
+	sourceItems := make([]sources.SourceItem, len(pickerItems))
+	for i, pi := range pickerItems {
+		wid, _ := strconv.Atoi(pi.Metadata["wid"])
+		stableID := stableWindowID(wid, pctx.TmuxInfo[wid], pctx.BundleIDs[wid], pctx.Titles[wid], pctx.PIDs[wid])
+
+		// Copy metadata and add display UUID for border sync
+		metadata := make(map[string]string)
+		for k, v := range pi.Metadata {
+			metadata[k] = v
+		}
+		if displayUUID, ok := windowToDisplay[uint32(wid)]; ok {
+			metadata["displayUUID"] = displayUUID
+		}
+
+		sourceItems[i] = sources.SourceItem{
+			ID:         stableID,
+			Title:      pi.Title,
+			Subtitle:   pi.Subtitle,
+			Preview:    pi.Preview,
+			Icon:       pi.Icon,
+			Searchable: pi.Searchable,
+			Action: sources.Action{
+				Type:     "focus-window",
+				WindowID: wid,
+			},
+			Metadata: metadata,
+		}
+	}
+
+	return sourceItems, nil
+}
+
+// convertSourceItemsToPickerItems converts SourceItems to PickerItems for the picker
+func convertSourceItemsToPickerItems(items []sources.SourceItem) []PickerItem {
+	pickerItems := make([]PickerItem, len(items))
+	for i, si := range items {
+		metadata := si.Metadata
+		if metadata == nil {
+			metadata = make(map[string]string)
+		}
+		// Store action info in metadata for later execution
+		metadata["actionType"] = si.Action.Type
+		if si.Action.WindowID != 0 {
+			metadata["wid"] = strconv.Itoa(si.Action.WindowID)
+		}
+		if si.Action.AppPath != "" {
+			metadata["appPath"] = si.Action.AppPath
+		}
+		if si.Action.Command != "" {
+			metadata["command"] = si.Action.Command
+		}
+		if si.Action.ProfileDir != "" {
+			metadata["profileDir"] = si.Action.ProfileDir
+		}
+
+		pickerItems[i] = PickerItem{
+			ID:         si.ID,
+			Title:      si.Title,
+			Subtitle:   si.Subtitle,
+			Preview:    si.Preview,
+			Icon:       si.Icon,
+			Searchable: si.Searchable,
+			Metadata:   metadata,
+		}
+	}
+	return pickerItems
+}
+
+// parseActionFromMetadata reconstructs an Action from picker metadata
+func parseActionFromMetadata(metadata map[string]string) sources.Action {
+	wid := 0
+	if widStr, ok := metadata["wid"]; ok {
+		wid, _ = strconv.Atoi(widStr)
+	}
+
+	return sources.Action{
+		Type:       metadata["actionType"],
+		WindowID:   wid,
+		AppPath:    metadata["appPath"],
+		Command:    metadata["command"],
+		ProfileDir: metadata["profileDir"],
+	}
+}
+
+// handleWindowFocus focuses a window from a picker selection
+func handleWindowFocus(ctx context.Context, selected *PickerItem, cfg *gridConfig.Config) error {
+	widStr, ok := selected.Metadata["wid"]
+	if !ok || widStr == "" {
+		return fmt.Errorf("selected item missing window ID")
+	}
+
+	widInt, err := strconv.ParseUint(widStr, 10, 32)
+	if err != nil {
+		return fmt.Errorf("invalid window ID %q: %w", widStr, err)
+	}
+	windowID := uint32(widInt)
+
+	c := client.NewClient(socketPath, timeout)
+	defer c.Close()
+
+	if err := gridFocus.FocusWindow(ctx, c, windowID); err != nil {
+		if strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "not found") {
+			return fmt.Errorf("window no longer exists")
+		}
+		return fmt.Errorf("focus failed: %w", err)
+	}
+
+	// Sync border focus so the active border updates to the newly focused window
+	if displayUUID := selected.Metadata["displayUUID"]; displayUUID != "" {
+		gridReconcile.SyncBorderFocus(ctx, c, displayUUID, windowID, cfg)
+	}
+
+	// Warp mouse to window
+	if err := gridMouse.WarpToWindow(ctx, c, windowID); err != nil {
+		jsonlog.Log("pick.warp_warn", jsonlog.WithMsg("mouse warp failed"), jsonlog.WithData(map[string]any{
 			"wid": windowID,
 			"err": err.Error(),
 		}))
@@ -3496,6 +3823,8 @@ func init() {
 	// Add the-grid pick commands
 	rootCmd.AddCommand(pickCmd)
 	pickCmd.AddCommand(pickWindowCmd)
+	pickCmd.Flags().StringSlice("only", nil, "Only show these sources (windows,apps,chrome,actions)")
+	pickCmd.Flags().StringSlice("exclude", nil, "Exclude these sources")
 
 	// Add the-grid focus commands
 	rootCmd.AddCommand(focusCmd)
