@@ -2,10 +2,12 @@ package sources
 
 import (
 	"strings"
+
+	gridConfig "github.com/ryanthedev/grid-cli/internal/config"
 )
 
 // DiscoverActions transforms ActionConfig slice into SourceItems
-func DiscoverActions(configs []ActionConfig) []SourceItem {
+func DiscoverActions(configs []gridConfig.ActionConfig) []SourceItem {
 	if len(configs) == 0 {
 		return nil
 	}

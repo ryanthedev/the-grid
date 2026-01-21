@@ -21,11 +21,3 @@ type Action struct {
 	Command    string `json:"command,omitempty"`
 	ProfileDir string `json:"profileDir,omitempty"`
 }
-
-// ActionConfig defines a custom action from config
-type ActionConfig struct {
-	Name     string
-	Command  string
-	Category string
-	Icon     string
-}

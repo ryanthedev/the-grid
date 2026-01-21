@@ -2,6 +2,8 @@ package sources
 
 import (
 	"testing"
+
+	gridConfig "github.com/ryanthedev/grid-cli/internal/config"
 )
 
 func TestDiscoverApps(t *testing.T) {
@@ -44,7 +46,7 @@ func TestDiscoverChromeProfiles(t *testing.T) {
 }
 
 func TestDiscoverActions(t *testing.T) {
-	configs := []ActionConfig{
+	configs := []gridConfig.ActionConfig{
 		{Name: "Open Terminal", Command: "open -a Terminal", Category: "Utils", Icon: "terminal"},
 		{Name: "Lock Screen", Command: "pmset displaysleepnow", Category: "System"},
 	}
@@ -77,7 +79,7 @@ func TestDiscoverAll(t *testing.T) {
 		Actions: true,
 	}
 	cfg := Config{
-		Actions: []ActionConfig{
+		Actions: []gridConfig.ActionConfig{
 			{Name: "Test Action", Command: "echo test"},
 		},
 	}

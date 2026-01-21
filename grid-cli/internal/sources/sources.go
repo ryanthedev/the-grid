@@ -3,6 +3,7 @@ package sources
 import (
 	"sync"
 
+	gridConfig "github.com/ryanthedev/grid-cli/internal/config"
 	"github.com/ryanthedev/grid-cli/internal/jsonlog"
 )
 
@@ -16,7 +17,7 @@ type EnabledSources struct {
 
 // Config holds configuration for source discovery
 type Config struct {
-	Actions []ActionConfig
+	Actions []gridConfig.ActionConfig
 }
 
 // DiscoverAll runs enabled sources in parallel and aggregates results
