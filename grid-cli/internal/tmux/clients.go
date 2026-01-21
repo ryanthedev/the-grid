@@ -19,14 +19,37 @@ type TmuxClientInfo struct {
 	PaneCommand string
 }
 
+// tmuxPaths lists common tmux installation locations to check when tmux
+// is not in PATH (e.g., when launched from GUI app with minimal PATH)
+var tmuxPaths = []string{
+	"tmux", // Try PATH first
+	"/opt/homebrew/bin/tmux",
+	"/usr/local/bin/tmux",
+	"/usr/bin/tmux",
+}
+
+// findTmux returns the path to tmux binary, checking common locations
+// if not found in PATH
+func findTmux() string {
+	for _, p := range tmuxPaths {
+		if path, err := exec.LookPath(p); err == nil {
+			return path
+		}
+	}
+	return "tmux" // fallback, will fail with clear error
+}
+
 // GetClients queries tmux for active client sessions.
 // Returns a map keyed by ClientPID.
 // Returns empty map (not error) if tmux is not running or no clients exist.
 func GetClients() (map[int]TmuxClientInfo, error) {
 	result := make(map[int]TmuxClientInfo)
 
+	// Find tmux binary, checking common locations if not in PATH
+	tmuxPath := findTmux()
+
 	// Run tmux list-clients with format string
-	cmd := exec.Command("tmux", "list-clients", "-F",
+	cmd := exec.Command(tmuxPath, "list-clients", "-F",
 		"#{client_pid}|#{session_name}|#{window_name}|#{window_index}|#{pane_index}|#{pane_current_command}")
 
 	output, err := cmd.Output()
@@ -37,9 +60,17 @@ func GetClients() (map[int]TmuxClientInfo, error) {
 			jsonlog.Log("tmux.noclient", jsonlog.WithData(map[string]any{
 				"exit_code": exitErr.ExitCode(),
 			}))
+		} else {
+			// exec.ErrNotFound, permission errors, etc.
+			jsonlog.Log("tmux.exec_err", jsonlog.WithMsg(err.Error()))
 		}
 		return result, nil
 	}
+
+	// Log successful client query for diagnostics
+	jsonlog.Log("tmux.clients", jsonlog.WithData(map[string]any{
+		"count": len(strings.Split(strings.TrimSpace(string(output)), "\n")),
+	}))
 
 	// Parse output line by line
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")

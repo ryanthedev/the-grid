@@ -91,10 +91,11 @@ and move windows between spaces and displays.`,
 			}
 		}
 
-		// Start command span
+		// Start command span (include version for debugging)
 		currentSpan = jsonlog.StartSpan("cmd", jsonlog.WithData(map[string]any{
-			"cmd":  cmd.CommandPath(),
-			"args": argsMap,
+			"cmd":     cmd.CommandPath(),
+			"args":    argsMap,
+			"version": Version,
 		}))
 
 		// Register span with tracing context
