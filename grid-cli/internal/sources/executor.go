@@ -19,14 +19,14 @@ func ExecuteAction(ctx context.Context, action Action) error {
 		return fmt.Errorf("focus-window actions should be handled by caller")
 
 	case "open-app":
-		// open -a "/Applications/Slack.app"
+		// open -na "/Applications/Slack.app" (new instance)
 		if action.AppPath == "" {
 			return fmt.Errorf("open-app action missing appPath")
 		}
 		jsonlog.Log("exec.open-app", jsonlog.WithData(map[string]any{
 			"path": action.AppPath,
 		}))
-		cmd := exec.CommandContext(ctx, "open", "-a", action.AppPath)
+		cmd := exec.CommandContext(ctx, "open", "-na", action.AppPath)
 		return cmd.Run()
 
 	case "open-chrome-profile":
