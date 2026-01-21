@@ -118,3 +118,51 @@ func TestPickerHistorySaveAndLoad(t *testing.T) {
 		t.Errorf("expected frequency 1 for another-window, got: %d", loaded.Frequency["another-window"])
 	}
 }
+
+func TestFrecencyScore(t *testing.T) {
+	h := NewPickerHistory()
+
+	// No history = score 0
+	if score := h.FrecencyScore("unknown"); score != 0 {
+		t.Errorf("expected 0 for unknown, got %f", score)
+	}
+
+	// Record some selections
+	h.RecordSelection("item1")
+	h.RecordSelection("item1")
+	h.RecordSelection("item2")
+
+	score1 := h.FrecencyScore("item1")
+	score2 := h.FrecencyScore("item2")
+
+	// item1 was selected twice, item2 once
+	// Since both were just selected (same recency), item1 should have higher score
+	if score1 <= score2 {
+		t.Errorf("expected item1 score (%f) > item2 score (%f)", score1, score2)
+	}
+}
+
+func TestSortByFrecency(t *testing.T) {
+	h := NewPickerHistory()
+
+	// Record history: item1 most used, item3 second, item2 least
+	h.RecordSelection("item1")
+	h.RecordSelection("item1")
+	h.RecordSelection("item1")
+	h.RecordSelection("item3")
+	h.RecordSelection("item3")
+	h.RecordSelection("item2")
+
+	// Create items in arbitrary order
+	items := []string{"item2", "item3", "item1"}
+
+	SortByFrecency(items, func(s string) string { return s }, h)
+
+	// Should be sorted by frecency: item1, item3, item2
+	expected := []string{"item1", "item3", "item2"}
+	for i, want := range expected {
+		if items[i] != want {
+			t.Errorf("position %d: expected %s, got %s", i, want, items[i])
+		}
+	}
+}

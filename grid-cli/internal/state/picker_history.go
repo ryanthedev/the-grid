@@ -169,3 +169,38 @@ func (h *PickerHistory) GetFrequency(stableID string) int {
 func (h *PickerHistory) IsPrevious(stableID string) bool {
 	return h.Previous != "" && h.Previous == stableID
 }
+
+// FrecencyScore returns a score that combines frequency and recency.
+// Higher scores indicate more relevant items.
+// Recently used items get a recency boost that decays over days.
+func (h *PickerHistory) FrecencyScore(id string) float64 {
+	freq := h.Frequency[id]
+	if freq == 0 {
+		return 0
+	}
+
+	lastPicked := h.LastPicked[id]
+	if lastPicked == 0 {
+		return float64(freq)
+	}
+
+	hoursSince := time.Since(time.Unix(lastPicked, 0)).Hours()
+	// Recency weight decays from 1.0 to ~0.04 over a week
+	recencyWeight := 1.0 / (1.0 + hoursSince/24.0)
+
+	return float64(freq) * recencyWeight
+}
+
+// SortByFrecency sorts a slice of items by their frecency scores in descending order.
+// getID is a function that extracts the ID from each item for history lookup.
+// Falls back to maintaining original order for items with equal scores.
+func SortByFrecency[T any](items []T, getID func(T) string, history *PickerHistory) {
+	if history == nil {
+		return
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		scoreI := history.FrecencyScore(getID(items[i]))
+		scoreJ := history.FrecencyScore(getID(items[j]))
+		return scoreI > scoreJ
+	})
+}
