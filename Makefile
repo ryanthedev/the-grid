@@ -109,10 +109,10 @@ server-universal: generate-version
 	fi
 
 cli-universal:
-	@echo "Building thegrid CLI (universal binary)..."
+	@echo "Building thegrid CLI (universal binary) v$(VERSION)..."
 	@mkdir -p grid-cli/bin
-	@cd grid-cli && GOOS=darwin GOARCH=arm64 go build -o bin/thegrid-arm64 ./cmd/grid
-	@cd grid-cli && GOOS=darwin GOARCH=amd64 go build -o bin/thegrid-amd64 ./cmd/grid
+	@cd grid-cli && GOOS=darwin GOARCH=arm64 go build -ldflags "-X main.Version=$(VERSION) -X main.Commit=$(COMMIT)" -o bin/thegrid-arm64 ./cmd/grid
+	@cd grid-cli && GOOS=darwin GOARCH=amd64 go build -ldflags "-X main.Version=$(VERSION) -X main.Commit=$(COMMIT)" -o bin/thegrid-amd64 ./cmd/grid
 	@lipo -create -output grid-cli/bin/thegrid grid-cli/bin/thegrid-arm64 grid-cli/bin/thegrid-amd64
 	@rm grid-cli/bin/thegrid-arm64 grid-cli/bin/thegrid-amd64
 	@echo "Verifying universal binary..."
