@@ -1749,6 +1749,7 @@ type PickerItem struct {
 	Icon       string            `json:"icon,omitempty"`
 	Searchable []string          `json:"searchable"`
 	Metadata   map[string]string `json:"metadata,omitempty"`
+	Priority   int               `json:"priority"`
 }
 
 // PickerResult represents the outcome of a picker interaction
@@ -2523,6 +2524,7 @@ func discoverWindowsAsSourceItems(ctx context.Context, cfg *gridConfig.Config) (
 // convertSourceItemsToPickerItems converts SourceItems to PickerItems for the picker
 func convertSourceItemsToPickerItems(items []sources.SourceItem) []PickerItem {
 	pickerItems := make([]PickerItem, len(items))
+	boosts := gridState.DefaultSourceBoosts()
 	for i, si := range items {
 		metadata := si.Metadata
 		if metadata == nil {
@@ -2546,6 +2548,9 @@ func convertSourceItemsToPickerItems(items []sources.SourceItem) []PickerItem {
 			metadata["dirPath"] = si.Action.DirPath
 		}
 
+		// Convert boost to integer priority (multiply by 100 for precision)
+		priority := int(boosts.GetSourceBoost(si.ID) * 100)
+
 		pickerItems[i] = PickerItem{
 			ID:         si.ID,
 			Title:      si.Title,
@@ -2554,6 +2559,7 @@ func convertSourceItemsToPickerItems(items []sources.SourceItem) []PickerItem {
 			Icon:       si.Icon,
 			Searchable: si.Searchable,
 			Metadata:   metadata,
+			Priority:   priority,
 		}
 	}
 	return pickerItems

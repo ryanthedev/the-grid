@@ -166,3 +166,94 @@ func TestSortByFrecency(t *testing.T) {
 		}
 	}
 }
+
+func TestGetSourceBoost(t *testing.T) {
+	boosts := DefaultSourceBoosts()
+
+	tests := []struct {
+		id       string
+		expected float64
+	}{
+		// Explicit source prefixes
+		{"app:com.apple.Safari", 1.0},
+		{"chrome:Default", 1.0},
+		{"action:lock-screen", 1.5},
+		{"zoxide:~/repos/foo", 0.5},
+
+		// Windows - tmux prefix
+		{"tmux:session:window", 10.0},
+		{"tmux:theGrid:zsh", 10.0},
+
+		// Windows - bundle ID prefix (non-tmux)
+		{"com.mitchellh.ghostty:title:abcd", 10.0},
+		{"com.apple.Terminal:bash:1234", 10.0},
+	}
+
+	for _, tt := range tests {
+		got := boosts.getSourceBoost(tt.id)
+		if got != tt.expected {
+			t.Errorf("getSourceBoost(%q) = %v, want %v", tt.id, got, tt.expected)
+		}
+	}
+}
+
+func TestSortByFrecencyWithBoosts_NilHistory(t *testing.T) {
+	// Even without history, boosts should still apply
+	items := []string{
+		"zoxide:~/.config",
+		"tmux:session:window",
+		"app:com.apple.Safari",
+	}
+
+	SortByFrecency(items, func(s string) string { return s }, nil)
+
+	// Should be: tmux (10x), app (1x), zoxide (0.5x)
+	expected := []string{"tmux:session:window", "app:com.apple.Safari", "zoxide:~/.config"}
+	for i, want := range expected {
+		if items[i] != want {
+			t.Errorf("position %d: expected %s, got %s", i, want, items[i])
+		}
+	}
+}
+
+func TestSortByFrecencyWithBoosts_WindowsOverZoxide(t *testing.T) {
+	// Main use case: windows should rank above zoxide directories
+	// even when both have no history
+	h := NewPickerHistory()
+
+	items := []string{
+		"zoxide:~/.config",
+		"zoxide:~/repos/dotfiles/.config",
+		"tmux:_config:nvim",
+		"zoxide:~/.config/bin",
+	}
+
+	SortByFrecency(items, func(s string) string { return s }, h)
+
+	// Window (10x base) should be first, then zoxide dirs (0.5x base)
+	if items[0] != "tmux:_config:nvim" {
+		t.Errorf("expected tmux window first, got %s", items[0])
+	}
+}
+
+func TestSortByFrecencyWithBoosts_HighFrecencyOvercomesBoost(t *testing.T) {
+	// A frequently used zoxide dir should eventually beat a never-used window
+	h := NewPickerHistory()
+
+	// Use the zoxide item many times (simulating heavy usage)
+	for i := 0; i < 50; i++ {
+		h.RecordSelection("zoxide:~/repos/project")
+	}
+
+	items := []string{
+		"tmux:session:window", // 10x boost but no history (score: 1.0 * 10 = 10)
+		"zoxide:~/repos/project", // 0.5x boost but freq=50 (score: ~50 * 0.5 = 25)
+	}
+
+	SortByFrecency(items, func(s string) string { return s }, h)
+
+	// High frecency zoxide should beat low-frecency window
+	if items[0] != "zoxide:~/repos/project" {
+		t.Errorf("expected high-frecency zoxide first, got %s", items[0])
+	}
+}

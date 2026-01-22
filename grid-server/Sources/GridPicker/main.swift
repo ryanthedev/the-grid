@@ -42,6 +42,9 @@ struct PickerItem: Codable, Equatable {
     /// Optional metadata passed back on selection (picker ignores this)
     let metadata: [String: String]?
 
+    /// Priority for sorting (higher = appears first when match scores are equal)
+    let priority: Int
+
     /// Display text shown in the picker (backwards compatibility, returns title)
     var display: String {
         title
@@ -54,7 +57,8 @@ struct PickerItem: Codable, Equatable {
         preview: String? = nil,
         icon: String? = nil,
         searchable: [String]? = nil,
-        metadata: [String: String]? = nil
+        metadata: [String: String]? = nil,
+        priority: Int = 0
     ) {
         self.id = id
         self.title = title
@@ -63,6 +67,7 @@ struct PickerItem: Codable, Equatable {
         self.icon = icon
         self.searchable = searchable ?? [title]
         self.metadata = metadata
+        self.priority = priority
     }
 
     /// Custom Decodable init to handle both old format (display) and new format (title + optional fields)
@@ -86,6 +91,7 @@ struct PickerItem: Codable, Equatable {
         let optionalSearchable = try container.decodeIfPresent([String].self, forKey: .searchable)
         searchable = optionalSearchable ?? [title]
         metadata = try container.decodeIfPresent([String: String].self, forKey: .metadata)
+        priority = try container.decodeIfPresent(Int.self, forKey: .priority) ?? 0
     }
 
     /// Custom Encodable to include display field for backwards compatibility
@@ -100,10 +106,11 @@ struct PickerItem: Codable, Equatable {
         try container.encodeIfPresent(subtitle, forKey: .subtitle)
         try container.encodeIfPresent(preview, forKey: .preview)
         try container.encodeIfPresent(icon, forKey: .icon)
+        try container.encode(priority, forKey: .priority)
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, title, display, subtitle, preview, icon, searchable, metadata
+        case id, title, display, subtitle, preview, icon, searchable, metadata, priority
     }
 
     /// Get all searchable text (title + searchable + subtitle + preview when present)
@@ -470,10 +477,14 @@ enum FuzzyMatcher {
             }
         }
 
-        // Sort by score descending, then by display text ascending for ties
+        // Sort by score descending, then by priority descending, then by display text ascending
         return results.sorted { (lhs: MatchResult, rhs: MatchResult) -> Bool in
             if lhs.score != rhs.score {
                 return lhs.score > rhs.score
+            }
+            // Use priority as secondary sort (higher priority first)
+            if lhs.item.priority != rhs.item.priority {
+                return lhs.item.priority > rhs.item.priority
             }
             return lhs.item.display < rhs.item.display
         }

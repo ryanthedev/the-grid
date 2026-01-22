@@ -216,8 +216,8 @@ func DefaultSourceBoosts() SourceBoosts {
 	}
 }
 
-// getSourceBoost returns the boost multiplier for an item ID based on its prefix.
-func (b SourceBoosts) getSourceBoost(id string) float64 {
+// GetSourceBoost returns the boost multiplier for an item ID based on its prefix.
+func (b SourceBoosts) GetSourceBoost(id string) float64 {
 	switch {
 	case strings.HasPrefix(id, "app:"):
 		return b.Apps
@@ -227,8 +227,12 @@ func (b SourceBoosts) getSourceBoost(id string) float64 {
 		return b.Actions
 	case strings.HasPrefix(id, "zoxide:"):
 		return b.Zoxide
+	case strings.HasPrefix(id, "tmux:"):
+		// Tmux windows: tmux:{session}:{window}
+		return b.Windows
 	default:
-		// No prefix = window (window IDs are like "tmux:session:pane" or app-based)
+		// Non-tmux windows use bundleID prefix (e.g., com.mitchellh.ghostty:...)
+		// These don't match any known source prefix, so treat as windows
 		return b.Windows
 	}
 }
@@ -242,12 +246,13 @@ func SortByFrecency[T any](items []T, getID func(T) string, history *PickerHisto
 
 // SortByFrecencyWithBoosts sorts items by frecency with source-based priority boosts.
 // Source boosts allow prioritizing certain source types (e.g., windows over directories).
+// Items with no history get a base score of 1.0 so boosts still apply.
 func SortByFrecencyWithBoosts[T any](items []T, getID func(T) string, history *PickerHistory, boosts SourceBoosts) {
 	if history == nil {
 		// Still apply source boosts even without history
 		sort.SliceStable(items, func(i, j int) bool {
-			boostI := boosts.getSourceBoost(getID(items[i]))
-			boostJ := boosts.getSourceBoost(getID(items[j]))
+			boostI := boosts.GetSourceBoost(getID(items[i]))
+			boostJ := boosts.GetSourceBoost(getID(items[j]))
 			return boostI > boostJ
 		})
 		return
@@ -255,8 +260,17 @@ func SortByFrecencyWithBoosts[T any](items []T, getID func(T) string, history *P
 	sort.SliceStable(items, func(i, j int) bool {
 		idI := getID(items[i])
 		idJ := getID(items[j])
-		scoreI := history.FrecencyScore(idI) * boosts.getSourceBoost(idI)
-		scoreJ := history.FrecencyScore(idJ) * boosts.getSourceBoost(idJ)
+		// Use base score of 1.0 for items with no history so boosts still apply
+		baseScoreI := history.FrecencyScore(idI)
+		baseScoreJ := history.FrecencyScore(idJ)
+		if baseScoreI == 0 {
+			baseScoreI = 1.0
+		}
+		if baseScoreJ == 0 {
+			baseScoreJ = 1.0
+		}
+		scoreI := baseScoreI * boosts.GetSourceBoost(idI)
+		scoreJ := baseScoreJ * boosts.GetSourceBoost(idJ)
 		return scoreI > scoreJ
 	})
 }
