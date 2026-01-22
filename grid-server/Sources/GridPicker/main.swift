@@ -469,22 +469,21 @@ enum FuzzyMatcher {
             }
 
             if hasAnyMatch {
+                // Add priority bonus to score (priority/3 gives strong boost)
+                // e.g., windows (priority=1000) get +333, profiles (priority=100) get +33
+                let priorityBonus = item.priority / 3
                 results.append(MatchResult(
                     item: item,
-                    score: bestWeightedScore,
+                    score: bestWeightedScore + priorityBonus,
                     matchedIndices: titleMatchIndices
                 ))
             }
         }
 
-        // Sort by score descending, then by priority descending, then by display text ascending
+        // Sort by score descending, then by display text ascending for ties
         return results.sorted { (lhs: MatchResult, rhs: MatchResult) -> Bool in
             if lhs.score != rhs.score {
                 return lhs.score > rhs.score
-            }
-            // Use priority as secondary sort (higher priority first)
-            if lhs.item.priority != rhs.item.priority {
-                return lhs.item.priority > rhs.item.priority
             }
             return lhs.item.display < rhs.item.display
         }
@@ -1000,6 +999,7 @@ struct PickerConfig {
     var width: CGFloat = 800
     var height: CGFloat = 56
     var items: [PickerItem] = []
+    var testQuery: String? = nil
 
     static func parse(_ args: [String]) -> PickerConfig {
         var config = PickerConfig()
@@ -1027,6 +1027,13 @@ struct PickerConfig {
                 } else {
                     i += 1
                 }
+            case "--test":
+                if i + 1 < args.count {
+                    config.testQuery = args[i + 1]
+                    i += 2
+                } else {
+                    i += 1
+                }
             case "--help", "-h":
                 printUsage()
                 exit(0)
@@ -1049,6 +1056,7 @@ func printUsage() {
       --prompt TEXT   Prompt text shown before input
       --width N       Window width in pixels (default: 400)
       --height N      Window height in pixels (default: 56)
+      --test QUERY    Test mode: output matching results as JSON (no GUI)
       --help, -h      Show this help
 
     Output (JSON to stdout):
@@ -1588,6 +1596,35 @@ let stdinItems = readItemsFromStdin()
 
 var config = PickerConfig.parse(CommandLine.arguments)
 config.items = stdinItems
+
+// Test mode: run fuzzy matcher and output results as JSON
+if let query = config.testQuery {
+    let results = FuzzyMatcher.match(query: query, items: config.items)
+
+    struct TestResult: Encodable {
+        let id: String
+        let title: String
+        let priority: Int
+        let score: Int
+    }
+
+    let testResults = results.prefix(20).map { result in
+        TestResult(
+            id: result.item.id,
+            title: result.item.title,
+            priority: result.item.priority,
+            score: result.score
+        )
+    }
+
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+    if let data = try? encoder.encode(testResults),
+       let json = String(data: data, encoding: .utf8) {
+        print(json)
+    }
+    exit(0)
+}
 
 let app = NSApplication.shared
 let delegate = AppDelegate(config: config)

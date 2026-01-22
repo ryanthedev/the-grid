@@ -187,13 +187,37 @@ func TestGetSourceBoost(t *testing.T) {
 		// Windows - bundle ID prefix (non-tmux)
 		{"com.mitchellh.ghostty:title:abcd", 10.0},
 		{"com.apple.Terminal:bash:1234", 10.0},
+
+		// Chrome windows (bundle ID prefix) should get Windows boost
+		{"com.google.Chrome:github-issues:a1b2", 10.0},
 	}
 
 	for _, tt := range tests {
-		got := boosts.getSourceBoost(tt.id)
+		got := boosts.GetSourceBoost(tt.id)
 		if got != tt.expected {
-			t.Errorf("getSourceBoost(%q) = %v, want %v", tt.id, got, tt.expected)
+			t.Errorf("GetSourceBoost(%q) = %v, want %v", tt.id, got, tt.expected)
 		}
+	}
+}
+
+func TestSortByFrecency_ChromeWindowsOverProfiles(t *testing.T) {
+	// Chrome windows should rank above Chrome profiles
+	// Chrome windows: com.google.Chrome:... → Windows boost (10.0)
+	// Chrome profiles: chrome:... → Chrome boost (1.0)
+	h := NewPickerHistory()
+
+	items := []string{
+		"chrome:Default",
+		"chrome:Work",
+		"com.google.Chrome:github-issues:a1b2",
+		"chrome:Personal",
+	}
+
+	SortByFrecency(items, func(s string) string { return s }, h)
+
+	// Chrome window should be first
+	if items[0] != "com.google.Chrome:github-issues:a1b2" {
+		t.Errorf("expected Chrome window first, got %s", items[0])
 	}
 }
 
