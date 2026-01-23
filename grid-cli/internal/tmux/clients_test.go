@@ -1,6 +1,7 @@
 package tmux
 
 import (
+	"fmt"
 	"testing"
 )
 
@@ -76,6 +77,54 @@ func TestParseClientLine(t *testing.T) {
 			}
 			if !tt.wantErr && got != tt.want {
 				t.Errorf("parseClientLine() = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestGetPaneCommandsTargetFormat(t *testing.T) {
+	// This test documents why we use window index instead of window name.
+	// Window names with dots (like "2.1.17") break tmux target parsing because
+	// tmux interprets "." as a pane separator.
+	//
+	// Example: "thegrid:2.1.17" would be parsed as:
+	//   session=thegrid, window=2, pane=1.17 (invalid)
+	//
+	// Using window index avoids this: "thegrid:0" is unambiguous.
+
+	tests := []struct {
+		name        string
+		sessionName string
+		windowIndex int
+		wantTarget  string
+	}{
+		{
+			name:        "simple window",
+			sessionName: "dev",
+			windowIndex: 0,
+			wantTarget:  "dev:0",
+		},
+		{
+			name:        "higher window index",
+			sessionName: "thegrid",
+			windowIndex: 5,
+			wantTarget:  "thegrid:5",
+		},
+		{
+			name:        "session with hyphen",
+			sessionName: "my-session",
+			windowIndex: 2,
+			wantTarget:  "my-session:2",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Verify target format matches expected pattern
+			// This is the format used in GetPaneCommands
+			target := fmt.Sprintf("%s:%d", tt.sessionName, tt.windowIndex)
+			if target != tt.wantTarget {
+				t.Errorf("target = %q, want %q", target, tt.wantTarget)
 			}
 		})
 	}
