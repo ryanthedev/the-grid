@@ -100,6 +100,38 @@ thegrid focus cell <id>               # Jump focus to specific cell ID
 - `--mouse, -m` - Move mouse cursor to focused window
 - `--wrap` (default: true) - Wrap around to opposite edge
 
+### Unified Launcher (Pick)
+
+Search and launch windows, applications, Chrome profiles, zoxide directories, and custom actions in a single unified picker.
+
+```bash
+thegrid pick                           # All sources (windows, apps, chrome, actions, zoxide)
+thegrid pick --only windows            # Just windows
+thegrid pick --only apps,chrome        # Multiple sources
+thegrid pick --exclude chrome          # All sources except Chrome
+thegrid pick window                    # Backwards compat - just windows
+```
+
+**Picker Features:**
+- Fuzzy search across all enabled sources
+- Frecency-based sorting (frequently used items appear first)
+- Hybrid icon support (SF Symbols + app icons)
+- Treats hyphens/underscores as spaces in search (e.g., "google-chrome" matches "google chrome")
+
+**Source Priority (for tie-breaking in search):**
+- Windows: 1000x (active work, highest priority)
+- Actions: 1.5x
+- Apps: 1x
+- Chrome: 1x
+- Zoxide: 0.5x
+
+**Picker Actions:**
+- Window → Focus the window
+- App → Launch the application
+- Chrome profile → Open Chrome with the profile
+- Zoxide directory → Open in terminal (Ghostty)
+- Action → Execute the configured command
+
 ### Resize
 ```bash
 thegrid resize grow [amount]          # Grow focused window (default 10%)
@@ -127,6 +159,32 @@ thegrid mouse warp <window-id>        # Move mouse to specific window
 thegrid config show                   # Display current config
 thegrid config validate [path]        # Validate config file
 thegrid config init                   # Create default config
+```
+
+**Picker Configuration:**
+
+Configure which sources are enabled and add custom actions in `~/.config/thegrid/config.yaml`:
+
+```yaml
+picker:
+  sources:
+    windows: true      # Search active windows
+    apps: true         # Search applications
+    chrome:
+      enabled: true    # Search Chrome profiles
+    actions: true      # Search custom actions
+    zoxide: true       # Search zoxide directories
+
+  actions:
+    - name: "New Terminal"
+      command: "open -na Ghostty"
+      category: "Actions"
+      icon: "terminal"  # SF Symbol name
+
+    - name: "Lock Screen"
+      command: "pmset displaysleepnow"
+      category: "System"
+      icon: "lock"
 ```
 
 ### State Management
@@ -173,6 +231,7 @@ grid-cli/
 │   ├── output/                # Table formatting
 │   ├── reconcile/             # State synchronization
 │   ├── server/                # Server state handling
+│   ├── sources/               # Picker source discovery (apps, chrome, actions, zoxide)
 │   ├── state/                 # Runtime state persistence
 │   └── types/                 # Core type definitions
 ├── go.mod

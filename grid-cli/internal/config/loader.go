@@ -140,6 +140,19 @@ func builtinDefaults() map[string]any {
 		"settings": map[string]any{
 			"baseSpacing": 8,
 		},
+		"picker": map[string]any{
+			"sources": map[string]any{
+				"windows": true,
+				"apps":    true,
+				"chrome": map[string]any{
+					"enabled":   true,
+					"stateFile": "",
+				},
+				"actions": true,
+				"zoxide":  true,
+			},
+			"actions": []any{},
+		},
 	}
 }
 

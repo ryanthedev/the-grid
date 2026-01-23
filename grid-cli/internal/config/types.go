@@ -9,6 +9,7 @@ type Config struct {
 	Spaces   map[string]SpaceConfig `yaml:"spaces" json:"spaces"`
 	AppRules []AppRule              `yaml:"appRules" json:"appRules"`
 	Borders  *BorderConfig          `yaml:"borders,omitempty" json:"borders,omitempty"`
+	Picker   *PickerConfig          `yaml:"picker,omitempty" json:"picker,omitempty"`
 }
 
 // DisplayOffset defines X,Y offset for a display (for positioning workarounds)
@@ -295,4 +296,33 @@ func (b *BorderConfig) GetInactiveStyle() *InactiveBorderStyle {
 		CornerRadius: cornerRadius,
 		Opacity:      1.0,
 	}
+}
+
+// PickerConfig defines the unified picker configuration
+type PickerConfig struct {
+	Sources SourcesConfig  `yaml:"sources" json:"sources"`
+	Actions []ActionConfig `yaml:"actions,omitempty" json:"actions,omitempty"`
+}
+
+// SourcesConfig controls which sources are enabled for the picker
+type SourcesConfig struct {
+	Windows bool         `yaml:"windows" json:"windows"`
+	Apps    bool         `yaml:"apps" json:"apps"`
+	Chrome  ChromeConfig `yaml:"chrome" json:"chrome"`
+	Actions bool         `yaml:"actions" json:"actions"`
+	Zoxide  bool         `yaml:"zoxide" json:"zoxide"`
+}
+
+// ChromeConfig controls Chrome profile discovery
+type ChromeConfig struct {
+	Enabled   bool   `yaml:"enabled" json:"enabled"`
+	StateFile string `yaml:"stateFile,omitempty" json:"stateFile,omitempty"`
+}
+
+// ActionConfig defines a custom picker action
+type ActionConfig struct {
+	Name     string `yaml:"name" json:"name"`
+	Command  string `yaml:"command" json:"command"`
+	Category string `yaml:"category,omitempty" json:"category,omitempty"`
+	Icon     string `yaml:"icon,omitempty" json:"icon,omitempty"`
 }

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -168,4 +169,108 @@ func (h *PickerHistory) GetFrequency(stableID string) int {
 // IsPrevious returns true if the given stable ID matches the previous selection
 func (h *PickerHistory) IsPrevious(stableID string) bool {
 	return h.Previous != "" && h.Previous == stableID
+}
+
+// FrecencyScore returns a score that combines frequency and recency.
+// Higher scores indicate more relevant items.
+// Recently used items get a recency boost that decays over days.
+func (h *PickerHistory) FrecencyScore(id string) float64 {
+	freq := h.Frequency[id]
+	if freq == 0 {
+		return 0
+	}
+
+	lastPicked := h.LastPicked[id]
+	if lastPicked == 0 {
+		return float64(freq)
+	}
+
+	hoursSince := time.Since(time.Unix(lastPicked, 0)).Hours()
+	// Recency weight decays from 1.0 to ~0.04 over a week
+	recencyWeight := 1.0 / (1.0 + hoursSince/24.0)
+
+	return float64(freq) * recencyWeight
+}
+
+// SourceBoosts defines priority multipliers for different source types.
+// Higher values = higher priority in the picker.
+type SourceBoosts struct {
+	Windows float64 // Active windows (highest - represents current work)
+	Apps    float64 // Applications
+	Chrome  float64 // Chrome profiles
+	Actions float64 // Custom actions
+	Zoxide  float64 // Directories from zoxide
+	Default float64 // Fallback for unknown sources
+}
+
+// DefaultSourceBoosts returns sensible defaults for source prioritization.
+// Windows get highest priority since they represent active work.
+func DefaultSourceBoosts() SourceBoosts {
+	return SourceBoosts{
+		Windows: 10.0, // Active work gets highest priority
+		Apps:    1.0,
+		Chrome:  1.0,
+		Actions: 1.5, // Slightly boost custom actions
+		Zoxide:  0.5, // Directories lower than active windows
+		Default: 1.0,
+	}
+}
+
+// GetSourceBoost returns the boost multiplier for an item ID based on its prefix.
+func (b SourceBoosts) GetSourceBoost(id string) float64 {
+	switch {
+	case strings.HasPrefix(id, "app:"):
+		return b.Apps
+	case strings.HasPrefix(id, "chrome:"):
+		return b.Chrome
+	case strings.HasPrefix(id, "action:"):
+		return b.Actions
+	case strings.HasPrefix(id, "zoxide:"):
+		return b.Zoxide
+	case strings.HasPrefix(id, "tmux:"):
+		// Tmux windows: tmux:{session}:{window}
+		return b.Windows
+	default:
+		// Non-tmux windows use bundleID prefix (e.g., com.mitchellh.ghostty:...)
+		// These don't match any known source prefix, so treat as windows
+		return b.Windows
+	}
+}
+
+// SortByFrecency sorts a slice of items by their frecency scores in descending order.
+// getID is a function that extracts the ID from each item for history lookup.
+// Falls back to maintaining original order for items with equal scores.
+func SortByFrecency[T any](items []T, getID func(T) string, history *PickerHistory) {
+	SortByFrecencyWithBoosts(items, getID, history, DefaultSourceBoosts())
+}
+
+// SortByFrecencyWithBoosts sorts items by frecency with source-based priority boosts.
+// Source boosts allow prioritizing certain source types (e.g., windows over directories).
+// Items with no history get a base score of 1.0 so boosts still apply.
+func SortByFrecencyWithBoosts[T any](items []T, getID func(T) string, history *PickerHistory, boosts SourceBoosts) {
+	if history == nil {
+		// Still apply source boosts even without history
+		sort.SliceStable(items, func(i, j int) bool {
+			boostI := boosts.GetSourceBoost(getID(items[i]))
+			boostJ := boosts.GetSourceBoost(getID(items[j]))
+			return boostI > boostJ
+		})
+		return
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		idI := getID(items[i])
+		idJ := getID(items[j])
+		// Use base score of 1.0 for items with no history so boosts still apply
+		baseScoreI := history.FrecencyScore(idI)
+		baseScoreJ := history.FrecencyScore(idJ)
+		if baseScoreI == 0 {
+			baseScoreI = 1.0
+		}
+		if baseScoreJ == 0 {
+			baseScoreJ = 1.0
+		}
+		scoreI := baseScoreI * boosts.GetSourceBoost(idI)
+		scoreJ := baseScoreJ * boosts.GetSourceBoost(idJ)
+		return scoreI > scoreJ
+	})
 }

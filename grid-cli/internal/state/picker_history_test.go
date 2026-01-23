@@ -118,3 +118,166 @@ func TestPickerHistorySaveAndLoad(t *testing.T) {
 		t.Errorf("expected frequency 1 for another-window, got: %d", loaded.Frequency["another-window"])
 	}
 }
+
+func TestFrecencyScore(t *testing.T) {
+	h := NewPickerHistory()
+
+	// No history = score 0
+	if score := h.FrecencyScore("unknown"); score != 0 {
+		t.Errorf("expected 0 for unknown, got %f", score)
+	}
+
+	// Record some selections
+	h.RecordSelection("item1")
+	h.RecordSelection("item1")
+	h.RecordSelection("item2")
+
+	score1 := h.FrecencyScore("item1")
+	score2 := h.FrecencyScore("item2")
+
+	// item1 was selected twice, item2 once
+	// Since both were just selected (same recency), item1 should have higher score
+	if score1 <= score2 {
+		t.Errorf("expected item1 score (%f) > item2 score (%f)", score1, score2)
+	}
+}
+
+func TestSortByFrecency(t *testing.T) {
+	h := NewPickerHistory()
+
+	// Record history: item1 most used, item3 second, item2 least
+	h.RecordSelection("item1")
+	h.RecordSelection("item1")
+	h.RecordSelection("item1")
+	h.RecordSelection("item3")
+	h.RecordSelection("item3")
+	h.RecordSelection("item2")
+
+	// Create items in arbitrary order
+	items := []string{"item2", "item3", "item1"}
+
+	SortByFrecency(items, func(s string) string { return s }, h)
+
+	// Should be sorted by frecency: item1, item3, item2
+	expected := []string{"item1", "item3", "item2"}
+	for i, want := range expected {
+		if items[i] != want {
+			t.Errorf("position %d: expected %s, got %s", i, want, items[i])
+		}
+	}
+}
+
+func TestGetSourceBoost(t *testing.T) {
+	boosts := DefaultSourceBoosts()
+
+	tests := []struct {
+		id       string
+		expected float64
+	}{
+		// Explicit source prefixes
+		{"app:com.apple.Safari", 1.0},
+		{"chrome:Default", 1.0},
+		{"action:lock-screen", 1.5},
+		{"zoxide:~/repos/foo", 0.5},
+
+		// Windows - tmux prefix
+		{"tmux:session:window", 10.0},
+		{"tmux:theGrid:zsh", 10.0},
+
+		// Windows - bundle ID prefix (non-tmux)
+		{"com.mitchellh.ghostty:title:abcd", 10.0},
+		{"com.apple.Terminal:bash:1234", 10.0},
+
+		// Chrome windows (bundle ID prefix) should get Windows boost
+		{"com.google.Chrome:github-issues:a1b2", 10.0},
+	}
+
+	for _, tt := range tests {
+		got := boosts.GetSourceBoost(tt.id)
+		if got != tt.expected {
+			t.Errorf("GetSourceBoost(%q) = %v, want %v", tt.id, got, tt.expected)
+		}
+	}
+}
+
+func TestSortByFrecency_ChromeWindowsOverProfiles(t *testing.T) {
+	// Chrome windows should rank above Chrome profiles
+	// Chrome windows: com.google.Chrome:... → Windows boost (10.0)
+	// Chrome profiles: chrome:... → Chrome boost (1.0)
+	h := NewPickerHistory()
+
+	items := []string{
+		"chrome:Default",
+		"chrome:Work",
+		"com.google.Chrome:github-issues:a1b2",
+		"chrome:Personal",
+	}
+
+	SortByFrecency(items, func(s string) string { return s }, h)
+
+	// Chrome window should be first
+	if items[0] != "com.google.Chrome:github-issues:a1b2" {
+		t.Errorf("expected Chrome window first, got %s", items[0])
+	}
+}
+
+func TestSortByFrecencyWithBoosts_NilHistory(t *testing.T) {
+	// Even without history, boosts should still apply
+	items := []string{
+		"zoxide:~/.config",
+		"tmux:session:window",
+		"app:com.apple.Safari",
+	}
+
+	SortByFrecency(items, func(s string) string { return s }, nil)
+
+	// Should be: tmux (10x), app (1x), zoxide (0.5x)
+	expected := []string{"tmux:session:window", "app:com.apple.Safari", "zoxide:~/.config"}
+	for i, want := range expected {
+		if items[i] != want {
+			t.Errorf("position %d: expected %s, got %s", i, want, items[i])
+		}
+	}
+}
+
+func TestSortByFrecencyWithBoosts_WindowsOverZoxide(t *testing.T) {
+	// Main use case: windows should rank above zoxide directories
+	// even when both have no history
+	h := NewPickerHistory()
+
+	items := []string{
+		"zoxide:~/.config",
+		"zoxide:~/repos/dotfiles/.config",
+		"tmux:_config:nvim",
+		"zoxide:~/.config/bin",
+	}
+
+	SortByFrecency(items, func(s string) string { return s }, h)
+
+	// Window (10x base) should be first, then zoxide dirs (0.5x base)
+	if items[0] != "tmux:_config:nvim" {
+		t.Errorf("expected tmux window first, got %s", items[0])
+	}
+}
+
+func TestSortByFrecencyWithBoosts_HighFrecencyOvercomesBoost(t *testing.T) {
+	// A frequently used zoxide dir should eventually beat a never-used window
+	h := NewPickerHistory()
+
+	// Use the zoxide item many times (simulating heavy usage)
+	for i := 0; i < 50; i++ {
+		h.RecordSelection("zoxide:~/repos/project")
+	}
+
+	items := []string{
+		"tmux:session:window", // 10x boost but no history (score: 1.0 * 10 = 10)
+		"zoxide:~/repos/project", // 0.5x boost but freq=50 (score: ~50 * 0.5 = 25)
+	}
+
+	SortByFrecency(items, func(s string) string { return s }, h)
+
+	// High frecency zoxide should beat low-frecency window
+	if items[0] != "zoxide:~/repos/project" {
+		t.Errorf("expected high-frecency zoxide first, got %s", items[0])
+	}
+}

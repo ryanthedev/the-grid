@@ -42,6 +42,9 @@ struct PickerItem: Codable, Equatable {
     /// Optional metadata passed back on selection (picker ignores this)
     let metadata: [String: String]?
 
+    /// Priority for sorting (higher = appears first when match scores are equal)
+    let priority: Int
+
     /// Display text shown in the picker (backwards compatibility, returns title)
     var display: String {
         title
@@ -54,7 +57,8 @@ struct PickerItem: Codable, Equatable {
         preview: String? = nil,
         icon: String? = nil,
         searchable: [String]? = nil,
-        metadata: [String: String]? = nil
+        metadata: [String: String]? = nil,
+        priority: Int = 0
     ) {
         self.id = id
         self.title = title
@@ -63,6 +67,7 @@ struct PickerItem: Codable, Equatable {
         self.icon = icon
         self.searchable = searchable ?? [title]
         self.metadata = metadata
+        self.priority = priority
     }
 
     /// Custom Decodable init to handle both old format (display) and new format (title + optional fields)
@@ -86,6 +91,7 @@ struct PickerItem: Codable, Equatable {
         let optionalSearchable = try container.decodeIfPresent([String].self, forKey: .searchable)
         searchable = optionalSearchable ?? [title]
         metadata = try container.decodeIfPresent([String: String].self, forKey: .metadata)
+        priority = try container.decodeIfPresent(Int.self, forKey: .priority) ?? 0
     }
 
     /// Custom Encodable to include display field for backwards compatibility
@@ -100,10 +106,11 @@ struct PickerItem: Codable, Equatable {
         try container.encodeIfPresent(subtitle, forKey: .subtitle)
         try container.encodeIfPresent(preview, forKey: .preview)
         try container.encodeIfPresent(icon, forKey: .icon)
+        try container.encode(priority, forKey: .priority)
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, title, display, subtitle, preview, icon, searchable, metadata
+        case id, title, display, subtitle, preview, icon, searchable, metadata, priority
     }
 
     /// Get all searchable text (title + searchable + subtitle + preview when present)
@@ -462,9 +469,12 @@ enum FuzzyMatcher {
             }
 
             if hasAnyMatch {
+                // Add priority bonus to score (priority/3 gives strong boost)
+                // e.g., windows (priority=1000) get +333, profiles (priority=100) get +33
+                let priorityBonus = item.priority / 3
                 results.append(MatchResult(
                     item: item,
-                    score: bestWeightedScore,
+                    score: bestWeightedScore + priorityBonus,
                     matchedIndices: titleMatchIndices
                 ))
             }
@@ -490,8 +500,14 @@ enum FuzzyMatcher {
         text: String,
         caseSensitive: Bool
     ) -> (Int, [Int])? {
-        let queryChars = caseSensitive ? Array(query) : Array(query.lowercased())
-        let textChars = caseSensitive ? Array(text) : Array(text.lowercased())
+        // Normalize separators: treat hyphens, underscores as spaces
+        let normalizedQuery = query.replacingOccurrences(of: "-", with: " ")
+                                   .replacingOccurrences(of: "_", with: " ")
+        let normalizedText = text.replacingOccurrences(of: "-", with: " ")
+                                 .replacingOccurrences(of: "_", with: " ")
+
+        let queryChars = caseSensitive ? Array(normalizedQuery) : Array(normalizedQuery.lowercased())
+        let textChars = caseSensitive ? Array(normalizedText) : Array(normalizedText.lowercased())
         let originalTextChars = Array(text)
 
         var queryIndex = 0
@@ -989,6 +1005,7 @@ struct PickerConfig {
     var width: CGFloat = 800
     var height: CGFloat = 56
     var items: [PickerItem] = []
+    var testQuery: String? = nil
 
     static func parse(_ args: [String]) -> PickerConfig {
         var config = PickerConfig()
@@ -1016,6 +1033,13 @@ struct PickerConfig {
                 } else {
                     i += 1
                 }
+            case "--test":
+                if i + 1 < args.count {
+                    config.testQuery = args[i + 1]
+                    i += 2
+                } else {
+                    i += 1
+                }
             case "--help", "-h":
                 printUsage()
                 exit(0)
@@ -1038,6 +1062,7 @@ func printUsage() {
       --prompt TEXT   Prompt text shown before input
       --width N       Window width in pixels (default: 400)
       --height N      Window height in pixels (default: 56)
+      --test QUERY    Test mode: output matching results as JSON (no GUI)
       --help, -h      Show this help
 
     Output (JSON to stdout):
@@ -1577,6 +1602,35 @@ let stdinItems = readItemsFromStdin()
 
 var config = PickerConfig.parse(CommandLine.arguments)
 config.items = stdinItems
+
+// Test mode: run fuzzy matcher and output results as JSON
+if let query = config.testQuery {
+    let results = FuzzyMatcher.match(query: query, items: config.items)
+
+    struct TestResult: Encodable {
+        let id: String
+        let title: String
+        let priority: Int
+        let score: Int
+    }
+
+    let testResults = results.prefix(20).map { result in
+        TestResult(
+            id: result.item.id,
+            title: result.item.title,
+            priority: result.item.priority,
+            score: result.score
+        )
+    }
+
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+    if let data = try? encoder.encode(testResults),
+       let json = String(data: data, encoding: .utf8) {
+        print(json)
+    }
+    exit(0)
+}
 
 let app = NSApplication.shared
 let delegate = AppDelegate(config: config)
