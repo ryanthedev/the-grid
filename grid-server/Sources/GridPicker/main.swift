@@ -500,8 +500,14 @@ enum FuzzyMatcher {
         text: String,
         caseSensitive: Bool
     ) -> (Int, [Int])? {
-        let queryChars = caseSensitive ? Array(query) : Array(query.lowercased())
-        let textChars = caseSensitive ? Array(text) : Array(text.lowercased())
+        // Normalize separators: treat hyphens, underscores as spaces
+        let normalizedQuery = query.replacingOccurrences(of: "-", with: " ")
+                                   .replacingOccurrences(of: "_", with: " ")
+        let normalizedText = text.replacingOccurrences(of: "-", with: " ")
+                                 .replacingOccurrences(of: "_", with: " ")
+
+        let queryChars = caseSensitive ? Array(normalizedQuery) : Array(normalizedQuery.lowercased())
+        let textChars = caseSensitive ? Array(normalizedText) : Array(normalizedText.lowercased())
         let originalTextChars = Array(text)
 
         var queryIndex = 0
