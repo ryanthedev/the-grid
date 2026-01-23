@@ -50,7 +50,7 @@ func (e *TmuxEnricher) Enrich(pid int, windowTitle string) *Enrichment {
 
 // buildEnrichment creates Enrichment from TmuxClientInfo
 func (e *TmuxEnricher) buildEnrichment(info *tmux.TmuxClientInfo) *Enrichment {
-	paneCommands := tmux.GetPaneCommands(info.SessionName, info.WindowName)
+	paneCommands := tmux.GetPaneCommands(info.SessionName, info.WindowIndex)
 	return &Enrichment{
 		Tmux: &TmuxInfo{
 			SessionName:  info.SessionName,
