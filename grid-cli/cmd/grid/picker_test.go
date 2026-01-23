@@ -2,15 +2,18 @@ package main
 
 import (
 	"testing"
+
+	"github.com/ryanthedev/grid-cli/internal/enrichers"
 )
 
 func TestStableWindowIDTmux(t *testing.T) {
-	// Test 1: Tmux window ID format
-	tmuxInfo := &tmuxEnrichment{
-		sessionName: "dev",
-		windowName:  "nvim",
+	// Test 1: Tmux window ID format using enrichers.Result
+	enrichResult := &enrichers.Result{
+		Title:          "dev",
+		Subtitle:       "dev:nvim",
+		StableIDSuffix: "dev:nvim",
 	}
-	id := stableWindowID(123, tmuxInfo, "com.example.terminal", "Terminal", 456)
+	id := stableWindowID(123, enrichResult, "com.example.terminal", "Terminal", 456)
 	expected := "tmux:dev:nvim"
 	if id != expected {
 		t.Errorf("expected %q, got %q", expected, id)
