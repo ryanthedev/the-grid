@@ -90,7 +90,9 @@ func DiscoverAll(enabled EnabledSources, cfg Config) []SourceItem {
 	// Aggregate all results
 	var all []SourceItem
 	for items := range results {
-		all = append(all, items...)
+		if items != nil {
+			all = append(all, items...)
+		}
 	}
 
 	return all
