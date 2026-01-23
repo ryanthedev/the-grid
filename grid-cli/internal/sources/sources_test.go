@@ -109,18 +109,16 @@ func TestDiscoverAll(t *testing.T) {
 		t.Fatal("expected to find at least one item")
 	}
 
-	// Should have at least one app, one action, and one zoxide dir
+	// Should have at least one app and one action
+	// (zoxide/chrome may not be available in CI)
 	hasApp := false
 	hasAction := false
-	hasZoxide := false
 	for _, item := range items {
 		switch item.Action.Type {
 		case "open-app":
 			hasApp = true
 		case "exec":
 			hasAction = true
-		case "open-dir":
-			hasZoxide = true
 		}
 	}
 
@@ -129,9 +127,6 @@ func TestDiscoverAll(t *testing.T) {
 	}
 	if !hasAction {
 		t.Error("expected at least one action")
-	}
-	if !hasZoxide {
-		t.Error("expected at least one zoxide directory")
 	}
 
 	t.Logf("found %d total items", len(items))
