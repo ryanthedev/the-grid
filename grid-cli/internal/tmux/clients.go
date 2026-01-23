@@ -132,3 +132,24 @@ type parseError struct {
 func (e *parseError) Error() string {
 	return "tmux parse: " + e.msg
 }
+
+// GetPaneCommands returns all pane commands for a tmux window.
+// Returns empty slice (not error) if tmux is not running or window doesn't exist.
+func GetPaneCommands(sessionName, windowName string) []string {
+	tmuxPath := findTmux()
+	target := sessionName + ":" + windowName
+	cmd := exec.Command(tmuxPath, "list-panes", "-t", target, "-F", "#{pane_current_command}")
+	out, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	var commands []string
+	for _, line := range lines {
+		if line = strings.TrimSpace(line); line != "" {
+			commands = append(commands, line)
+		}
+	}
+	return commands
+}
