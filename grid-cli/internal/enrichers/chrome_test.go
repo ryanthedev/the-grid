@@ -1,0 +1,96 @@
+package enrichers
+
+import "testing"
+
+func TestChromeEnricher_Supports(t *testing.T) {
+	tests := []struct {
+		bundleID string
+		expected bool
+	}{
+		{"com.google.Chrome", true},
+		// Other browsers not yet supported (need per-browser Local State paths)
+		{"com.google.Chrome.canary", false},
+		{"org.chromium.Chromium", false},
+		{"com.brave.Browser", false},
+		{"com.microsoft.edgemac", false},
+		{"com.apple.Safari", false},
+		{"com.mitchellh.ghostty", false},
+	}
+
+	e := NewChromeEnricher()
+	for _, tt := range tests {
+		t.Run(tt.bundleID, func(t *testing.T) {
+			got := e.Supports(tt.bundleID)
+			if got != tt.expected {
+				t.Errorf("Supports(%q) = %v, want %v", tt.bundleID, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestChromeEnricher_Enrich(t *testing.T) {
+	tests := []struct {
+		name         string
+		windowTitle  string
+		wantProfile  string
+		wantHasEmail bool
+	}{
+		{
+			name:         "default profile - no suffix",
+			windowTitle:  "Google Docs - Google Chrome",
+			wantProfile:  "Default",
+			wantHasEmail: false,
+		},
+		{
+			name:         "named profile",
+			windowTitle:  "Google Docs - Google Chrome - Work",
+			wantProfile:  "Work",
+			wantHasEmail: false,
+		},
+		{
+			name:         "empty profile name",
+			windowTitle:  "Page - Google Chrome - ",
+			wantProfile:  "Default",
+			wantHasEmail: false,
+		},
+		{
+			name:         "profile with spaces",
+			windowTitle:  "Gmail - Google Chrome - Victoria and Ryan",
+			wantProfile:  "Victoria and Ryan",
+			wantHasEmail: false,
+		},
+	}
+
+	e := NewChromeEnricher()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			enrichment := e.Enrich(0, tt.windowTitle)
+			if enrichment == nil {
+				t.Fatal("Enrich returned nil")
+			}
+			if enrichment.Chrome == nil {
+				t.Fatal("Enrich.Chrome is nil")
+			}
+			if enrichment.Chrome.Profile != tt.wantProfile {
+				t.Errorf("Profile = %q, want %q", enrichment.Chrome.Profile, tt.wantProfile)
+			}
+		})
+	}
+}
+
+func TestEnrichment_Format_ChromeOnly(t *testing.T) {
+	enrichment := &Enrichment{
+		Chrome: &ChromeInfo{
+			Profile:    "Work",
+			ProfileDir: "Profile 1",
+			Email:      "user@company.com",
+		},
+	}
+	result := enrichment.Format()
+	if result.Title != "Work" {
+		t.Errorf("Title = %q, want %q", result.Title, "Work")
+	}
+	if result.StableIDSuffix != "chrome:Work" {
+		t.Errorf("StableIDSuffix = %q, want %q", result.StableIDSuffix, "chrome:Work")
+	}
+}

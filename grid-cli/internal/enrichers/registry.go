@@ -2,19 +2,22 @@ package enrichers
 
 // Registry manages all enrichers and orchestrates enrichment
 type Registry struct {
-	enrichers    []Enricher
-	sshEnricher  *SSHEnricher
-	tmuxEnricher *TmuxEnricher
+	enrichers      []Enricher
+	sshEnricher    *SSHEnricher
+	tmuxEnricher   *TmuxEnricher
+	chromeEnricher *ChromeEnricher
 }
 
 // NewRegistry creates and initializes the enricher registry
 func NewRegistry() *Registry {
 	ssh := NewSSHEnricher()
 	tmux := NewTmuxEnricher()
+	chrome := NewChromeEnricher()
 	return &Registry{
-		enrichers:    []Enricher{ssh, tmux},
-		sshEnricher:  ssh,
-		tmuxEnricher: tmux,
+		enrichers:      []Enricher{ssh, tmux, chrome},
+		sshEnricher:    ssh,
+		tmuxEnricher:   tmux,
+		chromeEnricher: chrome,
 	}
 }
 

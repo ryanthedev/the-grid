@@ -15,8 +15,8 @@ func TestRegistry_NewRegistry(t *testing.T) {
 	if reg == nil {
 		t.Fatal("NewRegistry returned nil")
 	}
-	if len(reg.enrichers) != 2 {
-		t.Errorf("Expected 2 enrichers, got %d", len(reg.enrichers))
+	if len(reg.enrichers) != 3 {
+		t.Errorf("Expected 3 enrichers, got %d", len(reg.enrichers))
 	}
 }
 
