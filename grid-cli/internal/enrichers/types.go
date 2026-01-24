@@ -5,8 +5,9 @@ import "strings"
 
 // Enrichment represents what we learned about a window's context
 type Enrichment struct {
-	SSH  *SSHInfo  `json:"ssh,omitempty"`
-	Tmux *TmuxInfo `json:"tmux,omitempty"`
+	SSH    *SSHInfo    `json:"ssh,omitempty"`
+	Tmux   *TmuxInfo   `json:"tmux,omitempty"`
+	Chrome *ChromeInfo `json:"chrome,omitempty"`
 }
 
 // SSHInfo contains details about an SSH connection
@@ -23,6 +24,13 @@ type TmuxInfo struct {
 	WindowName     string   `json:"window_name"`
 	PaneCommand    string   `json:"pane_command"`
 	SessionWindows []string `json:"session_windows,omitempty"`
+}
+
+// ChromeInfo contains details about a Chrome profile
+type ChromeInfo struct {
+	Profile    string `json:"profile"`
+	ProfileDir string `json:"profile_dir,omitempty"`
+	Email      string `json:"email,omitempty"`
 }
 
 // Enricher interface for enrichment implementations
@@ -48,6 +56,11 @@ func (e *Enrichment) HasTmux() bool {
 	return e != nil && e.Tmux != nil
 }
 
+// HasChrome returns true if Chrome info is present
+func (e *Enrichment) HasChrome() bool {
+	return e != nil && e.Chrome != nil
+}
+
 // Merge combines another enrichment into this one
 func (e *Enrichment) Merge(other *Enrichment) {
 	if other == nil {
@@ -58,6 +71,9 @@ func (e *Enrichment) Merge(other *Enrichment) {
 	}
 	if other.Tmux != nil {
 		e.Tmux = other.Tmux
+	}
+	if other.Chrome != nil {
+		e.Chrome = other.Chrome
 	}
 }
 
@@ -72,6 +88,7 @@ func (e *Enrichment) Format() *Result {
 	sshOnly := e.HasSSH() && !e.HasTmux()
 	tmuxOnly := !e.HasSSH() && e.HasTmux()
 	sshAndTmux := e.HasSSH() && e.HasTmux()
+	chromeOnly := e.HasChrome() && !e.HasSSH() && !e.HasTmux()
 
 	if sshOnly {
 		result.Title = e.SSH.User + "@" + e.SSH.Host
@@ -105,6 +122,11 @@ func (e *Enrichment) Format() *Result {
 			result.Subtitle += " [" + e.Tmux.PaneCommand + "]"
 		}
 		result.StableIDSuffix = e.SSH.User + "@" + e.SSH.Host + "/" + e.Tmux.SessionName + ":" + e.Tmux.WindowName
+	}
+
+	if chromeOnly {
+		result.Title = e.Chrome.Profile
+		result.StableIDSuffix = "chrome:" + e.Chrome.Profile
 	}
 
 	return result
