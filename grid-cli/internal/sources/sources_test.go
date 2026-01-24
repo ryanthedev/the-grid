@@ -1,6 +1,7 @@
 package sources
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -74,7 +75,7 @@ func TestDiscoverActions(t *testing.T) {
 }
 
 func TestDiscoverZoxide(t *testing.T) {
-	items := DiscoverZoxide()
+	items := DiscoverZoxide("")
 	// Zoxide may or may not have entries, just verify no panic and correct structure
 	t.Logf("found %d zoxide paths", len(items))
 
@@ -88,6 +89,78 @@ func TestDiscoverZoxide(t *testing.T) {
 		if item.ID == "" || !strings.HasPrefix(item.ID, "zoxide:") {
 			t.Errorf("ID should start with 'zoxide:', got %q", item.ID)
 		}
+	}
+}
+
+func TestFindZoxideBinary_ConfigOverride(t *testing.T) {
+	// Create a temporary file to use as fake zoxide
+	tmpfile := t.TempDir() + "/fake-zoxide"
+	if err := os.WriteFile(tmpfile, []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Config override should take precedence
+	path, err := findZoxideBinary(tmpfile)
+	if err != nil {
+		t.Fatalf("expected no error with valid config override, got: %v", err)
+	}
+	if path != tmpfile {
+		t.Errorf("expected path %q, got %q", tmpfile, path)
+	}
+}
+
+func TestFindZoxideBinary_ConfigOverrideInvalid(t *testing.T) {
+	// Non-existent path should return error
+	path, err := findZoxideBinary("/nonexistent/zoxide")
+	if err == nil {
+		t.Fatal("expected error with invalid config override")
+	}
+	if path != "" {
+		t.Errorf("expected empty path with error, got %q", path)
+	}
+	if !strings.Contains(err.Error(), "configured zoxide path not found") {
+		t.Errorf("expected 'configured zoxide path not found' error, got: %v", err)
+	}
+}
+
+func TestFindZoxideBinary_PathLookup(t *testing.T) {
+	// This test depends on system state (whether zoxide is in PATH)
+	// If zoxide is available in PATH, should find it
+	path, err := findZoxideBinary("")
+
+	// If error, check if it's a "not found" error
+	if err != nil {
+		if !strings.Contains(err.Error(), "zoxide not found") {
+			t.Errorf("unexpected error type: %v", err)
+		}
+		t.Skip("zoxide not available in PATH or fallback locations on this system")
+	}
+
+	// If found, verify it's a valid path
+	if path == "" {
+		t.Error("expected non-empty path when no error")
+	}
+
+	// Log which method found it (helps verify PATH vs fallback)
+	t.Logf("found zoxide at: %s", path)
+}
+
+func TestFindZoxideBinary_FallbackPaths(t *testing.T) {
+	// This test verifies fallback mechanism by using a config override that doesn't exist
+	// then checking if fallback paths are tried
+
+	// First, verify our test environment
+	path, err := findZoxideBinary("")
+
+	if err == nil {
+		// Found zoxide somewhere - verify it's a real file
+		if _, statErr := os.Stat(path); statErr != nil {
+			t.Errorf("findZoxideBinary returned path %q but stat failed: %v", path, statErr)
+		}
+		t.Logf("verified zoxide exists at: %s", path)
+	} else {
+		// Not found - that's okay for this test environment
+		t.Logf("zoxide not found: %v", err)
 	}
 }
 

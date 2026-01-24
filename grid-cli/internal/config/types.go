@@ -306,11 +306,12 @@ type PickerConfig struct {
 
 // SourcesConfig controls which sources are enabled for the picker
 type SourcesConfig struct {
-	Windows bool         `yaml:"windows" json:"windows"`
-	Apps    bool         `yaml:"apps" json:"apps"`
-	Chrome  ChromeConfig `yaml:"chrome" json:"chrome"`
-	Actions bool         `yaml:"actions" json:"actions"`
-	Zoxide  bool         `yaml:"zoxide" json:"zoxide"`
+	Windows    bool         `yaml:"windows" json:"windows"`
+	Apps       bool         `yaml:"apps" json:"apps"`
+	Chrome     ChromeConfig `yaml:"chrome" json:"chrome"`
+	Actions    bool         `yaml:"actions" json:"actions"`
+	Zoxide     bool         `yaml:"zoxide" json:"zoxide"`
+	ZoxidePath string       `yaml:"zoxidePath,omitempty" json:"zoxidePath,omitempty"`
 }
 
 // ChromeConfig controls Chrome profile discovery
