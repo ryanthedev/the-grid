@@ -1,10 +1,12 @@
 package enrichers
 
 import (
+	"bytes"
 	"os/exec"
 	"os/user"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/ryanthedev/grid-cli/internal/jsonlog"
 	"github.com/ryanthedev/grid-cli/internal/process"
@@ -13,15 +15,20 @@ import (
 // SSHEnricher detects SSH connections in terminal processes
 type SSHEnricher struct {
 	terminalBundleIDs map[string]bool
+	sshProcessCache   map[int]bool
+	cacheMu           sync.RWMutex
 }
 
 // NewSSHEnricher creates configured SSH enricher
 func NewSSHEnricher() *SSHEnricher {
-	return &SSHEnricher{
+	e := &SSHEnricher{
 		terminalBundleIDs: map[string]bool{
 			"com.mitchellh.ghostty": true,
 		},
+		sshProcessCache: make(map[int]bool),
 	}
+	e.buildProcessCache()
+	return e
 }
 
 // Supports returns true for terminal apps
@@ -35,7 +42,7 @@ func (e *SSHEnricher) Enrich(pid int, windowTitle string) *Enrichment {
 
 	var sshPID int
 	for _, dpid := range descendants {
-		if isSSHProcess(dpid) {
+		if e.isSSHProcess(dpid) {
 			sshPID = dpid
 			break
 		}
@@ -68,14 +75,46 @@ func (e *SSHEnricher) Enrich(pid int, windowTitle string) *Enrichment {
 	}
 }
 
-// isSSHProcess checks if PID is an ssh process
-func isSSHProcess(pid int) bool {
-	cmd := exec.Command("ps", "-o", "comm=", "-p", strconv.Itoa(pid))
+// buildProcessCache populates the SSH process cache with a single ps command
+func (e *SSHEnricher) buildProcessCache() {
+	cmd := exec.Command("ps", "-ax", "-o", "pid=,comm=")
 	out, err := cmd.Output()
 	if err != nil {
-		return false
+		jsonlog.Log("ssh.cache_err", jsonlog.WithMsg("failed to build process cache"))
+		return
 	}
-	return strings.TrimSpace(string(out)) == "ssh"
+
+	e.cacheMu.Lock()
+	defer e.cacheMu.Unlock()
+
+	e.sshProcessCache = make(map[int]bool)
+	lines := bytes.Split(out, []byte{'\n'})
+	for _, line := range lines {
+		fields := strings.Fields(string(line))
+		if len(fields) < 2 {
+			continue
+		}
+		pid, err := strconv.Atoi(fields[0])
+		if err != nil {
+			continue
+		}
+		comm := fields[1]
+		if comm == "ssh" {
+			e.sshProcessCache[pid] = true
+		}
+	}
+}
+
+// RefreshCache rebuilds the SSH process cache
+func (e *SSHEnricher) RefreshCache() {
+	e.buildProcessCache()
+}
+
+// isSSHProcess checks if PID is an ssh process using the cache
+func (e *SSHEnricher) isSSHProcess(pid int) bool {
+	e.cacheMu.RLock()
+	defer e.cacheMu.RUnlock()
+	return e.sshProcessCache[pid]
 }
 
 // getProcessArgs gets full command line

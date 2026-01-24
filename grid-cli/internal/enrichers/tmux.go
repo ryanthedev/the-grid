@@ -1,26 +1,60 @@
 package enrichers
 
 import (
+	"sync"
+
 	"github.com/ryanthedev/grid-cli/internal/process"
 	"github.com/ryanthedev/grid-cli/internal/tmux"
 )
 
 // TmuxEnricher detects tmux sessions in terminal processes
 type TmuxEnricher struct {
-	clients map[int]tmux.TmuxClientInfo
-	cache   *tmux.Cache
+	clients              map[int]tmux.TmuxClientInfo
+	cache                *tmux.Cache
+	sessionWindowsCache  map[string][]string
+	mu                   sync.RWMutex
 }
 
 // NewTmuxEnricher creates configured Tmux enricher
 func NewTmuxEnricher() *TmuxEnricher {
 	clients, _ := tmux.GetClients()
 	cache, _ := tmux.LoadCache()
-	return &TmuxEnricher{clients: clients, cache: cache}
+	e := &TmuxEnricher{
+		clients:             clients,
+		cache:               cache,
+		sessionWindowsCache: make(map[string][]string),
+	}
+	e.refreshSessionWindowsCache()
+	return e
 }
 
 // RefreshClients reloads tmux client info
 func (e *TmuxEnricher) RefreshClients() {
 	e.clients, _ = tmux.GetClients()
+	e.refreshSessionWindowsCache()
+}
+
+// refreshSessionWindowsCache refreshes window names for all unique sessions
+func (e *TmuxEnricher) refreshSessionWindowsCache() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	// Clear existing cache
+	e.sessionWindowsCache = make(map[string][]string)
+
+	// Build set of unique session names
+	sessions := make(map[string]bool)
+	for _, info := range e.clients {
+		sessions[info.SessionName] = true
+	}
+
+	// Fetch window names for each session
+	for sessionName := range sessions {
+		windowNames := tmux.GetSessionWindowNames(sessionName)
+		if len(windowNames) > 0 {
+			e.sessionWindowsCache[sessionName] = windowNames
+		}
+	}
 }
 
 // Supports returns true for terminal apps
@@ -50,12 +84,15 @@ func (e *TmuxEnricher) Enrich(pid int, windowTitle string) *Enrichment {
 
 // buildEnrichment creates Enrichment from TmuxClientInfo
 func (e *TmuxEnricher) buildEnrichment(info *tmux.TmuxClientInfo) *Enrichment {
-	windowNames := tmux.GetSessionWindowNames(info.SessionName)
+	e.mu.RLock()
+	windowNames := e.sessionWindowsCache[info.SessionName]
+	e.mu.RUnlock()
+
 	return &Enrichment{
 		Tmux: &TmuxInfo{
-			SessionName:   info.SessionName,
-			WindowName:    info.WindowName,
-			PaneCommand:   info.PaneCommand,
+			SessionName:    info.SessionName,
+			WindowName:     info.WindowName,
+			PaneCommand:    info.PaneCommand,
 			SessionWindows: windowNames,
 		},
 	}

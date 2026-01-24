@@ -64,3 +64,44 @@ func TestTmuxEnricher_Enrich_NoTmux(t *testing.T) {
 		t.Errorf("Enrich with invalid PID should return nil, got %+v", result)
 	}
 }
+
+func TestTmuxEnricher_CachesWindowNames(t *testing.T) {
+	e := &TmuxEnricher{
+		clients: map[int]tmux.TmuxClientInfo{
+			1234: {
+				ClientPID:   1234,
+				SessionName: "test-session",
+				WindowName:  "window1",
+				PaneCommand: "vim",
+			},
+		},
+		sessionWindowsCache: make(map[string][]string),
+	}
+
+	// Manually populate cache to simulate what refreshSessionWindowsCache does
+	e.sessionWindowsCache["test-session"] = []string{"window1", "window2", "window3"}
+
+	// Build enrichment should use cached window names
+	info := &tmux.TmuxClientInfo{
+		SessionName: "test-session",
+		WindowName:  "window1",
+		PaneCommand: "vim",
+	}
+
+	result := e.buildEnrichment(info)
+
+	if result == nil || result.Tmux == nil {
+		t.Fatal("buildEnrichment returned nil")
+	}
+
+	if len(result.Tmux.SessionWindows) != 3 {
+		t.Errorf("SessionWindows length = %d, want 3", len(result.Tmux.SessionWindows))
+	}
+
+	expectedWindows := []string{"window1", "window2", "window3"}
+	for i, window := range result.Tmux.SessionWindows {
+		if window != expectedWindows[i] {
+			t.Errorf("SessionWindows[%d] = %q, want %q", i, window, expectedWindows[i])
+		}
+	}
+}
