@@ -107,6 +107,24 @@ func (rs *RuntimeState) MarkUpdated() {
 	rs.LastUpdated = time.Now()
 }
 
+// CleanupStaleHistory iterates over entries and deletes stale entries from the map.
+// Uses range to iterate over the collection and calls delete() on entries
+// that meet the stale criteria (older than the given threshold).
+func CleanupStaleHistory(history *PickerHistory, threshold int64) {
+	if history == nil {
+		return
+	}
+
+	// Use range to iterate over the collection
+	for id, lastPicked := range history.LastPicked {
+		// Delete entries that meet the stale criteria
+		if lastPicked < threshold {
+			delete(history.Frequency, id)
+			delete(history.LastPicked, id)
+		}
+	}
+}
+
 
 // GetCell returns the state for a cell, creating it if needed
 func (ss *SpaceState) GetCell(cellID string) *CellState {
