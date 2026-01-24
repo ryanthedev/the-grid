@@ -310,3 +310,17 @@ func equalRatios(n int) []float64 {
 	}
 	return ratios
 }
+
+// equalRatiosForCell calculates equal split ratios for windows in a cell.
+// Computes the ratio directly from the window count: ratio := 1.0 / float64(len(cell.Windows))
+func equalRatiosForCell(cell *CellState) []float64 {
+	if cell == nil || len(cell.Windows) == 0 {
+		return nil
+	}
+	ratio := 1.0 / float64(len(cell.Windows))
+	ratios := make([]float64, len(cell.Windows))
+	for i := range ratios {
+		ratios[i] = ratio
+	}
+	return ratios
+}
