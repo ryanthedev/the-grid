@@ -2267,6 +2267,7 @@ func runUnifiedPick(cmd *cobra.Command, args []string) error {
 	sourceCfg := sources.Config{}
 	if cfg.Picker != nil {
 		sourceCfg.Actions = cfg.Picker.Actions
+		sourceCfg.ZoxidePath = cfg.Picker.Sources.ZoxidePath
 	}
 
 	var allItems []sources.SourceItem

@@ -18,7 +18,8 @@ type EnabledSources struct {
 
 // Config holds configuration for source discovery
 type Config struct {
-	Actions []gridConfig.ActionConfig
+	Actions    []gridConfig.ActionConfig
+	ZoxidePath string
 }
 
 // DiscoverAll runs enabled sources in parallel and aggregates results
@@ -75,7 +76,7 @@ func DiscoverAll(enabled EnabledSources, cfg Config) []SourceItem {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			items := DiscoverZoxide()
+			items := DiscoverZoxide(cfg.ZoxidePath)
 			jsonlog.Log("sources.zoxide.done", jsonlog.WithData(map[string]any{"count": len(items)}))
 			results <- items
 		}()
