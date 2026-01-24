@@ -37,7 +37,7 @@ import (
 	gridWindow "github.com/ryanthedev/grid-cli/internal/window"
 	"github.com/ryanthedev/grid-cli/internal/xdg"
 	"github.com/ryanthedev/grid-cli/internal/process"
-	"github.com/ryanthedev/grid-cli/internal/tmux"
+	"github.com/ryanthedev/grid-cli/internal/enrichers"
 	"gopkg.in/yaml.v3"
 )
 
@@ -1758,16 +1758,9 @@ type PickerResult struct {
 	Selected  *PickerItem `json:"selected,omitempty"`
 }
 
-// tmuxEnrichment holds tmux session info for a terminal window
-type tmuxEnrichment struct {
-	sessionName string
-	windowName  string
-	paneCommand string
-}
-
 // PickerContext holds additional data needed for stable ID generation
 type PickerContext struct {
-	TmuxInfo  map[int]*tmuxEnrichment
+	TmuxInfo  map[int]*enrichers.Result
 	BundleIDs map[int]string
 	Titles    map[int]string
 	PIDs      map[int]int
@@ -1913,21 +1906,18 @@ func getAllWindows(ctx context.Context, c *client.Client) ([]*models.Window, *mo
 func windowsToPickerItems(windows []*models.Window, state *models.State) ([]PickerItem, *PickerContext) {
 	items := make([]PickerItem, 0, len(windows))
 	pctx := &PickerContext{
-		TmuxInfo:  make(map[int]*tmuxEnrichment),
+		TmuxInfo:  make(map[int]*enrichers.Result),
 		BundleIDs: make(map[int]string),
 		Titles:    make(map[int]string),
 		PIDs:      make(map[int]int),
 	}
 
-	// Get tmux clients and cache for enriching terminal windows
-	tmuxClients, _ := tmux.GetClients()
-	tmuxCache, _ := tmux.LoadCache()
+	// Initialize enricher registry and refresh caches
+	registry := enrichers.NewRegistry()
+	registry.RefreshCaches()
 
 	// Refresh process tree once (single ps call instead of many pgrep calls)
 	process.RefreshProcessTree()
-
-	// Track which PIDs have already been enriched (multiple windows can share same PID)
-	enrichedPIDs := make(map[int]bool)
 
 	for _, w := range windows {
 		// Store PID for stable ID generation
@@ -1954,18 +1944,13 @@ func windowsToPickerItems(windows []*models.Window, state *models.State) ([]Pick
 		}
 		pctx.BundleIDs[w.ID] = bundleID
 
-		// Try to enrich terminal windows with tmux session info
-		// Only enrich first window per PID to avoid duplicates (e.g., multiple Ghostty tabs)
-		if tmux.IsTerminalApp(bundleID) && len(tmuxClients) > 0 && !enrichedPIDs[w.PID] {
-			if info := enrichWithTmux(w, tmuxCache, tmuxClients); info != nil {
-				title = info.SessionName
-				pctx.TmuxInfo[w.ID] = &tmuxEnrichment{
-					sessionName: info.SessionName,
-					windowName:  info.WindowName,
-					paneCommand: info.PaneCommand,
-				}
-				enrichedPIDs[w.PID] = true
+		// Try to enrich terminal windows
+		// Enrichers use cached data, so calling for each window is efficient
+		if enrichResult := registry.Enrich(bundleID, w.PID, title); enrichResult != nil {
+			if enrichResult.Title != "" {
+				title = enrichResult.Title
 			}
+			pctx.TmuxInfo[w.ID] = enrichResult
 		}
 
 		// Build searchable strings
@@ -1983,11 +1968,17 @@ func windowsToPickerItems(windows []*models.Window, state *models.State) ([]Pick
 		// Build subtitle and preview
 		subtitle := appName
 		preview := ""
-		if enrichment, ok := pctx.TmuxInfo[w.ID]; ok {
-			subtitle = fmt.Sprintf("%s:%s", enrichment.sessionName, enrichment.windowName)
-			preview = enrichment.paneCommand
-			// Add tmux info to searchable
-			searchable = append(searchable, enrichment.sessionName, enrichment.windowName)
+		if enrichResult, ok := pctx.TmuxInfo[w.ID]; ok {
+			if enrichResult.Subtitle != "" {
+				subtitle = enrichResult.Subtitle
+			}
+			// Add enriched info to searchable
+			if enrichResult.Title != "" {
+				searchable = append(searchable, enrichResult.Title)
+			}
+			if enrichResult.Subtitle != "" {
+				searchable = append(searchable, enrichResult.Subtitle)
+			}
 		}
 
 		item := PickerItem{
@@ -2002,39 +1993,10 @@ func windowsToPickerItems(windows []*models.Window, state *models.State) ([]Pick
 		items = append(items, item)
 	}
 
-	// Prune and save cache
-	if len(tmuxClients) > 0 {
-		validClientPIDs := make(map[int]bool)
-		for pid := range tmuxClients {
-			validClientPIDs[pid] = true
-		}
-		tmuxCache.Prune(validClientPIDs)
-		tmuxCache.Save()
-	}
+	// Cleanup enricher caches
+	registry.Cleanup()
 
 	return items, pctx
-}
-
-// enrichWithTmux attempts to find tmux session info for a terminal window.
-// Returns the TmuxClientInfo if found, nil otherwise.
-func enrichWithTmux(w *models.Window, cache *tmux.Cache, clients map[int]tmux.TmuxClientInfo) *tmux.TmuxClientInfo {
-	// Try cache first
-	if clientPID, found := cache.Lookup(w.PID); found {
-		if info, ok := clients[clientPID]; ok {
-			return &info
-		}
-	}
-
-	// Cache miss - search process tree (depth 4 to handle login->shell->bash->tmux)
-	descendants, _ := process.GetDescendantPIDs(w.PID, 4)
-	for _, pid := range descendants {
-		if info, ok := clients[pid]; ok {
-			cache.Store(w.PID, pid)
-			return &info
-		}
-	}
-
-	return nil
 }
 
 // normalizeTitle converts a title to a stable, URL-safe form
@@ -2063,18 +2025,19 @@ func hash4(s string) string {
 }
 
 // stableWindowID generates a stable identifier for a window that persists across restarts.
-// Tmux windows: tmux:{session}:{window}
-// Non-tmux: {bundleID}:{normalized_title}:{hash4}
-func stableWindowID(wid int, tmuxInfo *tmuxEnrichment, bundleID, title string, pid int) string {
-	// Tmux windows
-	if tmuxInfo != nil {
-		session := tmuxInfo.sessionName
-		window := tmuxInfo.windowName
-		if session != "" && window != "" {
-			return fmt.Sprintf("tmux:%s:%s", session, window)
+// Enriched windows use StableIDSuffix from enricher
+// Non-enriched: {bundleID}:{normalized_title}:{hash4}
+func stableWindowID(wid int, enrichResult *enrichers.Result, bundleID, title string, pid int) string {
+	// Enriched windows with stable ID suffix
+	if enrichResult != nil && enrichResult.StableIDSuffix != "" {
+		suffix := enrichResult.StableIDSuffix
+		// Add "tmux:" prefix for tmux-style IDs (session:window format)
+		// SSH IDs contain "@" so they get different handling
+		if !strings.Contains(suffix, "@") && strings.Contains(suffix, ":") {
+			return "tmux:" + suffix
 		}
-		// Fallback for empty session/window
-		return fmt.Sprintf("tmux:unknown:%d", pid)
+		// SSH or SSH+tmux IDs (contain @)
+		return "ssh:" + suffix
 	}
 
 	// Non-tmux with bundleID

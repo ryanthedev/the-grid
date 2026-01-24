@@ -499,6 +499,7 @@ actor StateManager: StateEventHandler {
         var role: String?
         var subrole: String?
         var parent: UInt32?
+        var title: String?
         var hasCloseButton: Bool = false
         var hasFullscreenButton: Bool = false
         var hasMinimizeButton: Bool = false
@@ -586,6 +587,13 @@ actor StateManager: StateEventHandler {
         var subroleValue: CFTypeRef?
         AXUIElementCopyAttributeValue(windowElement, kAXSubroleAttribute as CFString, &subroleValue)
         props.subrole = subroleValue as? String
+
+        // Get title from AX API
+        // This provides tab/document-specific titles for apps like Chrome
+        var titleValue: CFTypeRef?
+        if AXUIElementCopyAttributeValue(windowElement, kAXTitleAttribute as CFString, &titleValue) == .success {
+            props.title = titleValue as? String
+        }
 
         // Get parent window (if any)
         var parentValue: CFTypeRef?
@@ -1012,6 +1020,13 @@ var windows: [String: WindowState] = [:]
                 windowState.hasMinimizeButton = axProps.hasMinimizeButton
                 windowState.hasZoomButton = axProps.hasZoomButton
                 windowState.isModal = axProps.isModal
+
+                // Prefer AX title over CG title when available
+                // AX title contains tab-specific info (e.g., "GitHub - Google Chrome")
+                // CG title is often generic (e.g., "Google Chrome")
+                if let axTitle = axProps.title, !axTitle.isEmpty {
+                    windowState.title = axTitle
+                }
             }
 
             // Extract isHidden from kCGWindowIsOnscreen (phantom windows lack this key)
@@ -1231,6 +1246,12 @@ var windows: [String: WindowState] = [:]
             window.title = name
         }
 
+        // Get AX properties and prefer AX title if available
+        let axProps = getAXProperties(pid: window.pid, windowID: windowID)
+        if let axTitle = axProps.title, !axTitle.isEmpty {
+            window.title = axTitle
+        }
+
         // Recompute displayUUID and derive space from display
         let originalSpaces = window.spaces
         window.displayUUID = computeDisplayUUID(for: window)
@@ -1293,6 +1314,11 @@ var windows: [String: WindowState] = [:]
         window.hasZoomButton = axProps.hasZoomButton
         window.isModal = axProps.isModal
 
+        // Prefer AX title over CG title when available
+        if let axTitle = axProps.title, !axTitle.isEmpty {
+            window.title = axTitle
+        }
+
         // Compute displayUUID geometrically and derive space from display
         let originalSpaces = window.spaces
         window.displayUUID = computeDisplayUUID(for: window)
@@ -1349,6 +1375,11 @@ var windows: [String: WindowState] = [:]
         window.hasMinimizeButton = axProps.hasMinimizeButton
         window.hasZoomButton = axProps.hasZoomButton
         window.isModal = axProps.isModal
+
+        // Prefer AX title over CG title when available
+        if let axTitle = axProps.title, !axTitle.isEmpty {
+            window.title = axTitle
+        }
 
         // Compute displayUUID geometrically and derive space from display
         let originalSpaces = window.spaces

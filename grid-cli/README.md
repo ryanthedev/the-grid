@@ -117,6 +117,10 @@ thegrid pick window                    # Backwards compat - just windows
 - Frecency-based sorting (frequently used items appear first)
 - Hybrid icon support (SF Symbols + app icons)
 - Treats hyphens/underscores as spaces in search (e.g., "google-chrome" matches "google chrome")
+- Window title enrichment:
+  - SSH: Displays "user@host" with remote working directory/command
+  - Tmux: Displays session:window with pane commands
+  - Chrome: Displays page title with profile name as subtitle
 
 **Source Priority (for tie-breaking in search):**
 - Windows: 1000x (active work, highest priority)
@@ -224,6 +228,7 @@ grid-cli/
 │   ├── cell/                  # Cell window management
 │   ├── client/                # Server IPC client
 │   ├── config/                # Configuration loading
+│   ├── enrichers/             # Window context enrichment (SSH, tmux, Chrome profiles)
 │   ├── focus/                 # Focus navigation
 │   ├── layout/                # Grid engine and calculations
 │   ├── logging/               # Structured logging

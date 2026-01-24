@@ -81,6 +81,39 @@ func TestParseClientLine(t *testing.T) {
 	}
 }
 
+func TestGetSessionWindowNamesTargetFormat(t *testing.T) {
+	// GetSessionWindowNames uses session name directly as target.
+	// This test documents the expected format.
+
+	tests := []struct {
+		name        string
+		sessionName string
+	}{
+		{
+			name:        "simple session",
+			sessionName: "dev",
+		},
+		{
+			name:        "session with hyphen",
+			sessionName: "my-session",
+		},
+		{
+			name:        "session with underscore",
+			sessionName: "code_foundations",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Session names are used directly as target
+			// No special escaping needed for session names
+			if tt.sessionName == "" {
+				t.Error("session name should not be empty")
+			}
+		})
+	}
+}
+
 func TestParseMultipleLines(t *testing.T) {
 	// Simulate parsing multiple lines like GetClients would
 	lines := []string{

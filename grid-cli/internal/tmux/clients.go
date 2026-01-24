@@ -132,3 +132,23 @@ type parseError struct {
 func (e *parseError) Error() string {
 	return "tmux parse: " + e.msg
 }
+
+// GetSessionWindowNames returns all window names for a tmux session.
+// Returns empty slice (not error) if tmux is not running or session doesn't exist.
+func GetSessionWindowNames(sessionName string) []string {
+	tmuxPath := findTmux()
+	cmd := exec.Command(tmuxPath, "list-windows", "-t", sessionName, "-F", "#{window_name}")
+	out, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	var commands []string
+	for _, line := range lines {
+		if line = strings.TrimSpace(line); line != "" {
+			commands = append(commands, line)
+		}
+	}
+	return commands
+}
