@@ -87,8 +87,13 @@ func TestEnrichment_Format_ChromeOnly(t *testing.T) {
 		},
 	}
 	result := enrichment.Format()
-	if result.Title != "Work" {
-		t.Errorf("Title = %q, want %q", result.Title, "Work")
+	// Title should be empty - we preserve the original window title
+	if result.Title != "" {
+		t.Errorf("Title = %q, want empty (preserve original)", result.Title)
+	}
+	// Profile goes in subtitle
+	if result.Subtitle != "Work" {
+		t.Errorf("Subtitle = %q, want %q", result.Subtitle, "Work")
 	}
 	if result.StableIDSuffix != "chrome:Work" {
 		t.Errorf("StableIDSuffix = %q, want %q", result.StableIDSuffix, "chrome:Work")

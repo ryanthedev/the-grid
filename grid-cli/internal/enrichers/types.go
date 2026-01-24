@@ -125,7 +125,9 @@ func (e *Enrichment) Format() *Result {
 	}
 
 	if chromeOnly {
-		result.Title = e.Chrome.Profile
+		// Don't replace title - keep page title visible
+		// Put profile in subtitle instead
+		result.Subtitle = e.Chrome.Profile
 		result.StableIDSuffix = "chrome:" + e.Chrome.Profile
 	}
 
