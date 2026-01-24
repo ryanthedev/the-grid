@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 )
 
@@ -52,25 +53,22 @@ func (e *ChromeEnricher) Supports(bundleID string) bool {
 // Enrich detects Chrome profile and returns enrichment
 func (e *ChromeEnricher) Enrich(pid int, windowTitle string) *Enrichment {
 	// 1. Parse profile name from window title
-	matches := profilePattern.FindStringSubmatch(windowTitle)
-	if matches == nil {
+	indices := profilePattern.FindStringSubmatchIndex(windowTitle)
+	if indices == nil {
 		// No profile suffix = Default profile or non-profile window
 		return &Enrichment{
 			Chrome: &ChromeInfo{
-				Profile: "Default",
+				Profile:   "Default",
+				PageTitle: windowTitle,
 			},
 		}
 	}
-	profileName := matches[1]
 
-	// Empty profile name = Default
-	if profileName == "" {
-		return &Enrichment{
-			Chrome: &ChromeInfo{
-				Profile: "Default",
-			},
-		}
-	}
+	// Extract profile name (capture group 1)
+	profileName := windowTitle[indices[2]:indices[3]]
+
+	// Extract clean page title (everything before the match, trimmed)
+	pageTitle := strings.TrimSpace(windowTitle[:indices[0]])
 
 	// 2. Load Local State cache (once)
 	e.infoCacheOnce.Do(func() {
@@ -94,6 +92,7 @@ func (e *ChromeEnricher) Enrich(pid int, windowTitle string) *Enrichment {
 			Profile:    profileName,
 			ProfileDir: profileDir,
 			Email:      email,
+			PageTitle:  pageTitle,
 		},
 	}
 }

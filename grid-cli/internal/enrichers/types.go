@@ -31,6 +31,7 @@ type ChromeInfo struct {
 	Profile    string `json:"profile"`
 	ProfileDir string `json:"profile_dir,omitempty"`
 	Email      string `json:"email,omitempty"`
+	PageTitle  string `json:"page_title,omitempty"` // Clean title without browser/profile suffix
 }
 
 // Enricher interface for enrichment implementations
@@ -125,8 +126,10 @@ func (e *Enrichment) Format() *Result {
 	}
 
 	if chromeOnly {
-		// Don't replace title - keep page title visible
-		// Put profile in subtitle instead
+		// Use clean page title (without " - Browser - Profile" suffix)
+		if e.Chrome.PageTitle != "" {
+			result.Title = e.Chrome.PageTitle
+		}
 		result.Subtitle = e.Chrome.Profile
 		result.StableIDSuffix = "chrome:" + e.Chrome.Profile
 	}
