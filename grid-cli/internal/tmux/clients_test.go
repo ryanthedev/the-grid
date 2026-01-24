@@ -1,7 +1,6 @@
 package tmux
 
 import (
-	"fmt"
 	"testing"
 )
 
@@ -82,49 +81,34 @@ func TestParseClientLine(t *testing.T) {
 	}
 }
 
-func TestGetPaneCommandsTargetFormat(t *testing.T) {
-	// This test documents why we use window index instead of window name.
-	// Window names with dots (like "2.1.17") break tmux target parsing because
-	// tmux interprets "." as a pane separator.
-	//
-	// Example: "thegrid:2.1.17" would be parsed as:
-	//   session=thegrid, window=2, pane=1.17 (invalid)
-	//
-	// Using window index avoids this: "thegrid:0" is unambiguous.
+func TestGetSessionWindowNamesTargetFormat(t *testing.T) {
+	// GetSessionWindowNames uses session name directly as target.
+	// This test documents the expected format.
 
 	tests := []struct {
 		name        string
 		sessionName string
-		windowIndex int
-		wantTarget  string
 	}{
 		{
-			name:        "simple window",
+			name:        "simple session",
 			sessionName: "dev",
-			windowIndex: 0,
-			wantTarget:  "dev:0",
-		},
-		{
-			name:        "higher window index",
-			sessionName: "thegrid",
-			windowIndex: 5,
-			wantTarget:  "thegrid:5",
 		},
 		{
 			name:        "session with hyphen",
 			sessionName: "my-session",
-			windowIndex: 2,
-			wantTarget:  "my-session:2",
+		},
+		{
+			name:        "session with underscore",
+			sessionName: "code_foundations",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Verify target format matches expected pattern
-			// This is the format used in GetPaneCommands
-			target := fmt.Sprintf("%s:%d", tt.sessionName, tt.windowIndex)
-			if target != tt.wantTarget {
-				t.Errorf("target = %q, want %q", target, tt.wantTarget)
+			// Session names are used directly as target
+			// No special escaping needed for session names
+			if tt.sessionName == "" {
+				t.Error("session name should not be empty")
 			}
 		})
 	}

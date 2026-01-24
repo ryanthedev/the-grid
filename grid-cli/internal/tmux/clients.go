@@ -2,7 +2,6 @@
 package tmux
 
 import (
-	"fmt"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -134,14 +133,11 @@ func (e *parseError) Error() string {
 	return "tmux parse: " + e.msg
 }
 
-// GetPaneCommands returns all pane commands for a tmux window.
-// Uses window index instead of name to avoid issues with special characters in window names.
-// Returns empty slice (not error) if tmux is not running or window doesn't exist.
-func GetPaneCommands(sessionName string, windowIndex int) []string {
+// GetSessionWindowNames returns all window names for a tmux session.
+// Returns empty slice (not error) if tmux is not running or session doesn't exist.
+func GetSessionWindowNames(sessionName string) []string {
 	tmuxPath := findTmux()
-	// Use @index format to avoid issues with dots in window names
-	target := fmt.Sprintf("%s:%d", sessionName, windowIndex)
-	cmd := exec.Command(tmuxPath, "list-panes", "-t", target, "-F", "#{pane_current_command}")
+	cmd := exec.Command(tmuxPath, "list-windows", "-t", sessionName, "-F", "#{window_name}")
 	out, err := cmd.Output()
 	if err != nil {
 		return nil

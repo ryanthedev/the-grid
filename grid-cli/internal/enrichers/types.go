@@ -19,10 +19,10 @@ type SSHInfo struct {
 
 // TmuxInfo contains details about a tmux session
 type TmuxInfo struct {
-	SessionName  string   `json:"session_name"`
-	WindowName   string   `json:"window_name"`
-	PaneCommand  string   `json:"pane_command"`
-	PaneCommands []string `json:"pane_commands,omitempty"`
+	SessionName    string   `json:"session_name"`
+	WindowName     string   `json:"window_name"`
+	PaneCommand    string   `json:"pane_command"`
+	SessionWindows []string `json:"session_windows,omitempty"`
 }
 
 // Enricher interface for enrichment implementations
@@ -88,8 +88,8 @@ func (e *Enrichment) Format() *Result {
 	if tmuxOnly {
 		result.Title = e.Tmux.SessionName
 		result.Subtitle = e.Tmux.SessionName + ":" + e.Tmux.WindowName
-		if len(e.Tmux.PaneCommands) > 0 {
-			result.Subtitle += " [" + strings.Join(e.Tmux.PaneCommands, " | ") + "]"
+		if len(e.Tmux.SessionWindows) > 0 {
+			result.Subtitle += " [" + strings.Join(e.Tmux.SessionWindows, " | ") + "]"
 		} else if e.Tmux.PaneCommand != "" {
 			result.Subtitle += " [" + e.Tmux.PaneCommand + "]"
 		}
@@ -99,8 +99,8 @@ func (e *Enrichment) Format() *Result {
 	if sshAndTmux {
 		result.Title = e.SSH.User + "@" + e.SSH.Host
 		result.Subtitle = e.Tmux.SessionName + ":" + e.Tmux.WindowName
-		if len(e.Tmux.PaneCommands) > 0 {
-			result.Subtitle += " [" + strings.Join(e.Tmux.PaneCommands, " | ") + "]"
+		if len(e.Tmux.SessionWindows) > 0 {
+			result.Subtitle += " [" + strings.Join(e.Tmux.SessionWindows, " | ") + "]"
 		} else if e.Tmux.PaneCommand != "" {
 			result.Subtitle += " [" + e.Tmux.PaneCommand + "]"
 		}

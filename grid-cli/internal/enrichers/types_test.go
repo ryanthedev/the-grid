@@ -93,17 +93,17 @@ func TestEnrichment_Format_SSHAndTmux(t *testing.T) {
 	}
 }
 
-func TestEnrichment_Format_TmuxWithPaneCommands(t *testing.T) {
+func TestEnrichment_Format_TmuxWithSessionWindows(t *testing.T) {
 	e := &Enrichment{
 		Tmux: &TmuxInfo{
-			SessionName:  "dev",
-			WindowName:   "editor",
-			PaneCommands: []string{"nvim", "zsh", "htop"},
+			SessionName:    "dev",
+			WindowName:     "editor",
+			SessionWindows: []string{"editor", "shell", "logs"},
 		},
 	}
 	r := e.Format()
-	if r.Subtitle != "dev:editor [nvim | zsh | htop]" {
-		t.Errorf("Subtitle = %q, want %q", r.Subtitle, "dev:editor [nvim | zsh | htop]")
+	if r.Subtitle != "dev:editor [editor | shell | logs]" {
+		t.Errorf("Subtitle = %q, want %q", r.Subtitle, "dev:editor [editor | shell | logs]")
 	}
 }
 
