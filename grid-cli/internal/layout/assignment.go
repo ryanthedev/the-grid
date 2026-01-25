@@ -446,6 +446,21 @@ func assignByPosition(windows []Window, cellBounds map[string]types.Rect, result
 			}))
 		}
 	}
+
+	// Sort windows within each cell by z-order (frontmost first)
+	zOrderMap := make(map[uint32]int)
+	for _, w := range windows {
+		zOrderMap[w.ID] = w.ZOrder
+	}
+	for cellID := range result.Assignments {
+		windowIDs := result.Assignments[cellID]
+		if len(windowIDs) > 1 {
+			sort.Slice(windowIDs, func(i, j int) bool {
+				return zOrderMap[windowIDs[i]] < zOrderMap[windowIDs[j]]
+			})
+			result.Assignments[cellID] = windowIDs
+		}
+	}
 }
 
 // findLeastPopulatedCell returns the cell ID with fewest windows.
