@@ -123,6 +123,289 @@ func TestWindowInfoIsExcluded(t *testing.T) {
 	}
 }
 
+func TestParseWindowZOrder(t *testing.T) {
+	tests := []struct {
+		name     string
+		raw      map[string]interface{}
+		wantZOrder int
+	}{
+		{
+			name: "zOrder present",
+			raw: map[string]interface{}{
+				"metadata": map[string]interface{}{
+					"activeSpaceID":     3,
+					"focusedWindowID":   100,
+					"activeDisplayUUID": "test-display",
+				},
+				"displays": []interface{}{
+					map[string]interface{}{
+						"uuid":           "test-display",
+						"currentSpaceID": 3,
+						"isMain":         true,
+						"frame":          []interface{}{[]interface{}{0, 0}, []interface{}{1920, 1080}},
+						"visibleFrame":   []interface{}{[]interface{}{0, 25}, []interface{}{1920, 1055}},
+					},
+				},
+				"spaces": map[string]interface{}{
+					"3": map[string]interface{}{
+						"id":          3,
+						"displayUUID": "test-display",
+						"type":        "user",
+					},
+				},
+				"windows": map[string]interface{}{
+					"100": map[string]interface{}{
+						"id":      100,
+						"appName": "Chrome",
+						"title":   "Test",
+						"frame":   []interface{}{[]interface{}{0, 0}, []interface{}{100, 100}},
+						"level":   0,
+						"spaces":  []interface{}{3},
+						"role":    "AXWindow",
+						"subrole": "AXStandardWindow",
+						"zOrder":  5,
+					},
+				},
+			},
+			wantZOrder: 5,
+		},
+		{
+			name: "zOrder zero (frontmost)",
+			raw: map[string]interface{}{
+				"metadata": map[string]interface{}{
+					"activeSpaceID":     3,
+					"focusedWindowID":   100,
+					"activeDisplayUUID": "test-display",
+				},
+				"displays": []interface{}{
+					map[string]interface{}{
+						"uuid":           "test-display",
+						"currentSpaceID": 3,
+						"isMain":         true,
+						"frame":          []interface{}{[]interface{}{0, 0}, []interface{}{1920, 1080}},
+						"visibleFrame":   []interface{}{[]interface{}{0, 25}, []interface{}{1920, 1055}},
+					},
+				},
+				"spaces": map[string]interface{}{
+					"3": map[string]interface{}{
+						"id":          3,
+						"displayUUID": "test-display",
+						"type":        "user",
+					},
+				},
+				"windows": map[string]interface{}{
+					"100": map[string]interface{}{
+						"id":      100,
+						"appName": "Chrome",
+						"title":   "Test",
+						"frame":   []interface{}{[]interface{}{0, 0}, []interface{}{100, 100}},
+						"level":   0,
+						"spaces":  []interface{}{3},
+						"role":    "AXWindow",
+						"subrole": "AXStandardWindow",
+						"zOrder":  0,
+					},
+				},
+			},
+			wantZOrder: 0,
+		},
+		{
+			name: "zOrder missing defaults to 0",
+			raw: map[string]interface{}{
+				"metadata": map[string]interface{}{
+					"activeSpaceID":     3,
+					"focusedWindowID":   100,
+					"activeDisplayUUID": "test-display",
+				},
+				"displays": []interface{}{
+					map[string]interface{}{
+						"uuid":           "test-display",
+						"currentSpaceID": 3,
+						"isMain":         true,
+						"frame":          []interface{}{[]interface{}{0, 0}, []interface{}{1920, 1080}},
+						"visibleFrame":   []interface{}{[]interface{}{0, 25}, []interface{}{1920, 1055}},
+					},
+				},
+				"spaces": map[string]interface{}{
+					"3": map[string]interface{}{
+						"id":          3,
+						"displayUUID": "test-display",
+						"type":        "user",
+					},
+				},
+				"windows": map[string]interface{}{
+					"100": map[string]interface{}{
+						"id":      100,
+						"appName": "Chrome",
+						"title":   "Test",
+						"frame":   []interface{}{[]interface{}{0, 0}, []interface{}{100, 100}},
+						"level":   0,
+						"spaces":  []interface{}{3},
+						"role":    "AXWindow",
+						"subrole": "AXStandardWindow",
+						// zOrder intentionally missing
+					},
+				},
+			},
+			wantZOrder: 0,
+		},
+		{
+			name: "zOrder large value (off-screen)",
+			raw: map[string]interface{}{
+				"metadata": map[string]interface{}{
+					"activeSpaceID":     3,
+					"focusedWindowID":   100,
+					"activeDisplayUUID": "test-display",
+				},
+				"displays": []interface{}{
+					map[string]interface{}{
+						"uuid":           "test-display",
+						"currentSpaceID": 3,
+						"isMain":         true,
+						"frame":          []interface{}{[]interface{}{0, 0}, []interface{}{1920, 1080}},
+						"visibleFrame":   []interface{}{[]interface{}{0, 25}, []interface{}{1920, 1055}},
+					},
+				},
+				"spaces": map[string]interface{}{
+					"3": map[string]interface{}{
+						"id":          3,
+						"displayUUID": "test-display",
+						"type":        "user",
+					},
+				},
+				"windows": map[string]interface{}{
+					"100": map[string]interface{}{
+						"id":      100,
+						"appName": "Chrome",
+						"title":   "Test",
+						"frame":   []interface{}{[]interface{}{0, 0}, []interface{}{100, 100}},
+						"level":   0,
+						"spaces":  []interface{}{3},
+						"role":    "AXWindow",
+						"subrole": "AXStandardWindow",
+						"zOrder":  2147483647,
+					},
+				},
+			},
+			wantZOrder: 2147483647,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			snap, err := parseSnapshot(tt.raw)
+			if err != nil {
+				t.Fatalf("parseSnapshot failed: %v", err)
+			}
+
+			if len(snap.Windows) == 0 {
+				t.Fatal("no windows parsed")
+			}
+
+			var window *WindowInfo
+			for i := range snap.Windows {
+				if snap.Windows[i].ID == 100 {
+					window = &snap.Windows[i]
+					break
+				}
+			}
+
+			if window == nil {
+				t.Fatal("window 100 not found")
+			}
+
+			if window.ZOrder != tt.wantZOrder {
+				t.Errorf("ZOrder = %d, want %d", window.ZOrder, tt.wantZOrder)
+			}
+		})
+	}
+}
+
+func TestParseWindowZOrderMultiple(t *testing.T) {
+	raw := map[string]interface{}{
+		"metadata": map[string]interface{}{
+			"activeSpaceID":     3,
+			"focusedWindowID":   100,
+			"activeDisplayUUID": "test-display",
+		},
+		"displays": []interface{}{
+			map[string]interface{}{
+				"uuid":           "test-display",
+				"currentSpaceID": 3,
+				"isMain":         true,
+				"frame":          []interface{}{[]interface{}{0, 0}, []interface{}{1920, 1080}},
+				"visibleFrame":   []interface{}{[]interface{}{0, 25}, []interface{}{1920, 1055}},
+			},
+		},
+		"spaces": map[string]interface{}{
+			"3": map[string]interface{}{
+				"id":          3,
+				"displayUUID": "test-display",
+				"type":        "user",
+			},
+		},
+		"windows": map[string]interface{}{
+			"100": map[string]interface{}{
+				"id":      100,
+				"appName": "Chrome",
+				"title":   "Frontmost",
+				"frame":   []interface{}{[]interface{}{0, 0}, []interface{}{100, 100}},
+				"level":   0,
+				"spaces":  []interface{}{3},
+				"role":    "AXWindow",
+				"subrole": "AXStandardWindow",
+				"zOrder":  0,
+			},
+			"101": map[string]interface{}{
+				"id":      101,
+				"appName": "Safari",
+				"title":   "Middle",
+				"frame":   []interface{}{[]interface{}{50, 50}, []interface{}{100, 100}},
+				"level":   0,
+				"spaces":  []interface{}{3},
+				"role":    "AXWindow",
+				"subrole": "AXStandardWindow",
+				"zOrder":  1,
+			},
+			"102": map[string]interface{}{
+				"id":      102,
+				"appName": "Code",
+				"title":   "Back",
+				"frame":   []interface{}{[]interface{}{100, 100}, []interface{}{100, 100}},
+				"level":   0,
+				"spaces":  []interface{}{3},
+				"role":    "AXWindow",
+				"subrole": "AXStandardWindow",
+				"zOrder":  2,
+			},
+		},
+	}
+
+	snap, err := parseSnapshot(raw)
+	if err != nil {
+		t.Fatalf("parseSnapshot failed: %v", err)
+	}
+
+	if len(snap.Windows) != 3 {
+		t.Fatalf("expected 3 windows, got %d", len(snap.Windows))
+	}
+
+	zOrders := make(map[uint32]int)
+	for _, w := range snap.Windows {
+		zOrders[w.ID] = w.ZOrder
+	}
+
+	if zOrders[100] != 0 {
+		t.Errorf("window 100 zOrder = %d, want 0", zOrders[100])
+	}
+	if zOrders[101] != 1 {
+		t.Errorf("window 101 zOrder = %d, want 1", zOrders[101])
+	}
+	if zOrders[102] != 2 {
+		t.Errorf("window 102 zOrder = %d, want 2", zOrders[102])
+	}
+}
+
 func TestSnapshotFilterTileable(t *testing.T) {
 	// Windows need valid frames (>= MinTileableDimension) to be tileable
 	validFrame := types.Rect{X: 0, Y: 0, Width: 800, Height: 600}

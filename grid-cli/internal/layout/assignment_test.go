@@ -425,3 +425,173 @@ func TestAssignmentResult_InitializedMaps(t *testing.T) {
 		}
 	}
 }
+
+func TestAssignByPosition_ZOrderSorting(t *testing.T) {
+	// Create windows with different z-orders all overlapping the same cell
+	windows := []Window{
+		{ID: 1, ZOrder: 2, Frame: types.Rect{X: 0, Y: 0, Width: 400, Height: 400}},   // Back
+		{ID: 2, ZOrder: 0, Frame: types.Rect{X: 0, Y: 0, Width: 400, Height: 400}},   // Frontmost
+		{ID: 3, ZOrder: 1, Frame: types.Rect{X: 0, Y: 0, Width: 400, Height: 400}},   // Middle
+	}
+	layout := &types.Layout{
+		Cells: []types.Cell{
+			{ID: "main"},
+		},
+	}
+	cellBounds := map[string]types.Rect{
+		"main": {X: 0, Y: 0, Width: 500, Height: 500},
+	}
+
+	result := AssignWindows(windows, layout, cellBounds, nil, nil, types.AssignPosition)
+
+	// All windows should be in main cell
+	if len(result.Assignments["main"]) != 3 {
+		t.Fatalf("expected 3 windows in main cell, got %d", len(result.Assignments["main"]))
+	}
+
+	// Windows should be sorted by z-order ascending (frontmost first)
+	expected := []uint32{2, 3, 1} // zOrder 0, 1, 2
+	for i, wid := range expected {
+		if result.Assignments["main"][i] != wid {
+			t.Errorf("position %d: expected window %d, got %d", i, wid, result.Assignments["main"][i])
+		}
+	}
+}
+
+func TestAssignByPosition_ZOrderSortingMultipleCells(t *testing.T) {
+	// Windows in different cells, each cell should be sorted independently
+	windows := []Window{
+		// Left cell windows (z-order: 2, 0)
+		{ID: 1, ZOrder: 2, Frame: types.Rect{X: 0, Y: 0, Width: 300, Height: 400}},
+		{ID: 2, ZOrder: 0, Frame: types.Rect{X: 0, Y: 0, Width: 300, Height: 400}},
+		// Right cell windows (z-order: 3, 1)
+		{ID: 3, ZOrder: 3, Frame: types.Rect{X: 500, Y: 0, Width: 300, Height: 400}},
+		{ID: 4, ZOrder: 1, Frame: types.Rect{X: 500, Y: 0, Width: 300, Height: 400}},
+	}
+	layout := &types.Layout{
+		Cells: []types.Cell{
+			{ID: "left"}, {ID: "right"},
+		},
+	}
+	cellBounds := map[string]types.Rect{
+		"left":  {X: 0, Y: 0, Width: 400, Height: 500},
+		"right": {X: 400, Y: 0, Width: 400, Height: 500},
+	}
+
+	result := AssignWindows(windows, layout, cellBounds, nil, nil, types.AssignPosition)
+
+	// Left cell: windows 1 and 2, sorted by z-order -> [2, 1]
+	if len(result.Assignments["left"]) != 2 {
+		t.Fatalf("expected 2 windows in left cell, got %d", len(result.Assignments["left"]))
+	}
+	if result.Assignments["left"][0] != 2 || result.Assignments["left"][1] != 1 {
+		t.Errorf("left cell: expected [2, 1], got %v", result.Assignments["left"])
+	}
+
+	// Right cell: windows 3 and 4, sorted by z-order -> [4, 3]
+	if len(result.Assignments["right"]) != 2 {
+		t.Fatalf("expected 2 windows in right cell, got %d", len(result.Assignments["right"]))
+	}
+	if result.Assignments["right"][0] != 4 || result.Assignments["right"][1] != 3 {
+		t.Errorf("right cell: expected [4, 3], got %v", result.Assignments["right"])
+	}
+}
+
+func TestAssignByPosition_ZOrderSingleWindow(t *testing.T) {
+	// Single window in cell - no sorting needed
+	windows := []Window{
+		{ID: 1, ZOrder: 5, Frame: types.Rect{X: 0, Y: 0, Width: 400, Height: 400}},
+	}
+	layout := &types.Layout{
+		Cells: []types.Cell{
+			{ID: "main"},
+		},
+	}
+	cellBounds := map[string]types.Rect{
+		"main": {X: 0, Y: 0, Width: 500, Height: 500},
+	}
+
+	result := AssignWindows(windows, layout, cellBounds, nil, nil, types.AssignPosition)
+
+	if len(result.Assignments["main"]) != 1 {
+		t.Fatalf("expected 1 window in main cell, got %d", len(result.Assignments["main"]))
+	}
+	if result.Assignments["main"][0] != 1 {
+		t.Errorf("expected window 1, got %d", result.Assignments["main"][0])
+	}
+}
+
+func TestAssignByPosition_ZOrderEmptyCell(t *testing.T) {
+	// No windows - empty cells should not cause errors
+	layout := &types.Layout{
+		Cells: []types.Cell{
+			{ID: "main"},
+		},
+	}
+	cellBounds := map[string]types.Rect{
+		"main": {X: 0, Y: 0, Width: 500, Height: 500},
+	}
+
+	result := AssignWindows(nil, layout, cellBounds, nil, nil, types.AssignPosition)
+
+	if result.Assignments["main"] == nil {
+		t.Error("cell should have initialized slice, not nil")
+	}
+	if len(result.Assignments["main"]) != 0 {
+		t.Errorf("expected 0 windows, got %d", len(result.Assignments["main"]))
+	}
+}
+
+func TestAssignByPosition_ZOrderOffScreenWindows(t *testing.T) {
+	// Off-screen windows have very high z-order (Int32.max), should sort to end
+	windows := []Window{
+		{ID: 1, ZOrder: 2147483647, Frame: types.Rect{X: 0, Y: 0, Width: 400, Height: 400}}, // Off-screen
+		{ID: 2, ZOrder: 0, Frame: types.Rect{X: 0, Y: 0, Width: 400, Height: 400}},          // Frontmost
+		{ID: 3, ZOrder: 1, Frame: types.Rect{X: 0, Y: 0, Width: 400, Height: 400}},          // Second
+	}
+	layout := &types.Layout{
+		Cells: []types.Cell{
+			{ID: "main"},
+		},
+	}
+	cellBounds := map[string]types.Rect{
+		"main": {X: 0, Y: 0, Width: 500, Height: 500},
+	}
+
+	result := AssignWindows(windows, layout, cellBounds, nil, nil, types.AssignPosition)
+
+	// Windows should be sorted: frontmost (0), second (1), off-screen (max)
+	expected := []uint32{2, 3, 1}
+	if len(result.Assignments["main"]) != 3 {
+		t.Fatalf("expected 3 windows, got %d", len(result.Assignments["main"]))
+	}
+	for i, wid := range expected {
+		if result.Assignments["main"][i] != wid {
+			t.Errorf("position %d: expected window %d, got %d", i, wid, result.Assignments["main"][i])
+		}
+	}
+}
+
+func TestAssignByPosition_ZOrderTiedValues(t *testing.T) {
+	// Windows with same z-order - should maintain stable sort
+	windows := []Window{
+		{ID: 1, ZOrder: 0, Frame: types.Rect{X: 0, Y: 0, Width: 400, Height: 400}},
+		{ID: 2, ZOrder: 0, Frame: types.Rect{X: 0, Y: 0, Width: 400, Height: 400}},
+		{ID: 3, ZOrder: 0, Frame: types.Rect{X: 0, Y: 0, Width: 400, Height: 400}},
+	}
+	layout := &types.Layout{
+		Cells: []types.Cell{
+			{ID: "main"},
+		},
+	}
+	cellBounds := map[string]types.Rect{
+		"main": {X: 0, Y: 0, Width: 500, Height: 500},
+	}
+
+	result := AssignWindows(windows, layout, cellBounds, nil, nil, types.AssignPosition)
+
+	// All windows should be present
+	if len(result.Assignments["main"]) != 3 {
+		t.Fatalf("expected 3 windows, got %d", len(result.Assignments["main"]))
+	}
+}
