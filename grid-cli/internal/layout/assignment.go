@@ -21,6 +21,7 @@ type Window struct {
 	IsMinimized bool
 	IsHidden    bool
 	Level       int // Window level (0 = normal, higher = floating/overlay)
+	ZOrder      int // Z-order index for stacking (0 = frontmost)
 
 	// AX properties for floating/popup detection
 	Role              string // AXRole (e.g., "AXWindow")

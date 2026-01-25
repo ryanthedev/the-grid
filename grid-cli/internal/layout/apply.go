@@ -309,6 +309,7 @@ func convertWindows(windows []server.WindowInfo) []Window {
 			IsMinimized:         w.IsMinimized,
 			IsHidden:            w.IsHidden,
 			Level:               w.Level,
+			ZOrder:              w.ZOrder,
 			Role:                w.Role,
 			Subrole:             w.Subrole,
 			HasCloseButton:      w.HasCloseButton,
