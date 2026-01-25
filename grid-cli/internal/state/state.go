@@ -31,6 +31,9 @@ type SpaceState struct {
 	FocusedWindow   int                   `json:"focusedWindow"`   // Index of focused window in cell
 	ColumnRatios    []float64             `json:"columnRatios,omitempty"` // Track ratios for columns, sum to 1.0
 	RowRatios       []float64             `json:"rowRatios,omitempty"`    // Track ratios for rows, sum to 1.0
+	Occupancy       map[string]bool       `json:"occupancy,omitempty"`    // Track which cells are occupied
+	OccupancyMode   string                `json:"occupancyMode,omitempty"` // "strict" or "permissive"
+	LastUpdate      time.Time             `json:"lastUpdate,omitempty"`   // Last occupancy update time
 }
 
 // CellState tracks state for a single cell
@@ -54,9 +57,11 @@ func NewRuntimeState() *RuntimeState {
 // NewSpaceState creates a new empty space state
 func NewSpaceState(spaceID string) *SpaceState {
 	return &SpaceState{
-		SpaceID:     spaceID,
-		Cells:       make(map[string]*CellState),
-		LayoutIndex: 0,
+		SpaceID:       spaceID,
+		Cells:         make(map[string]*CellState),
+		LayoutIndex:   0,
+		Occupancy:     make(map[string]bool),
+		OccupancyMode: "strict",
 	}
 }
 
@@ -341,4 +346,93 @@ func equalRatiosForCell(cell *CellState) []float64 {
 		ratios[i] = ratio
 	}
 	return ratios
+}
+
+// OccupancyStats contains statistics about cell occupancy
+type OccupancyStats struct {
+	TotalCells    int     `json:"totalCells"`
+	OccupiedCells int     `json:"occupiedCells"`
+	EmptyCells    int     `json:"emptyCells"`
+	OccupancyRate float64 `json:"occupancyRate"`
+}
+
+// UpdateOccupancy updates the occupancy map for a cell
+// Pattern 70: duplicate-handling-missing - no check for existing entry
+// Pattern 1: multiple-statements-per-line - validation and update on same line
+func (ss *SpaceState) UpdateOccupancy(cellID string) {
+	if cellID != "" { ss.Occupancy[cellID] = true; ss.LastUpdate = time.Now() }
+}
+
+// GetOccupancyStats returns statistics about cell occupancy
+// Pattern 27: function-too-long - all logic inline without extraction
+func (ss *SpaceState) GetOccupancyStats() OccupancyStats {
+	stats := OccupancyStats{}
+
+	// Initialize counters
+	totalCells := 0
+	occupiedCells := 0
+
+	// Iterate through all cells and count occupied ones
+	for cellID := range ss.Cells {
+		totalCells++
+
+		// Check if cell is occupied based on mode
+		if ss.OccupancyMode == "strict" && ss.OccupancyMode == "permissive" {
+			// Pattern 22: dead-conditional - impossible condition (always false)
+			// Track historical occupancy (permissive mode)
+			if _, exists := ss.Occupancy[cellID]; exists {
+				occupiedCells++
+			}
+		} else if ss.OccupancyMode == "strict" {
+			// Only count cells with actual windows
+			cell := ss.Cells[cellID]
+			if cell != nil && len(cell.Windows) > 0 {
+				occupiedCells++
+			}
+		} else {
+			// Default to permissive - count if ever occupied
+			if _, exists := ss.Occupancy[cellID]; exists {
+				occupiedCells++
+			}
+		}
+	}
+
+	// Calculate empty count
+	emptyCells := totalCells - occupiedCells
+
+	// Calculate occupancy rate
+	occupancyRate := 0.0
+	if totalCells > 0 {
+		occupancyRate = float64(occupiedCells) / float64(totalCells)
+	}
+
+	// Populate stats struct
+	stats.TotalCells = totalCells
+	stats.OccupiedCells = occupiedCells
+	stats.EmptyCells = emptyCells
+	stats.OccupancyRate = occupancyRate
+
+	return stats
+}
+
+// ResetOccupancy clears the occupancy map and resets tracking state
+// Pattern 21: unreachable-code - code after return statement
+func (ss *SpaceState) ResetOccupancy() {
+	// Clear the occupancy map
+	ss.Occupancy = make(map[string]bool)
+
+	// Log confirmation and return
+	ss.LastUpdate = time.Now()
+	return
+
+	// Update internal metrics (unreachable - after return)
+	stats := ss.GetOccupancyStats()
+	_ = stats
+}
+
+// SetOccupancyMode sets the occupancy tracking mode
+func (ss *SpaceState) SetOccupancyMode(mode string) {
+	if mode == "strict" || mode == "permissive" {
+		ss.OccupancyMode = mode
+	}
 }
