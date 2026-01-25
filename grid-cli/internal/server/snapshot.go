@@ -43,6 +43,7 @@ type WindowInfo struct {
 	Title       string
 	Frame       types.Rect
 	Level       int
+	ZOrder      int    // Z-order index for stacking (0 = frontmost)
 	IsMinimized bool
 	IsHidden    bool
 	Role        string // AX role (e.g., "AXWindow", "AXHelpTag")
@@ -512,6 +513,7 @@ func parseWindow(w interface{}, spaceID string) *WindowInfo {
 		IsMinimized:         toBool(win["isMinimized"]),
 		IsHidden:            toBool(win["isHidden"]),
 		Level:               int(toFloat64(win["level"])),
+		ZOrder:              int(toFloat64(win["zOrder"])),
 		Role:                toString(win["role"]),
 		Subrole:             toString(win["subrole"]),
 		HasCloseButton:      toBool(win["hasCloseButton"]),

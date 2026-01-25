@@ -21,6 +21,7 @@ type Window struct {
 	IsMinimized bool
 	IsHidden    bool
 	Level       int // Window level (0 = normal, higher = floating/overlay)
+	ZOrder      int // Z-order index for stacking (0 = frontmost)
 
 	// AX properties for floating/popup detection
 	Role              string // AXRole (e.g., "AXWindow")
@@ -443,6 +444,21 @@ func assignByPosition(windows []Window, cellBounds map[string]types.Rect, result
 				"wid":  w.ID,
 				"cell": cellID,
 			}))
+		}
+	}
+
+	// Sort windows within each cell by z-order (frontmost first)
+	zOrderMap := make(map[uint32]int)
+	for _, w := range windows {
+		zOrderMap[w.ID] = w.ZOrder
+	}
+	for cellID := range result.Assignments {
+		windowIDs := result.Assignments[cellID]
+		if len(windowIDs) > 1 {
+			sort.Slice(windowIDs, func(i, j int) bool {
+				return zOrderMap[windowIDs[i]] < zOrderMap[windowIDs[j]]
+			})
+			result.Assignments[cellID] = windowIDs
 		}
 	}
 }
