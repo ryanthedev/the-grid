@@ -963,6 +963,21 @@ actor StateManager: StateEventHandler {
             jlog("warn.win", msg: "failed to get window list")
             return
         }
+
+        // Build z-order map from on-screen windows
+        var zOrderMap: [UInt32: Int32] = [:]
+        let onScreenOptions: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+        if let onScreenList = CGWindowListCopyWindowInfo(onScreenOptions, kCGNullWindowID) as? [[String: Any]] {
+            for (index, windowInfo) in onScreenList.enumerated() {
+                if let windowID = windowInfo[kCGWindowNumber as String] as? UInt32 {
+                    zOrderMap[windowID] = Int32(index)
+                }
+            }
+            jlog("zorder.map", data: ["count": zOrderMap.count])
+        } else {
+            jlog("warn.zorder", msg: "failed to get on-screen window list")
+        }
+
 var windows: [String: WindowState] = [:]
 
         // Process each window from CGWindowList
@@ -1066,6 +1081,9 @@ var windows: [String: WindowState] = [:]
             let originalSpaces = windowState.spaces
             windowState.displayUUID = computeDisplayUUID(for: windowState)
             deriveSpaceFromDisplay(for: &windowState, originalSpaces: originalSpaces)
+
+            // Populate zOrder from map (or leave as Int32.max if not on screen)
+            windowState.zOrder = zOrderMap[windowID] ?? Int32.max
 
             // Store window state
             windows[String(windowID)] = windowState

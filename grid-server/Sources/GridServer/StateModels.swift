@@ -200,6 +200,10 @@ struct WindowState: Codable {
     // Geometrically computed display UUID (based on window frame center point)
     var displayUUID: String?
 
+    // Visual stacking order (0 = frontmost on-screen)
+    // Int32.max for windows not currently on-screen
+    var zOrder: Int32 = Int32.max
+
     enum CodingKeys: String, CodingKey {
         case id
         case frame
@@ -224,6 +228,7 @@ struct WindowState: Codable {
         case isModal
         case lastUpdated
         case displayUUID
+        case zOrder
     }
 
     init(id: UInt32) {
@@ -250,6 +255,7 @@ struct WindowState: Codable {
         self.isModal = false
         self.lastUpdated = Date()
         self.displayUUID = nil
+        self.zOrder = Int32.max
     }
 }
 
