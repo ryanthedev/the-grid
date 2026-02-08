@@ -361,13 +361,6 @@ class TerminalWindow: NSWindow {
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self = self, self.isKeyWindow else { return event }
 
-            // Escape hides the window
-            if event.keyCode == 53 {
-                tlog("term.key", msg: "escape")
-                self.toggle()
-                return nil
-            }
-
             // Shift+Enter sends ESC CR (matches Ghostty keybind for Claude CLI multiline)
             if event.modifierFlags.contains(.shift) && event.keyCode == 0x24 {
                 tlog("term.key", msg: "shift+enter")
