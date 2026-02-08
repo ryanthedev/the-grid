@@ -16,13 +16,18 @@ let package = Package(
         .executable(
             name: "grid-picker",
             targets: ["GridPicker"]
+        ),
+        .executable(
+            name: "grid-terminal",
+            targets: ["GridTerminal"]
         )
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.3.0"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.5.0"),
         .package(url: "https://github.com/jpsim/Yams.git", from: "5.0.0"),
-        .package(url: "https://github.com/open-telemetry/opentelemetry-swift-core.git", from: "2.3.0")
+        .package(url: "https://github.com/open-telemetry/opentelemetry-swift-core.git", from: "2.3.0"),
+        .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", from: "1.2.0")
     ],
     targets: [
         .systemLibrary(
@@ -52,6 +57,11 @@ let package = Package(
             name: "GridPicker",
             dependencies: [],
             path: "Sources/GridPicker"
+        ),
+        .executableTarget(
+            name: "GridTerminal",
+            dependencies: [.product(name: "SwiftTerm", package: "SwiftTerm")],
+            path: "Sources/GridTerminal"
         ),
         .testTarget(
             name: "GridServerTests",
