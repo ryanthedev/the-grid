@@ -256,8 +256,9 @@ dev: server cli picker terminal
 
 # Build and restart thegrid service
 run: dev install-dev
-	@echo "Killing any stray grid-server processes..."
+	@echo "Killing any stray grid-server and grid-terminal processes..."
 	@pkill -9 -f grid-server 2>/dev/null || true
+	@pkill -9 -f grid-terminal 2>/dev/null || true
 	@sleep 0.5
 	@echo "Clearing state, logs, and config cache..."
 	@rm -f ~/.local/state/thegrid/*.json

@@ -291,6 +291,7 @@ class TerminalWindow: NSWindow {
     private(set) var terminalView: LocalProcessTerminalView!
     private let tmuxPath: String
     private var theme: GhosttyTheme?
+    private var previousApp: NSRunningApplication?
 
     init(tmuxPath: String) {
         self.tmuxPath = tmuxPath
@@ -486,11 +487,33 @@ class TerminalWindow: NSWindow {
         if isVisible {
             tlog("term.hide")
             orderOut(nil)
+            previousApp?.activate()
+            previousApp = nil
         } else {
+            previousApp = NSWorkspace.shared.frontmostApplication
+            moveToActiveScreen()
             tlog("term.show")
             makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
         }
+    }
+
+    private func moveToActiveScreen() {
+        guard let targetScreen = NSScreen.screens.first(where: {
+            NSMouseInRect(NSEvent.mouseLocation, $0.frame, false)
+        }) ?? NSScreen.main else { return }
+
+        // Already on this screen — keep position
+        if let currentScreen = screen, currentScreen == targetScreen { return }
+
+        // Center on the target screen, preserving current size
+        let winSize = frame.size
+        let screenFrame = targetScreen.frame
+        let origin = NSPoint(
+            x: screenFrame.midX - winSize.width / 2,
+            y: screenFrame.midY - winSize.height / 2
+        )
+        setFrameOrigin(origin)
     }
 
     func respawnTmux() {

@@ -42,6 +42,13 @@ struct GridServerCommand: ParsableCommand {
         // Initialize OpenTelemetry tracing
         Tracing.initialize()
 
+        // Kill any stale grid-terminal from previous server session
+        let killTask = Process()
+        killTask.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
+        killTask.arguments = ["-9", "-f", "grid-terminal"]
+        try? killTask.run()
+        killTask.waitUntilExit()
+
         // Log server start
         jlog("srv.start", data: ["ver": GridServerVersion, "commit": GridServerCommit, "socket": socketPath])
 
