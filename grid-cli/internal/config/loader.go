@@ -36,6 +36,7 @@ func loadWithXDG() (*Config, error) {
 				// Cache is corrupt or schema changed - rebuild
 				jsonlog.Log("cfg.cache.miss", jsonlog.WithData(map[string]any{"reason": "validation_failed"}))
 			} else {
+				cfg.ExpandPaths()
 				return cfg, nil
 			}
 		} else {
@@ -97,6 +98,8 @@ func loadWithXDG() (*Config, error) {
 		return nil, fmt.Errorf("invalid config after merge: %w", err)
 	}
 
+	cfg.ExpandPaths()
+
 	return cfg, nil
 }
 
@@ -115,6 +118,8 @@ func loadSingleFile(path string) (*Config, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid config: %w", err)
 	}
+
+	cfg.ExpandPaths()
 
 	return &cfg, nil
 }

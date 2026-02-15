@@ -15,6 +15,7 @@ import (
 type Options struct {
 	Duration  int          // seconds to record
 	Output    string       // output file path (empty = auto)
+	OutputDir string       // default output directory (used when Output is empty)
 	Format    string       // gif, mp4, webm, mov
 	FPS       int          // 0 = auto (10 for gif, 30 for video)
 	Width     int          // max output width (0 = no scaling)
@@ -57,9 +58,14 @@ func (o *Options) EffectiveFPS() int {
 }
 
 // GenerateOutputPath creates an automatic output filename.
-func GenerateOutputPath(label, format string) string {
+// If dir is non-empty, the file is placed in that directory.
+func GenerateOutputPath(dir, label, format string) string {
 	ts := time.Now().Format("20060102-150405")
-	return fmt.Sprintf("recording-%s-%s.%s", label, ts, format)
+	name := fmt.Sprintf("recording-%s-%s.%s", label, ts, format)
+	if dir != "" {
+		return filepath.Join(dir, name)
+	}
+	return name
 }
 
 // Record orchestrates the full capture pipeline.
@@ -75,7 +81,7 @@ func Record(ctx context.Context, resolved *ResolvedTarget, opts Options) (*Resul
 	// Determine output path
 	outPath := opts.Output
 	if outPath == "" {
-		outPath = GenerateOutputPath(resolved.Label, opts.Format)
+		outPath = GenerateOutputPath(opts.OutputDir, resolved.Label, opts.Format)
 	}
 
 	// Check ffmpeg requirement

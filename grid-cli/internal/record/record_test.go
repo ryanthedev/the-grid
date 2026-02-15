@@ -39,14 +39,13 @@ func TestParseTarget(t *testing.T) {
 }
 
 func TestGenerateOutputPath(t *testing.T) {
-	path := GenerateOutputPath("cell-A", "gif")
+	path := GenerateOutputPath("", "cell-A", "gif")
 	if path == "" {
 		t.Fatal("expected non-empty path")
 	}
 	if len(path) < len("recording-cell-A-.gif") {
 		t.Errorf("path too short: %s", path)
 	}
-	// Should contain label and format
 	if !contains(path, "cell-A") {
 		t.Errorf("path missing label: %s", path)
 	}
@@ -54,9 +53,18 @@ func TestGenerateOutputPath(t *testing.T) {
 		t.Errorf("path missing format extension: %s", path)
 	}
 
-	mp4 := GenerateOutputPath("window-123", "mp4")
+	mp4 := GenerateOutputPath("", "window-123", "mp4")
 	if !contains(mp4, ".mp4") {
 		t.Errorf("mp4 path missing extension: %s", mp4)
+	}
+
+	// With output directory
+	withDir := GenerateOutputPath("/tmp/recordings", "cell-A", "gif")
+	if !contains(withDir, "/tmp/recordings/") {
+		t.Errorf("path missing dir prefix: %s", withDir)
+	}
+	if !contains(withDir, "cell-A") {
+		t.Errorf("path missing label: %s", withDir)
 	}
 }
 

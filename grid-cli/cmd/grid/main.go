@@ -4123,9 +4123,17 @@ Examples:
 			infoColor.Println("Recording...")
 		}
 
+		recordingDir := cfg.Settings.Recording.OutputDir
+		if recordingDir != "" {
+			if err := os.MkdirAll(recordingDir, 0o755); err != nil {
+				return fmt.Errorf("failed to create recording output directory: %w", err)
+			}
+		}
+
 		opts := gridRecord.Options{
 			Duration:  duration,
 			Output:    outputPath,
+			OutputDir: recordingDir,
 			Format:    format,
 			FPS:       fps,
 			Width:     width,

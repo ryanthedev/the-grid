@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 
@@ -37,6 +38,8 @@ func LoadConfigFromBytes(data []byte, format string) (*Config, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid config: %w", err)
 	}
+
+	cfg.ExpandPaths()
 
 	return &cfg, nil
 }
@@ -296,6 +299,47 @@ func containsString(slice []string, s string) bool {
 		}
 	}
 	return false
+}
+
+// ExpandTilde expands ~ and ~/ in a path to the user's home directory.
+// Handles:
+//   - "~" -> home directory
+//   - "~/foo" -> home directory + "/foo"
+//   - absolute paths -> unchanged
+//   - empty string -> unchanged
+//   - relative paths -> unchanged
+func ExpandTilde(path string) string {
+	if path == "" {
+		return path
+	}
+
+	if path == "~" {
+		if home, err := os.UserHomeDir(); err == nil {
+			return home
+		}
+		return path
+	}
+
+	if strings.HasPrefix(path, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, path[2:])
+		}
+		return path
+	}
+
+	return path
+}
+
+// ExpandPaths expands tilde in all path fields of the config.
+// This should be called after config validation.
+func (c *Config) ExpandPaths() {
+	c.Settings.PickerPath = ExpandTilde(c.Settings.PickerPath)
+	c.Settings.Recording.OutputDir = ExpandTilde(c.Settings.Recording.OutputDir)
+
+	if c.Picker != nil {
+		c.Picker.Sources.ZoxidePath = ExpandTilde(c.Picker.Sources.ZoxidePath)
+		c.Picker.Sources.Chrome.StateFile = ExpandTilde(c.Picker.Sources.Chrome.StateFile)
+	}
 }
 
 // GetDisplayOffset returns offset for a display (checks UUID first, then name).
