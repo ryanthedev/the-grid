@@ -17,6 +17,15 @@
 
 import AppKit
 
+// MARK: - Daemon Mode
+
+/// Whether running as persistent daemon (socket mode) vs one-shot (stdin mode)
+var isDaemonMode = false
+
+/// Socket and PID file paths for daemon mode
+let pickerSocketPath = NSString("~/.local/state/thegrid/grid-picker.sock").expandingTildeInPath
+let pickerPIDPath = NSString("~/.local/state/thegrid/grid-picker.pid").expandingTildeInPath
+
 // MARK: - Data Models
 
 /// A single item that can be displayed and selected in the picker
@@ -751,6 +760,16 @@ class PickerState {
     var isListMode: Bool {
         hasItems
     }
+
+    /// Reset state with new items (for daemon mode window reuse)
+    func resetWithItems(_ items: [PickerItem]) {
+        allItems = items
+        query = ""
+        filteredResults = FuzzyMatcher.match(query: "", items: items)
+        selectedIndex = 0
+        scrollOffset = 0
+        onStateChange?()
+    }
 }
 
 // MARK: - List Item View
@@ -1148,9 +1167,22 @@ enum PickerResult {
     }
 }
 
-func finish(_ result: PickerResult) -> Never {
-    print(result.json)
-    exit(result.exitCode)
+func finish(_ result: PickerResult) {
+    if isDaemonMode {
+        hideAndRespond(result)
+    } else {
+        print(result.json)
+        exit(result.exitCode)
+    }
+}
+
+func hideAndRespond(_ result: PickerResult) {
+    guard let delegate = NSApp.delegate as? AppDelegate else { return }
+    guard let conn = delegate.activeConnection else { return }
+    delegate.socketListener?.sendResponse(result, to: conn)
+    delegate.activeConnection = nil
+    delegate.window?.orderOut(nil)
+    NSApp.setActivationPolicy(.accessory)
 }
 
 // MARK: - Colors (Ghostty-inspired dark theme)
@@ -1237,6 +1269,7 @@ class PickerWindow: NSWindow {
         emptyLabel.isHidden = true
 
         // Initialize state if we have items
+
         let pickerState: PickerState?
         if !config.items.isEmpty {
             pickerState = PickerState(items: config.items)
@@ -1244,6 +1277,7 @@ class PickerWindow: NSWindow {
             pickerState = nil
         }
         self.state = pickerState
+
 
         // Calculate initial window size (inline to avoid self usage before super.init)
         // Fixed height: always use maxListHeight for consistent window size (no shifting on filter)
@@ -1270,9 +1304,11 @@ class PickerWindow: NSWindow {
             defer: false
         )
 
+
         setupWindow()
         setupContentView()
         setupLayout()
+
         setupActions()
         setupStateObserver()
     }
@@ -1414,6 +1450,7 @@ class PickerWindow: NSWindow {
         // ESC - cancel
         if event.keyCode == 53 {
             finish(.cancelled)
+            return
         }
 
         // Only handle navigation keys in list mode
@@ -1456,6 +1493,27 @@ class PickerWindow: NSWindow {
     func focusInput() {
         makeFirstResponder(textField)
     }
+
+    /// Recenter the window on the screen where the mouse cursor is
+    func recenterOnMouseScreen() {
+        guard let targetScreen = NSScreen.screens.first(where: {
+            NSMouseInRect(NSEvent.mouseLocation, $0.frame, false)
+        }) ?? NSScreen.main else { return }
+
+        let winSize = frame.size
+        let screenFrame = targetScreen.frame
+        setFrameOrigin(NSPoint(
+            x: screenFrame.midX - winSize.width / 2,
+            y: screenFrame.midY - winSize.height / 2
+        ))
+    }
+
+    /// Reset the window for a new picker request (daemon mode)
+    func resetForNewRequest(items: [PickerItem]) {
+        textField.stringValue = ""
+        state?.resetWithItems(items)
+        recenterOnMouseScreen()
+    }
 }
 
 extension PickerWindow: NSTextFieldDelegate {
@@ -1466,6 +1524,7 @@ extension PickerWindow: NSTextFieldDelegate {
         }
         if commandSelector == #selector(cancelOperation(_:)) {
             finish(.cancelled)
+            return true
         }
 
         // Handle navigation in text field context
@@ -1533,11 +1592,187 @@ class BackgroundView: NSView {
     }
 }
 
+// MARK: - Socket Listener (Daemon Mode)
+
+/// Simplified socket server for picker daemon — accepts one request at a time
+class SocketListener {
+    private let socketPath: String
+    private var serverSocket: Int32?
+
+    /// Called on main thread with parsed items and the client connection fd
+    var onRequest: (([PickerItem], Int32) -> Void)?
+
+    init(path: String) {
+        self.socketPath = path
+    }
+
+    func start() throws {
+        // Clean up stale socket if needed
+        if FileManager.default.fileExists(atPath: socketPath) {
+            let testSock = socket(AF_UNIX, SOCK_STREAM, 0)
+            var addr = makeSockAddr(socketPath)
+            let connected = withUnsafePointer(to: &addr) { ptr in
+                ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPtr in
+                    connect(testSock, sockaddrPtr, socklen_t(MemoryLayout<sockaddr_un>.size))
+                }
+            }
+            close(testSock)
+
+            if connected == 0 {
+                // Another daemon is listening
+                throw PickerDaemonError.alreadyRunning
+            }
+
+            // Socket file exists but nobody is listening — stale, remove it
+            try? FileManager.default.removeItem(atPath: socketPath)
+        }
+
+        let sock = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard sock >= 0 else {
+            throw PickerDaemonError.socketFailed("socket(): \(String(cString: strerror(errno)))")
+        }
+        serverSocket = sock
+
+        var addr = makeSockAddr(socketPath)
+        let bindResult = withUnsafePointer(to: &addr) { ptr in
+            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPtr in
+                bind(sock, sockaddrPtr, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        }
+        guard bindResult >= 0 else {
+            close(sock)
+            serverSocket = nil
+            throw PickerDaemonError.socketFailed("bind(): \(String(cString: strerror(errno)))")
+        }
+
+        guard listen(sock, 5) >= 0 else {
+            close(sock)
+            serverSocket = nil
+            throw PickerDaemonError.socketFailed("listen(): \(String(cString: strerror(errno)))")
+        }
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            self?.acceptLoop()
+        }
+    }
+
+    private func acceptLoop() {
+        guard let sock = serverSocket else { return }
+
+        while true {
+            var clientAddr = sockaddr_un()
+            var clientAddrLen = socklen_t(MemoryLayout<sockaddr_un>.size)
+
+            let clientSocket = withUnsafeMutablePointer(to: &clientAddr) { ptr in
+                ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPtr in
+                    accept(sock, sockaddrPtr, &clientAddrLen)
+                }
+            }
+
+            guard clientSocket >= 0 else {
+                break
+            }
+
+            // Read newline-delimited JSON request
+            var buffer = Data()
+            let readSize = 65536
+            var foundNewline = false
+
+            while !foundNewline {
+                var chunk = [UInt8](repeating: 0, count: readSize)
+                let bytesRead = recv(clientSocket, &chunk, readSize, 0)
+
+                if bytesRead <= 0 {
+                    break
+                }
+
+                buffer.append(contentsOf: chunk[0..<bytesRead])
+
+                if buffer.contains(UInt8(ascii: "\n")) {
+                    foundNewline = true
+                }
+            }
+
+            guard foundNewline,
+                  let newlineIndex = buffer.firstIndex(of: UInt8(ascii: "\n")) else {
+                close(clientSocket)
+                continue
+            }
+
+            let messageData = buffer[buffer.startIndex..<newlineIndex]
+            guard let items = try? JSONDecoder().decode([PickerItem].self, from: messageData) else {
+                close(clientSocket)
+                continue
+            }
+
+            DispatchQueue.main.async { [weak self] in
+                self?.onRequest?(items, clientSocket)
+            }
+        }
+    }
+
+    func sendResponse(_ result: PickerResult, to connection: Int32) {
+        let responseData = (result.json + "\n").data(using: .utf8) ?? Data()
+        _ = responseData.withUnsafeBytes { ptr in
+            send(connection, ptr.baseAddress, responseData.count, 0)
+        }
+        close(connection)
+    }
+
+    func stop() {
+        if let sock = serverSocket {
+            close(sock)
+            serverSocket = nil
+        }
+        try? FileManager.default.removeItem(atPath: socketPath)
+    }
+
+    private func makeSockAddr(_ path: String) -> sockaddr_un {
+        var addr = sockaddr_un()
+        addr.sun_family = sa_family_t(AF_UNIX)
+        _ = withUnsafeMutablePointer(to: &addr.sun_path.0) { ptr in
+            path.withCString { pathPtr in
+                strcpy(ptr, pathPtr)
+            }
+        }
+        return addr
+    }
+}
+
+enum PickerDaemonError: Error {
+    case alreadyRunning
+    case socketFailed(String)
+}
+
+// MARK: - PID File Management
+
+func checkExistingDaemon() -> Bool {
+    guard let pidString = try? String(contentsOfFile: pickerPIDPath, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+          let pid = Int32(pidString) else {
+        return false
+    }
+    return kill(pid, 0) == 0
+}
+
+func writePIDFile() {
+    try? String(getpid()).write(toFile: pickerPIDPath, atomically: true, encoding: .utf8)
+}
+
+func cleanupDaemonFiles() {
+    try? FileManager.default.removeItem(atPath: pickerPIDPath)
+    try? FileManager.default.removeItem(atPath: pickerSocketPath)
+}
+
 // MARK: - App Delegate
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     var window: PickerWindow?
-    let config: PickerConfig
+    var config: PickerConfig
+    var socketListener: SocketListener?
+    var activeConnection: Int32?
+    private var sigTermSource: DispatchSourceSignal?
+    private var sigIntSource: DispatchSourceSignal?
 
     init(config: PickerConfig) {
         self.config = config
@@ -1545,14 +1780,60 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if isDaemonMode {
+            NSApp.setActivationPolicy(.accessory)
+
+            socketListener = SocketListener(path: pickerSocketPath)
+            socketListener?.onRequest = { [weak self] items, conn in
+                self?.handlePickerRequest(items: items, connection: conn)
+            }
+
+            do {
+                try socketListener?.start()
+            } catch PickerDaemonError.alreadyRunning {
+                fputs("grid-picker daemon already running\n", stderr)
+                exit(0)
+            } catch {
+                fputs("Failed to start picker socket: \(error)\n", stderr)
+                exit(1)
+            }
+
+            writePIDFile()
+            setupSignalHandlers()
+        } else {
+            NSApp.setActivationPolicy(.regular)
+            NSApp.activate(ignoringOtherApps: true)
+
+            window = PickerWindow(config: config)
+            window?.makeKeyAndOrderFront(nil)
+            window?.focusInput()
+            observeWindowFocus()
+        }
+    }
+
+    func handlePickerRequest(items: [PickerItem], connection: Int32) {
+        // Cancel any existing in-flight request
+        if let existingConn = activeConnection {
+            socketListener?.sendResponse(.cancelled, to: existingConn)
+        }
+        activeConnection = connection
+
+        if let window = window {
+            window.resetForNewRequest(items: items)
+        } else {
+            var requestConfig = config
+            requestConfig.items = items
+            window = PickerWindow(config: requestConfig)
+            observeWindowFocus()
+        }
+
         NSApp.setActivationPolicy(.regular)
-        NSApp.activate(ignoringOtherApps: true)
-
-        window = PickerWindow(config: config)
         window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
         window?.focusInput()
+    }
 
-        // Watch for focus loss
+    private func observeWindowFocus() {
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(windowDidResignKey),
@@ -1563,6 +1844,30 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func windowDidResignKey(_ notification: Notification) {
         finish(.cancelled)
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        socketListener?.stop()
+        cleanupDaemonFiles()
+    }
+
+    private func setupSignalHandlers() {
+        signal(SIGTERM, SIG_IGN)
+        signal(SIGINT, SIG_IGN)
+
+        sigTermSource = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+        sigTermSource?.setEventHandler {
+            cleanupDaemonFiles()
+            exit(0)
+        }
+        sigTermSource?.resume()
+
+        sigIntSource = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
+        sigIntSource?.setEventHandler {
+            cleanupDaemonFiles()
+            exit(0)
+        }
+        sigIntSource?.resume()
     }
 }
 
@@ -1599,6 +1904,18 @@ func readItemsFromStdin() -> [PickerItem] {
 
 // Read stdin BEFORE starting NSApplication (blocking call)
 let stdinItems = readItemsFromStdin()
+
+// Detect mode: stdin with data = one-shot, otherwise = daemon
+if isatty(STDIN_FILENO) == 0 && !stdinItems.isEmpty {
+    isDaemonMode = false
+} else {
+    isDaemonMode = true
+
+    if checkExistingDaemon() {
+        fputs("grid-picker daemon already running\n", stderr)
+        exit(0)
+    }
+}
 
 var config = PickerConfig.parse(CommandLine.arguments)
 config.items = stdinItems

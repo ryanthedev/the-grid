@@ -1,12 +1,13 @@
 package main
 
 import (
-	"bytes"
+	"bufio"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1862,67 +1863,105 @@ func findTerminalExecutable() (string, error) {
 	return "", fmt.Errorf("grid-terminal not found in:\n  - %s", strings.Join(searchedLocations, "\n  - "))
 }
 
-// launchPicker spawns the picker executable with items and returns the selection result.
-// pickerPathOverride, if set, takes precedence over default search paths.
-func launchPicker(items []PickerItem, pickerPathOverride string) (*PickerResult, error) {
-	// Find the picker executable
-	pickerPath, err := findPickerExecutable(pickerPathOverride)
+// pickerSocketPath returns the path to the picker daemon Unix socket.
+func pickerSocketPath() string {
+	return filepath.Join(xdg.StateHome(), "thegrid", "grid-picker.sock")
+}
+
+// tryPickerSocket attempts to connect to an existing picker daemon and send items.
+// Returns the picker result or an error if the daemon is not available.
+func tryPickerSocket(items []PickerItem) (*PickerResult, error) {
+	conn, err := net.Dial("unix", pickerSocketPath())
 	if err != nil {
 		return nil, err
 	}
+	defer conn.Close()
 
-	// Create command with timeout context (5 min generous limit for interactive use)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, pickerPath)
+	// 5 minute deadline for interactive use (user may take time to select)
+	conn.SetDeadline(time.Now().Add(5 * time.Minute))
 
-	// Set up pipes for stdin, stdout, stderr
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return nil, fmt.Errorf("failed to create stdin pipe: %w", err)
-	}
-
-	// Start the command
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("failed to start picker: %w", err)
-	}
-
-	// Encode items as JSON and write to stdin
-	encoder := json.NewEncoder(stdin)
+	// Send items as newline-delimited JSON
+	encoder := json.NewEncoder(conn)
 	if err := encoder.Encode(items); err != nil {
-		stdin.Close()
-		cmd.Wait()
-		return nil, fmt.Errorf("failed to write items to picker: %w", err)
-	}
-	stdin.Close()
-
-	// Wait for command to complete
-	waitErr := cmd.Wait()
-
-	// Check exit code
-	if waitErr != nil {
-		if exitErr, ok := waitErr.(*exec.ExitError); ok {
-			// Exit code 1 means user cancelled (not an error)
-			if exitErr.ExitCode() == 1 {
-				return &PickerResult{Cancelled: true, Selected: nil}, nil
-			}
-			// Other non-zero exit codes are errors
-			return nil, fmt.Errorf("picker failed (exit %d): %s", exitErr.ExitCode(), stderr.String())
-		}
-		return nil, fmt.Errorf("picker failed: %w", waitErr)
+		return nil, fmt.Errorf("failed to write items to picker socket: %w", err)
 	}
 
-	// Parse stdout as picker result JSON (wrapper with cancelled + selected fields)
+	// Read response line
+	reader := bufio.NewReader(conn)
+	line, err := reader.ReadBytes('\n')
+	if err != nil {
+		return nil, fmt.Errorf("failed to read picker response: %w", err)
+	}
+
 	var result PickerResult
-	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
-		return nil, fmt.Errorf("failed to parse picker output: %w", err)
+	if err := json.Unmarshal(line, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse picker response: %w", err)
 	}
 
 	return &result, nil
+}
+
+// spawnPickerDaemon launches the picker as a background daemon process.
+func spawnPickerDaemon(pickerPathOverride string) error {
+	pickerPath, err := findPickerExecutable(pickerPathOverride)
+	if err != nil {
+		return err
+	}
+
+	cmd := exec.Command(pickerPath)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Stdout = nil
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to launch picker daemon: %w", err)
+	}
+
+	// Don't wait for the daemon process
+	go cmd.Wait()
+	return nil
+}
+
+// waitForPickerSocket polls until the picker daemon socket is ready to accept connections.
+func waitForPickerSocket(timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	sockPath := pickerSocketPath()
+
+	for time.Now().Before(deadline) {
+		// Check if socket file exists
+		if _, err := os.Stat(sockPath); err == nil {
+			// File exists — try connecting to verify daemon is listening
+			conn, err := net.Dial("unix", sockPath)
+			if err == nil {
+				conn.Close()
+				return nil
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	return fmt.Errorf("picker daemon did not start within %s", timeout)
+}
+
+// launchPicker connects to the picker daemon (spawning it if needed) and returns the selection result.
+// pickerPathOverride, if set, takes precedence over default search paths.
+func launchPicker(items []PickerItem, pickerPathOverride string) (*PickerResult, error) {
+	// Try existing daemon first
+	if result, err := tryPickerSocket(items); err == nil {
+		return result, nil
+	}
+
+	// Spawn daemon
+	if err := spawnPickerDaemon(pickerPathOverride); err != nil {
+		return nil, err
+	}
+
+	// Wait for daemon to be ready
+	if err := waitForPickerSocket(2 * time.Second); err != nil {
+		return nil, err
+	}
+
+	// Try again
+	return tryPickerSocket(items)
 }
 
 // getAllWindows fetches all windows from the server via dump RPC
@@ -2130,10 +2169,13 @@ func runPickWindow() error {
 	c := client.NewClient(socketPath, timeout)
 	defer c.Close()
 
-	jsonlog.Log("pick.start")
+	span := jsonlog.StartSpan("pick.window")
+	defer span.End()
 
 	// Get windows from server
+	fetchSpan := span.StartChild("fetch")
 	windows, serverState, err := getAllWindows(ctx, c)
+	fetchSpan.End()
 	if err != nil {
 		return err
 	}
@@ -2143,6 +2185,7 @@ func runPickWindow() error {
 	}
 
 	// Load runtime state to get cell assignments
+	stateSpan := span.StartChild("state")
 	runtimeState, err := gridState.LoadState()
 	if err != nil {
 		return fmt.Errorf("failed to load state: %w", err)
@@ -2153,6 +2196,7 @@ func runPickWindow() error {
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
+	stateSpan.End()
 
 	// Collect all window IDs assigned to cells across ALL current spaces (one per display)
 	// Also track which display each window is on for border sync
@@ -2192,7 +2236,9 @@ func runPickWindow() error {
 	}
 
 	// Transform to picker items and get context for stable ID generation
+	enrichSpan := span.StartChild("enrich")
 	items, pctx := windowsToPickerItems(filteredWindows, serverState)
+	enrichSpan.End()
 
 	// Generate stable IDs for each window
 	stableIDs := make(map[int]string)
@@ -2208,6 +2254,7 @@ func runPickWindow() error {
 	}
 
 	// Load picker history for sorting
+	historySpan := span.StartChild("history")
 	history, err := gridState.LoadPickerHistory()
 	if err != nil {
 		jsonlog.Log("pick.history.load_err", jsonlog.WithMsg(err.Error()))
@@ -2216,9 +2263,12 @@ func runPickWindow() error {
 
 	// Sort items by history (previous first, then by frequency)
 	sortItemsByHistory(items, stableIDs, history)
+	historySpan.End()
 
 	// Launch picker with items (use config override if set)
+	launchSpan := span.StartChild("launch")
 	result, err := launchPicker(items, cfg.Settings.PickerPath)
+	launchSpan.End()
 	if err != nil {
 		return err
 	}
@@ -2284,7 +2334,11 @@ func runPickWindow() error {
 func runUnifiedPick(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 
+	span := jsonlog.StartSpan("pick.unified")
+	defer span.End()
+
 	// Load config
+	configSpan := span.StartChild("config")
 	cfg, err := gridConfig.LoadConfig("")
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
@@ -2294,8 +2348,9 @@ func runUnifiedPick(cmd *cobra.Command, args []string) error {
 	onlyFlag, _ := cmd.Flags().GetStringSlice("only")
 	excludeFlag, _ := cmd.Flags().GetStringSlice("exclude")
 	enabled := resolveEnabledSources(cfg.Picker, onlyFlag, excludeFlag)
+	configSpan.End()
 
-	jsonlog.Log("pick.start", jsonlog.WithData(map[string]any{
+	jsonlog.Log("pick.sources", jsonlog.WithData(map[string]any{
 		"windows": enabled.Windows,
 		"apps":    enabled.Apps,
 		"chrome":  enabled.Chrome,
@@ -2313,6 +2368,7 @@ func runUnifiedPick(cmd *cobra.Command, args []string) error {
 	var allItems []sources.SourceItem
 
 	// Discover apps/chrome/actions/zoxide (no RPC needed)
+	sourcesSpan := span.StartChild("sources")
 	nonWindowEnabled := sources.EnabledSources{
 		Windows: false,
 		Apps:    enabled.Apps,
@@ -2321,10 +2377,13 @@ func runUnifiedPick(cmd *cobra.Command, args []string) error {
 		Zoxide:  enabled.Zoxide,
 	}
 	allItems = sources.DiscoverAll(nonWindowEnabled, sourceCfg)
+	sourcesSpan.End()
 
 	// Discover windows if enabled (needs RPC client)
 	if enabled.Windows {
+		windowsSpan := span.StartChild("windows")
 		windowItems, err := discoverWindowsAsSourceItems(ctx, cfg)
+		windowsSpan.End()
 		if err != nil {
 			jsonlog.Log("pick.windows.err", jsonlog.WithMsg(err.Error()))
 			// Continue with other sources
@@ -2338,16 +2397,22 @@ func runUnifiedPick(cmd *cobra.Command, args []string) error {
 	}
 
 	// Convert to PickerItems (the type expected by launchPicker)
+	convertSpan := span.StartChild("convert")
 	pickerItems := convertSourceItemsToPickerItems(allItems)
+	convertSpan.End()
 
 	// Load history and sort by frecency
+	historySpan := span.StartChild("history")
 	history, _ := gridState.LoadPickerHistory()
 	gridState.SortByFrecency(pickerItems, func(item PickerItem) string {
 		return item.ID
 	}, history)
+	historySpan.End()
 
 	// Launch picker
+	launchSpan := span.StartChild("launch")
 	result, err := launchPicker(pickerItems, cfg.Settings.PickerPath)
+	launchSpan.End()
 	if err != nil {
 		return err
 	}
@@ -4452,14 +4517,16 @@ func shouldSkipMutex(cmd *cobra.Command) bool {
 
 	// Exact matches for simple commands
 	skipExact := map[string]bool{
-		"thegrid":        true, // Root command (shows help)
-		"thegrid ping":   true,
-		"thegrid info":   true,
-		"thegrid dump":   true,
-		"thegrid list":   true,
-		"thegrid show":   true,
-		"thegrid record":   true,
-		"thegrid terminal": true,
+		"thegrid":             true, // Root command (shows help)
+		"thegrid ping":        true,
+		"thegrid info":        true,
+		"thegrid dump":        true,
+		"thegrid list":        true,
+		"thegrid show":        true,
+		"thegrid record":      true,
+		"thegrid terminal":    true,
+		"thegrid pick":        true,
+		"thegrid pick window": true,
 	}
 
 	if skipExact[cmdPath] {
