@@ -132,6 +132,31 @@ class BFDKeyHandler {
         return true
     }
 
+    /// Restart the event tap (e.g. after sleep/wake)
+    func restart() {
+        guard let tap = eventTap else {
+            JSONLogger.shared.log("bfd.wake.restart", msg: "no tap, starting fresh")
+            _ = start()
+            return
+        }
+
+        let valid = CFMachPortIsValid(tap)
+        let enabled = CGEvent.tapIsEnabled(tap: tap)
+        JSONLogger.shared.log("bfd.wake.check", data: [
+            "valid": valid,
+            "enabled": enabled
+        ])
+
+        if !valid {
+            JSONLogger.shared.log("bfd.wake.restart", msg: "tap invalid, recreating")
+            stop()
+            _ = start()
+        } else if !enabled {
+            JSONLogger.shared.log("bfd.wake.reenable", msg: "tap disabled, re-enabling")
+            CGEvent.tapEnable(tap: tap, enable: true)
+        }
+    }
+
     /// Stop capturing keyboard events
     func stop() {
         healthCheckTimer?.invalidate()
