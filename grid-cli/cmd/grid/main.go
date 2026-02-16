@@ -1947,18 +1947,22 @@ func waitForPickerSocket(timeout time.Duration) error {
 func launchPicker(items []PickerItem, pickerPathOverride string) (*PickerResult, error) {
 	// Try existing daemon first
 	if result, err := tryPickerSocket(items); err == nil {
+		jsonlog.Log("pick.socket.reuse")
 		return result, nil
 	}
 
 	// Spawn daemon
+	jsonlog.Log("pick.socket.spawn")
 	if err := spawnPickerDaemon(pickerPathOverride); err != nil {
 		return nil, err
 	}
 
 	// Wait for daemon to be ready
 	if err := waitForPickerSocket(2 * time.Second); err != nil {
+		jsonlog.Log("pick.socket.timeout", jsonlog.WithMsg(err.Error()))
 		return nil, err
 	}
+	jsonlog.Log("pick.socket.ready")
 
 	// Try again
 	return tryPickerSocket(items)

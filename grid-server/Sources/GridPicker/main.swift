@@ -22,9 +22,17 @@ import AppKit
 /// Whether running as persistent daemon (socket mode) vs one-shot (stdin mode)
 var isDaemonMode = false
 
+/// Resolve XDG state home, respecting $XDG_STATE_HOME (matches Go CLI's xdg.StateHome())
+let pickerStateDir: String = {
+    if let env = ProcessInfo.processInfo.environment["XDG_STATE_HOME"], !env.isEmpty {
+        return env + "/thegrid"
+    }
+    return NSString("~/.local/state/thegrid").expandingTildeInPath
+}()
+
 /// Socket and PID file paths for daemon mode
-let pickerSocketPath = NSString("~/.local/state/thegrid/grid-picker.sock").expandingTildeInPath
-let pickerPIDPath = NSString("~/.local/state/thegrid/grid-picker.pid").expandingTildeInPath
+let pickerSocketPath = pickerStateDir + "/grid-picker.sock"
+let pickerPIDPath = pickerStateDir + "/grid-picker.pid"
 
 // MARK: - Data Models
 
@@ -1673,6 +1681,10 @@ class SocketListener {
                 break
             }
 
+            // Set 5-second read timeout so a stalled client can't block the accept loop
+            var tv = timeval(tv_sec: 5, tv_usec: 0)
+            setsockopt(clientSocket, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
+
             // Read newline-delimited JSON request
             var buffer = Data()
             let readSize = 65536
@@ -1856,14 +1868,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         signal(SIGINT, SIG_IGN)
 
         sigTermSource = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
-        sigTermSource?.setEventHandler {
+        sigTermSource?.setEventHandler { [weak self] in
+            self?.socketListener?.stop()
             cleanupDaemonFiles()
             exit(0)
         }
         sigTermSource?.resume()
 
         sigIntSource = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
-        sigIntSource?.setEventHandler {
+        sigIntSource?.setEventHandler { [weak self] in
+            self?.socketListener?.stop()
             cleanupDaemonFiles()
             exit(0)
         }
