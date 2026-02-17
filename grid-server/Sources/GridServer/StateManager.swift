@@ -538,9 +538,6 @@ actor StateManager: StateEventHandler {
         // Fallback: If only one AX window exists, use it (handles apps like Ghostty
         // where SkyLight reports multiple phantom window IDs but AX only sees one real window)
         if windows.count == 1 {
-            Task {
-                JSONLogger.shared.log("ax.single", data: ["wid": windowID, "pid": pid])
-            }
             return extractAXProperties(from: windows[0])
         }
 

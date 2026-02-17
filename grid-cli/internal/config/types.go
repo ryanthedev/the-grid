@@ -30,6 +30,12 @@ type Settings struct {
 	WindowExclusion   WindowExclusion            `yaml:"windowExclusion,omitempty" json:"windowExclusion,omitempty"`
 	DisplayOffsets    map[string]DisplayOffset   `yaml:"displayOffsets,omitempty" json:"displayOffsets,omitempty"` // Per-display X,Y offsets by UUID or name
 	PickerPath        string                     `yaml:"pickerPath,omitempty" json:"pickerPath,omitempty"`         // Override path to grid-picker executable
+	Recording         RecordingSettings          `yaml:"recording,omitempty" json:"recording,omitempty"`
+}
+
+// RecordingSettings configures recording defaults
+type RecordingSettings struct {
+	OutputDir string `yaml:"outputDir,omitempty" json:"outputDir,omitempty"` // Default output directory (supports ~)
 }
 
 // ResizeSettings configures CLI resize behavior

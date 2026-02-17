@@ -1,12 +1,13 @@
 package main
 
 import (
-	"bytes"
+	"bufio"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/fatih/color"
@@ -38,6 +40,7 @@ import (
 	"github.com/ryanthedev/grid-cli/internal/xdg"
 	"github.com/ryanthedev/grid-cli/internal/process"
 	"github.com/ryanthedev/grid-cli/internal/enrichers"
+	gridRecord "github.com/ryanthedev/grid-cli/internal/record"
 	"gopkg.in/yaml.v3"
 )
 
@@ -1822,67 +1825,147 @@ func findPickerExecutable(overridePath string) (string, error) {
 	return "", fmt.Errorf("grid-picker not found in:\n  - %s", strings.Join(searchedLocations, "\n  - "))
 }
 
-// launchPicker spawns the picker executable with items and returns the selection result.
-// pickerPathOverride, if set, takes precedence over default search paths.
-func launchPicker(items []PickerItem, pickerPathOverride string) (*PickerResult, error) {
-	// Find the picker executable
-	pickerPath, err := findPickerExecutable(pickerPathOverride)
+// findTerminalExecutable locates the grid-terminal binary by checking standard locations.
+func findTerminalExecutable() (string, error) {
+	var searchPaths []string
+	var searchedLocations []string
+
+	// 1. XDG state home: ~/.local/state/thegrid/grid-terminal
+	stateDir := filepath.Join(xdg.StateHome(), "thegrid")
+	statePath := filepath.Join(stateDir, "grid-terminal")
+	searchPaths = append(searchPaths, statePath)
+	searchedLocations = append(searchedLocations, statePath)
+
+	// 2. Same directory as current executable
+	if execPath, err := os.Executable(); err == nil {
+		execDir := filepath.Dir(execPath)
+		execDirPath := filepath.Join(execDir, "grid-terminal")
+		searchPaths = append(searchPaths, execDirPath)
+		searchedLocations = append(searchedLocations, execDirPath)
+	}
+
+	// 3. System PATH lookup
+	if pathExec, err := exec.LookPath("grid-terminal"); err == nil {
+		searchPaths = append(searchPaths, pathExec)
+	}
+	searchedLocations = append(searchedLocations, "system PATH")
+
+	for _, path := range searchPaths {
+		info, err := os.Stat(path)
+		if err != nil {
+			continue
+		}
+		if info.Mode()&0111 != 0 {
+			return path, nil
+		}
+	}
+
+	return "", fmt.Errorf("grid-terminal not found in:\n  - %s", strings.Join(searchedLocations, "\n  - "))
+}
+
+// pickerSocketPath returns the path to the picker daemon Unix socket.
+func pickerSocketPath() string {
+	return filepath.Join(xdg.StateHome(), "thegrid", "grid-picker.sock")
+}
+
+// tryPickerSocket attempts to connect to an existing picker daemon and send items.
+// Returns the picker result or an error if the daemon is not available.
+func tryPickerSocket(items []PickerItem) (*PickerResult, error) {
+	conn, err := net.Dial("unix", pickerSocketPath())
 	if err != nil {
 		return nil, err
 	}
+	defer conn.Close()
 
-	// Create command with timeout context (5 min generous limit for interactive use)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, pickerPath)
+	// 5 minute deadline for interactive use (user may take time to select)
+	conn.SetDeadline(time.Now().Add(5 * time.Minute))
 
-	// Set up pipes for stdin, stdout, stderr
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return nil, fmt.Errorf("failed to create stdin pipe: %w", err)
-	}
-
-	// Start the command
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("failed to start picker: %w", err)
-	}
-
-	// Encode items as JSON and write to stdin
-	encoder := json.NewEncoder(stdin)
+	// Send items as newline-delimited JSON
+	encoder := json.NewEncoder(conn)
 	if err := encoder.Encode(items); err != nil {
-		stdin.Close()
-		cmd.Wait()
-		return nil, fmt.Errorf("failed to write items to picker: %w", err)
-	}
-	stdin.Close()
-
-	// Wait for command to complete
-	waitErr := cmd.Wait()
-
-	// Check exit code
-	if waitErr != nil {
-		if exitErr, ok := waitErr.(*exec.ExitError); ok {
-			// Exit code 1 means user cancelled (not an error)
-			if exitErr.ExitCode() == 1 {
-				return &PickerResult{Cancelled: true, Selected: nil}, nil
-			}
-			// Other non-zero exit codes are errors
-			return nil, fmt.Errorf("picker failed (exit %d): %s", exitErr.ExitCode(), stderr.String())
-		}
-		return nil, fmt.Errorf("picker failed: %w", waitErr)
+		return nil, fmt.Errorf("failed to write items to picker socket: %w", err)
 	}
 
-	// Parse stdout as picker result JSON (wrapper with cancelled + selected fields)
+	// Read response line
+	reader := bufio.NewReader(conn)
+	line, err := reader.ReadBytes('\n')
+	if err != nil {
+		return nil, fmt.Errorf("failed to read picker response: %w", err)
+	}
+
 	var result PickerResult
-	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
-		return nil, fmt.Errorf("failed to parse picker output: %w", err)
+	if err := json.Unmarshal(line, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse picker response: %w", err)
 	}
 
 	return &result, nil
+}
+
+// spawnPickerDaemon launches the picker as a background daemon process.
+func spawnPickerDaemon(pickerPathOverride string) error {
+	pickerPath, err := findPickerExecutable(pickerPathOverride)
+	if err != nil {
+		return err
+	}
+
+	cmd := exec.Command(pickerPath)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Stdout = nil
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to launch picker daemon: %w", err)
+	}
+
+	// Don't wait for the daemon process
+	go cmd.Wait()
+	return nil
+}
+
+// waitForPickerSocket polls until the picker daemon socket is ready to accept connections.
+func waitForPickerSocket(timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	sockPath := pickerSocketPath()
+
+	for time.Now().Before(deadline) {
+		// Check if socket file exists
+		if _, err := os.Stat(sockPath); err == nil {
+			// File exists — try connecting to verify daemon is listening
+			conn, err := net.Dial("unix", sockPath)
+			if err == nil {
+				conn.Close()
+				return nil
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	return fmt.Errorf("picker daemon did not start within %s", timeout)
+}
+
+// launchPicker connects to the picker daemon (spawning it if needed) and returns the selection result.
+// pickerPathOverride, if set, takes precedence over default search paths.
+func launchPicker(items []PickerItem, pickerPathOverride string) (*PickerResult, error) {
+	// Try existing daemon first
+	if result, err := tryPickerSocket(items); err == nil {
+		jsonlog.Log("pick.socket.reuse")
+		return result, nil
+	}
+
+	// Spawn daemon
+	jsonlog.Log("pick.socket.spawn")
+	if err := spawnPickerDaemon(pickerPathOverride); err != nil {
+		return nil, err
+	}
+
+	// Wait for daemon to be ready
+	if err := waitForPickerSocket(2 * time.Second); err != nil {
+		jsonlog.Log("pick.socket.timeout", jsonlog.WithMsg(err.Error()))
+		return nil, err
+	}
+	jsonlog.Log("pick.socket.ready")
+
+	// Try again
+	return tryPickerSocket(items)
 }
 
 // getAllWindows fetches all windows from the server via dump RPC
@@ -2090,10 +2173,13 @@ func runPickWindow() error {
 	c := client.NewClient(socketPath, timeout)
 	defer c.Close()
 
-	jsonlog.Log("pick.start")
+	span := jsonlog.StartSpan("pick.window")
+	defer span.End()
 
 	// Get windows from server
+	fetchSpan := span.StartChild("fetch")
 	windows, serverState, err := getAllWindows(ctx, c)
+	fetchSpan.End()
 	if err != nil {
 		return err
 	}
@@ -2103,6 +2189,7 @@ func runPickWindow() error {
 	}
 
 	// Load runtime state to get cell assignments
+	stateSpan := span.StartChild("state")
 	runtimeState, err := gridState.LoadState()
 	if err != nil {
 		return fmt.Errorf("failed to load state: %w", err)
@@ -2113,6 +2200,7 @@ func runPickWindow() error {
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
+	stateSpan.End()
 
 	// Collect all window IDs assigned to cells across ALL current spaces (one per display)
 	// Also track which display each window is on for border sync
@@ -2152,7 +2240,9 @@ func runPickWindow() error {
 	}
 
 	// Transform to picker items and get context for stable ID generation
+	enrichSpan := span.StartChild("enrich")
 	items, pctx := windowsToPickerItems(filteredWindows, serverState)
+	enrichSpan.End()
 
 	// Generate stable IDs for each window
 	stableIDs := make(map[int]string)
@@ -2168,6 +2258,7 @@ func runPickWindow() error {
 	}
 
 	// Load picker history for sorting
+	historySpan := span.StartChild("history")
 	history, err := gridState.LoadPickerHistory()
 	if err != nil {
 		jsonlog.Log("pick.history.load_err", jsonlog.WithMsg(err.Error()))
@@ -2176,9 +2267,12 @@ func runPickWindow() error {
 
 	// Sort items by history (previous first, then by frequency)
 	sortItemsByHistory(items, stableIDs, history)
+	historySpan.End()
 
 	// Launch picker with items (use config override if set)
+	launchSpan := span.StartChild("launch")
 	result, err := launchPicker(items, cfg.Settings.PickerPath)
+	launchSpan.End()
 	if err != nil {
 		return err
 	}
@@ -2244,7 +2338,11 @@ func runPickWindow() error {
 func runUnifiedPick(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 
+	span := jsonlog.StartSpan("pick.unified")
+	defer span.End()
+
 	// Load config
+	configSpan := span.StartChild("config")
 	cfg, err := gridConfig.LoadConfig("")
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
@@ -2254,8 +2352,9 @@ func runUnifiedPick(cmd *cobra.Command, args []string) error {
 	onlyFlag, _ := cmd.Flags().GetStringSlice("only")
 	excludeFlag, _ := cmd.Flags().GetStringSlice("exclude")
 	enabled := resolveEnabledSources(cfg.Picker, onlyFlag, excludeFlag)
+	configSpan.End()
 
-	jsonlog.Log("pick.start", jsonlog.WithData(map[string]any{
+	jsonlog.Log("pick.sources", jsonlog.WithData(map[string]any{
 		"windows": enabled.Windows,
 		"apps":    enabled.Apps,
 		"chrome":  enabled.Chrome,
@@ -2273,6 +2372,7 @@ func runUnifiedPick(cmd *cobra.Command, args []string) error {
 	var allItems []sources.SourceItem
 
 	// Discover apps/chrome/actions/zoxide (no RPC needed)
+	sourcesSpan := span.StartChild("sources")
 	nonWindowEnabled := sources.EnabledSources{
 		Windows: false,
 		Apps:    enabled.Apps,
@@ -2281,10 +2381,13 @@ func runUnifiedPick(cmd *cobra.Command, args []string) error {
 		Zoxide:  enabled.Zoxide,
 	}
 	allItems = sources.DiscoverAll(nonWindowEnabled, sourceCfg)
+	sourcesSpan.End()
 
 	// Discover windows if enabled (needs RPC client)
 	if enabled.Windows {
+		windowsSpan := span.StartChild("windows")
 		windowItems, err := discoverWindowsAsSourceItems(ctx, cfg)
+		windowsSpan.End()
 		if err != nil {
 			jsonlog.Log("pick.windows.err", jsonlog.WithMsg(err.Error()))
 			// Continue with other sources
@@ -2298,16 +2401,22 @@ func runUnifiedPick(cmd *cobra.Command, args []string) error {
 	}
 
 	// Convert to PickerItems (the type expected by launchPicker)
+	convertSpan := span.StartChild("convert")
 	pickerItems := convertSourceItemsToPickerItems(allItems)
+	convertSpan.End()
 
 	// Load history and sort by frecency
+	historySpan := span.StartChild("history")
 	history, _ := gridState.LoadPickerHistory()
 	gridState.SortByFrecency(pickerItems, func(item PickerItem) string {
 		return item.ID
 	}, history)
+	historySpan.End()
 
 	// Launch picker
+	launchSpan := span.StartChild("launch")
 	result, err := launchPicker(pickerItems, cfg.Settings.PickerPath)
+	launchSpan.End()
 	if err != nil {
 		return err
 	}
@@ -3306,6 +3415,82 @@ var focusCellCmd = &cobra.Command{
 	},
 }
 
+// focusInfoCmd outputs JSON with all active/focused state information
+var focusInfoCmd = &cobra.Command{
+	Use:   "info",
+	Short: "Output JSON with all active/focused state information",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx := context.Background()
+
+		// Load runtime state
+		runtimeState, err := gridState.LoadState()
+		if err != nil {
+			return fmt.Errorf("failed to load state: %w", err)
+		}
+
+		// Load config
+		cfg, err := gridConfig.LoadConfig("")
+		if err != nil {
+			return fmt.Errorf("failed to load config: %w", err)
+		}
+
+		// Create client
+		c := client.NewClient(socketPath, timeout)
+		defer c.Close()
+
+		// Fetch server state
+		snap, err := gridServer.Fetch(ctx, c)
+		if err != nil {
+			return fmt.Errorf("failed to fetch server state: %w", err)
+		}
+
+		// Reconcile state
+		if err := gridReconcile.Sync(ctx, c, snap, runtimeState, cfg); err != nil {
+			return fmt.Errorf("failed to reconcile state: %w", err)
+		}
+
+		// Get space state
+		spaceState := runtimeState.GetSpaceReadOnly(snap.SpaceID)
+		if spaceState == nil {
+			return fmt.Errorf("no state for space %s", snap.SpaceID)
+		}
+
+		// Get layout ID
+		layoutID := spaceState.CurrentLayoutID
+
+		// Calculate cell bounds
+		var cellBounds map[string]client.CellRect
+		var focusedCellBounds *client.CellRect
+		if layoutID != "" {
+			layoutDef, err := cfg.GetLayout(layoutID)
+			if err == nil && layoutDef != nil {
+				cellBounds = gridReconcile.CalculateCellBounds(layoutDef, snap, spaceState)
+
+				// Get focused cell bounds
+				if spaceState.FocusedCell != "" && cellBounds != nil {
+					if bounds, ok := cellBounds[spaceState.FocusedCell]; ok {
+						focusedCellBounds = &bounds
+					}
+				}
+			}
+		}
+
+		// Build output structure
+		output := map[string]interface{}{
+			"activeSpaceID":      snap.SpaceID,
+			"activeDisplayUUID":  snap.GetCurrentDisplayUUID(),
+			"focusedWindowID":    snap.FocusedWindowID,
+			"focusedCell":        spaceState.FocusedCell,
+			"layoutID":           layoutID,
+			"cellBounds":         cellBounds,
+			"focusedCellBounds":  focusedCellBounds,
+		}
+
+		return printJSON(output)
+	},
+}
+
 // MARK: - Mouse Commands
 
 // mouseCmd is the parent command for mouse subcommands
@@ -3899,6 +4084,212 @@ Example JSON input:
 	},
 }
 
+// MARK: - Record Command
+
+// recordCmd captures screen regions as GIF/MP4/WebM/MOV
+var recordCmd = &cobra.Command{
+	Use:   "record [target] [id]",
+	Short: "Record a cell, window, screen, or all displays",
+	Long: `Record a screen region as GIF, MP4, WebM, or MOV.
+
+Targets:
+  cell [id]     Record focused cell or specific cell (default)
+  window [id]   Record focused window or specific window
+  screen [n]    Record current display or display N (1=main)
+  all           Record all displays stitched together
+
+Examples:
+  thegrid record                       # Record focused cell as GIF (5s)
+  thegrid record cell main -d 10       # Record cell "main" for 10s
+  thegrid record window -f mp4 -d 3    # Record focused window as MP4
+  thegrid record screen -d 3           # Record current screen
+  thegrid record all -f mp4 -d 3       # Record all monitors stitched
+  thegrid record --follow -d 15        # Record screen, crop follows focused cell`,
+	Args: cobra.MaximumNArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx := context.Background()
+
+		// Parse target
+		target, err := gridRecord.ParseTarget(args)
+		if err != nil {
+			return err
+		}
+
+		// Parse flags
+		duration, _ := cmd.Flags().GetInt("duration")
+		outputPath, _ := cmd.Flags().GetString("output")
+		format, _ := cmd.Flags().GetString("format")
+		fps, _ := cmd.Flags().GetInt("fps")
+		width, _ := cmd.Flags().GetInt("width")
+		qualityStr, _ := cmd.Flags().GetString("quality")
+		countdown, _ := cmd.Flags().GetInt("countdown")
+		cursor, _ := cmd.Flags().GetBool("cursor")
+		openAfter, _ := cmd.Flags().GetBool("open")
+		follow, _ := cmd.Flags().GetBool("follow")
+
+		quality := gridRecord.ParseQuality(qualityStr)
+
+		// Fetch server state
+		c := client.NewClient(socketPath, timeout)
+		defer c.Close()
+
+		snap, err := gridServer.Fetch(ctx, c)
+		if err != nil {
+			return fmt.Errorf("failed to fetch server state: %w", err)
+		}
+
+		// Load runtime state and config (needed for cell targets)
+		runtimeState, err := gridState.LoadState()
+		if err != nil {
+			return fmt.Errorf("failed to load state: %w", err)
+		}
+
+		cfg, err := gridConfig.LoadConfig("")
+		if err != nil {
+			return fmt.Errorf("failed to load config: %w", err)
+		}
+
+		// Reconcile
+		if err := gridReconcile.Sync(ctx, c, snap, runtimeState, cfg); err != nil {
+			return fmt.Errorf("failed to reconcile state: %w", err)
+		}
+
+		// Follow mode: override target to current screen
+		if follow {
+			if !gridRecord.FFmpegAvailable() {
+				return fmt.Errorf("--follow requires ffmpeg: %s", gridRecord.InstallHint())
+			}
+			target = gridRecord.Target{Type: gridRecord.TargetScreen}
+		}
+
+		// Resolve target to pixel regions
+		resolved, err := gridRecord.ResolveTarget(target, snap, runtimeState, cfg)
+		if err != nil {
+			return err
+		}
+
+		if !jsonOutput {
+			if follow {
+				infoColor.Printf("Recording %s with --follow (%.0fx%.0f)", resolved.Label, resolved.Regions[0].Width, resolved.Regions[0].Height)
+			} else {
+				infoColor.Printf("Recording %s (%.0fx%.0f)", resolved.Label, resolved.Regions[0].Width, resolved.Regions[0].Height)
+				if len(resolved.Regions) > 1 {
+					fmt.Printf(" + %d more regions", len(resolved.Regions)-1)
+				}
+			}
+			fmt.Printf(" for %ds as %s\n", duration, format)
+		}
+
+		// Countdown
+		if countdown > 0 && !jsonOutput {
+			for i := countdown; i > 0; i-- {
+				warnColor.Printf("%d...\n", i)
+				time.Sleep(time.Second)
+			}
+		}
+
+		if !jsonOutput {
+			infoColor.Println("Recording...")
+		}
+
+		recordingDir := cfg.Settings.Recording.OutputDir
+		if recordingDir != "" {
+			if err := os.MkdirAll(recordingDir, 0o755); err != nil {
+				return fmt.Errorf("failed to create recording output directory: %w", err)
+			}
+		}
+
+		opts := gridRecord.Options{
+			Duration:  duration,
+			Output:    outputPath,
+			OutputDir: recordingDir,
+			Format:    format,
+			FPS:       fps,
+			Width:     width,
+			Quality:   quality,
+			Countdown: countdown,
+			Cursor:    cursor,
+			Open:      openAfter,
+			Follow:    follow,
+		}
+		if follow {
+			opts.FollowCtx = &gridRecord.FollowContext{
+				Client: c,
+				Config: cfg,
+			}
+		}
+
+		result, err := gridRecord.Record(ctx, resolved, opts)
+		if err != nil {
+			return err
+		}
+
+		if jsonOutput {
+			return printJSON(result)
+		}
+
+		successColor.Printf("✓ Saved: %s (%s, %s)\n", result.FilePath, result.Format, humanSize(result.Size))
+
+		// Open file if requested
+		if openAfter {
+			exec.Command("open", result.FilePath).Start()
+		}
+
+		return nil
+	},
+}
+
+// MARK: - Terminal Command
+
+// terminalCmd launches or toggles the floating terminal
+var terminalCmd = &cobra.Command{
+	Use:   "terminal",
+	Short: "Toggle the floating scratchpad terminal",
+	Long: `Toggle the floating scratchpad terminal (tmux session "grid-scratch").
+
+First invocation launches the grid-terminal daemon. Subsequent invocations
+toggle the terminal window visibility. The tmux session persists across
+toggle cycles and daemon restarts.`,
+	Args: cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		terminalPath, err := findTerminalExecutable()
+		if err != nil {
+			return err
+		}
+
+		// Launch grid-terminal as a detached process.
+		// The binary handles single-instance internally:
+		// - If no daemon running: starts daemon, shows window
+		// - If daemon running: sends toggle notification, exits
+		p := exec.Command(terminalPath)
+		p.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		p.Stdout = nil
+		p.Stderr = os.Stderr
+		if err := p.Start(); err != nil {
+			return fmt.Errorf("failed to launch grid-terminal: %w", err)
+		}
+
+		// Don't wait for the daemon process
+		go p.Wait()
+
+		return nil
+	},
+}
+
+// humanSize formats bytes into a human-readable string
+func humanSize(bytes int64) string {
+	const unit = 1024
+	if bytes < unit {
+		return fmt.Sprintf("%d B", bytes)
+	}
+	div, exp := int64(unit), 0
+	for n := bytes / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
+}
+
 func init() {
 	// Global flags
 	rootCmd.PersistentFlags().StringVar(&socketPath, "socket", client.DefaultSocketPath, "Unix socket path")
@@ -3917,6 +4308,22 @@ func init() {
 	rootCmd.AddCommand(windowCmd)
 	rootCmd.AddCommand(spaceCmd)
 	rootCmd.AddCommand(renderCmd)
+
+	// Add terminal command
+	rootCmd.AddCommand(terminalCmd)
+
+	// Add record command and flags
+	rootCmd.AddCommand(recordCmd)
+	recordCmd.Flags().IntP("duration", "d", 5, "Seconds to record")
+	recordCmd.Flags().StringP("output", "o", "", "Output path (auto-generated if empty)")
+	recordCmd.Flags().StringP("format", "f", "gif", "Output format: gif, mp4, webm, mov")
+	recordCmd.Flags().Int("fps", 0, "Frames per second (0=auto: 10 for gif, 30 for video)")
+	recordCmd.Flags().IntP("width", "w", 0, "Max output width (scale, preserve aspect ratio)")
+	recordCmd.Flags().StringP("quality", "q", "medium", "Quality preset: low, medium, high")
+	recordCmd.Flags().Int("countdown", 3, "Seconds countdown before recording (0 to skip)")
+	recordCmd.Flags().Bool("cursor", false, "Include cursor in recording")
+	recordCmd.Flags().Bool("open", false, "Open file after recording")
+	recordCmd.Flags().Bool("follow", false, "Crop follows focused cell during recording")
 
 	// Add the-grid layout commands
 	rootCmd.AddCommand(gridLayoutCmd)
@@ -3962,6 +4369,7 @@ func init() {
 	focusCmd.AddCommand(focusNextCmd)
 	focusCmd.AddCommand(focusPrevCmd)
 	focusCmd.AddCommand(focusCellCmd)
+	focusCmd.AddCommand(focusInfoCmd)
 
 	// Add focus command flags
 	focusLeftCmd.Flags().Bool("wrap", true, "Wrap around to opposite edge")
@@ -4113,12 +4521,16 @@ func shouldSkipMutex(cmd *cobra.Command) bool {
 
 	// Exact matches for simple commands
 	skipExact := map[string]bool{
-		"thegrid":      true, // Root command (shows help)
-		"thegrid ping": true,
-		"thegrid info": true,
-		"thegrid dump": true,
-		"thegrid list": true,
-		"thegrid show": true,
+		"thegrid":             true, // Root command (shows help)
+		"thegrid ping":        true,
+		"thegrid info":        true,
+		"thegrid dump":        true,
+		"thegrid list":        true,
+		"thegrid show":        true,
+		"thegrid record":      true,
+		"thegrid terminal":    true,
+		"thegrid pick":        true,
+		"thegrid pick window": true,
 	}
 
 	if skipExact[cmdPath] {

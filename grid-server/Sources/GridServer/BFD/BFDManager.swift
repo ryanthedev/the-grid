@@ -1,7 +1,8 @@
 import Foundation
+import AppKit
 
 /// Main orchestrator for the BFD hotkey daemon
-class BFDManager {
+class BFDManager: NSObject {
     private let keyHandler: BFDKeyHandler
     private var executor: BFDExecutor?
     private var configWatcher: DispatchSourceFileSystemObject?
@@ -12,6 +13,7 @@ class BFDManager {
     init(configPath: String = BFDConfig.defaultPath) {
         self.configPath = configPath
         self.keyHandler = BFDKeyHandler()
+        super.init()
 
         keyHandler.onHotkeyTriggered = { [weak self] spec, def in
             self?.executor?.executeAsync(hotkey: spec, command: def.run)
@@ -49,7 +51,22 @@ class BFDManager {
         // Start config watcher
         startConfigWatcher()
 
+        // Listen for sleep/wake to recover event tap
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(systemDidWake),
+            name: NSWorkspace.didWakeNotification,
+            object: nil
+        )
+
         return true
+    }
+
+    @objc private func systemDidWake(_ notification: Notification) {
+        // Delay slightly — event tap may not be ready immediately after wake
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            self?.handleWake()
+        }
     }
 
     /// Stop the hotkey daemon
@@ -60,6 +77,11 @@ class BFDManager {
         Task {
             JSONLogger.shared.log("bfd.stop", data: [:])
         }
+    }
+
+    /// Restart the event tap after sleep/wake
+    func handleWake() {
+        keyHandler.restart()
     }
 
     /// Reload configuration

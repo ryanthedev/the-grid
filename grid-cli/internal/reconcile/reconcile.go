@@ -115,8 +115,8 @@ func equalRatios(n int) []float64 {
 	return ratios
 }
 
-// calculateCellBounds computes cell bounds from layout definition and display geometry.
-func calculateCellBounds(layoutDef *types.Layout, snap *server.Snapshot, spaceState *state.SpaceState) map[string]client.CellRect {
+// CalculateCellBounds computes cell bounds from layout definition and display geometry.
+func CalculateCellBounds(layoutDef *types.Layout, snap *server.Snapshot, spaceState *state.SpaceState) map[string]client.CellRect {
 	if layoutDef == nil || len(layoutDef.Cells) == 0 {
 		return nil
 	}
@@ -205,7 +205,7 @@ func SyncBorders(ctx context.Context, c *client.Client, snap *server.Snapshot, r
 	}
 
 	// 5. Calculate cell bounds
-	calculated := calculateCellBounds(layoutDef, snap, spaceState)
+	calculated := CalculateCellBounds(layoutDef, snap, spaceState)
 	if calculated == nil {
 		return
 	}
@@ -267,14 +267,14 @@ func SyncBordersForDisplay(ctx context.Context, c *client.Client, displayInfo se
 		return
 	}
 
-	// Create a minimal Snapshot with only the fields needed by calculateCellBounds.
-	// calculateCellBounds only uses SpaceID (for logging) and DisplayBounds (for layout calculation).
+	// Create a minimal Snapshot with only the fields needed by CalculateCellBounds.
+	// CalculateCellBounds only uses SpaceID (for logging) and DisplayBounds (for layout calculation).
 	pseudoSnap := &server.Snapshot{
 		SpaceID:       spaceID,
 		DisplayBounds: displayBounds,
 	}
 
-	cellBounds := calculateCellBounds(layoutDef, pseudoSnap, spaceState)
+	cellBounds := CalculateCellBounds(layoutDef, pseudoSnap, spaceState)
 	if cellBounds == nil {
 		return
 	}
@@ -326,7 +326,7 @@ func SyncBordersWithFocus(ctx context.Context, c *client.Client, displayInfo ser
 		DisplayBounds: displayBounds,
 	}
 
-	cellBounds := calculateCellBounds(layoutDef, pseudoSnap, spaceState)
+	cellBounds := CalculateCellBounds(layoutDef, pseudoSnap, spaceState)
 	if cellBounds == nil {
 		return
 	}

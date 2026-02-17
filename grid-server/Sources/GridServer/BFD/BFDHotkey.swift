@@ -72,7 +72,7 @@ let BFDKeycodes: [String: UInt32] = [
     ";": UInt32(kVK_ANSI_Semicolon), "'": UInt32(kVK_ANSI_Quote),
     "\\": UInt32(kVK_ANSI_Backslash), ",": UInt32(kVK_ANSI_Comma),
     ".": UInt32(kVK_ANSI_Period), "/": UInt32(kVK_ANSI_Slash),
-    "`": UInt32(kVK_ANSI_Grave),
+    "`": UInt32(kVK_ANSI_Grave), "backtick": UInt32(kVK_ANSI_Grave),
 ]
 
 /// Parse a hotkey spec like "cmd+shift-h" into (modifiers, keyCode)

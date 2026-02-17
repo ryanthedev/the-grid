@@ -615,3 +615,95 @@ layouts:
 		t.Errorf("Expected BaseSpacing=8, got %v", cfg.Settings.BaseSpacing)
 	}
 }
+
+func TestExpandTilde(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("Failed to get home dir: %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "bare tilde",
+			input:    "~",
+			expected: home,
+		},
+		{
+			name:     "tilde with path",
+			input:    "~/foo/bar",
+			expected: filepath.Join(home, "foo/bar"),
+		},
+		{
+			name:     "absolute path",
+			input:    "/absolute/path",
+			expected: "/absolute/path",
+		},
+		{
+			name:     "relative path",
+			input:    "relative/path",
+			expected: "relative/path",
+		},
+		{
+			name:     "empty string",
+			input:    "",
+			expected: "",
+		},
+		{
+			name:     "tilde in middle",
+			input:    "/path/~/foo",
+			expected: "/path/~/foo",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ExpandTilde(tt.input)
+			if got != tt.expected {
+				t.Errorf("ExpandTilde(%q) = %q, want %q", tt.input, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestExpandPaths(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("Failed to get home dir: %v", err)
+	}
+
+	cfg := &Config{
+		Settings: Settings{
+			PickerPath: "~/bin/picker",
+			Recording: RecordingSettings{
+				OutputDir: "~/recordings",
+			},
+		},
+		Picker: &PickerConfig{
+			Sources: SourcesConfig{
+				ZoxidePath: "~/bin/zoxide",
+				Chrome: ChromeConfig{
+					StateFile: "~/chrome-state.json",
+				},
+			},
+		},
+	}
+
+	cfg.ExpandPaths()
+
+	if cfg.Settings.PickerPath != filepath.Join(home, "bin/picker") {
+		t.Errorf("PickerPath not expanded: %q", cfg.Settings.PickerPath)
+	}
+	if cfg.Settings.Recording.OutputDir != filepath.Join(home, "recordings") {
+		t.Errorf("OutputDir not expanded: %q", cfg.Settings.Recording.OutputDir)
+	}
+	if cfg.Picker.Sources.ZoxidePath != filepath.Join(home, "bin/zoxide") {
+		t.Errorf("ZoxidePath not expanded: %q", cfg.Picker.Sources.ZoxidePath)
+	}
+	if cfg.Picker.Sources.Chrome.StateFile != filepath.Join(home, "chrome-state.json") {
+		t.Errorf("StateFile not expanded: %q", cfg.Picker.Sources.Chrome.StateFile)
+	}
+}
