@@ -105,7 +105,7 @@ func Stitch(inputs []string, output string, regions []types.Rect) error {
 
 	args = append(args, "-filter_complex", filter, "-an", output)
 
-	cmd := exec.Command("ffmpeg", args...)
+	cmd := exec.Command(FindFfmpeg(), args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("ffmpeg stitch failed: %w\n%s", err, string(out))
@@ -123,7 +123,7 @@ func convertGIF(input, output string, fps, width int, quality QualityLevel) erro
 	// Palette generation
 	paletteFile := output + ".palette.png"
 	palArgs := []string{"-y", "-i", input, "-vf", vf + ",palettegen=stats_mode=diff", paletteFile}
-	cmd := exec.Command("ffmpeg", palArgs...)
+	cmd := exec.Command(FindFfmpeg(), palArgs...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("palette generation failed: %w\n%s", err, string(out))
@@ -141,7 +141,7 @@ func convertGIF(input, output string, fps, width int, quality QualityLevel) erro
 	// Create GIF with palette
 	filter := fmt.Sprintf("%s[x];[x][1:v]paletteuse=dither=%s", vf, dither)
 	gifArgs := []string{"-y", "-i", input, "-i", paletteFile, "-filter_complex", filter, output}
-	cmd = exec.Command("ffmpeg", gifArgs...)
+	cmd = exec.Command(FindFfmpeg(), gifArgs...)
 	out, err = cmd.CombinedOutput()
 
 	// Clean up palette
@@ -168,7 +168,7 @@ func convertMP4(input, output string, fps, width int, quality QualityLevel) erro
 		"-pix_fmt", "yuv420p",
 		"-an", output)
 
-	cmd := exec.Command("ffmpeg", args...)
+	cmd := exec.Command(FindFfmpeg(), args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("MP4 conversion failed: %w\n%s", err, string(out))
@@ -190,7 +190,7 @@ func convertWebM(input, output string, fps, width int, quality QualityLevel) err
 		"-crf", strconv.Itoa(crf), "-b:v", "0",
 		"-an", output)
 
-	cmd := exec.Command("ffmpeg", args...)
+	cmd := exec.Command(FindFfmpeg(), args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("WebM conversion failed: %w\n%s", err, string(out))

@@ -28,9 +28,9 @@ var tmuxPaths = []string{
 	"/usr/bin/tmux",
 }
 
-// findTmux returns the path to tmux binary, checking common locations
+// FindTmux returns the path to tmux binary, checking common locations
 // if not found in PATH
-func findTmux() string {
+func FindTmux() string {
 	for _, p := range tmuxPaths {
 		if path, err := exec.LookPath(p); err == nil {
 			return path
@@ -46,7 +46,7 @@ func GetClients() (map[int]TmuxClientInfo, error) {
 	result := make(map[int]TmuxClientInfo)
 
 	// Find tmux binary, checking common locations if not in PATH
-	tmuxPath := findTmux()
+	tmuxPath := FindTmux()
 
 	// Run tmux list-clients with format string
 	cmd := exec.Command(tmuxPath, "list-clients", "-F",
@@ -136,7 +136,7 @@ func (e *parseError) Error() string {
 // GetSessionWindowNames returns all window names for a tmux session.
 // Returns empty slice (not error) if tmux is not running or session doesn't exist.
 func GetSessionWindowNames(sessionName string) []string {
-	tmuxPath := findTmux()
+	tmuxPath := FindTmux()
 	cmd := exec.Command(tmuxPath, "list-windows", "-t", sessionName, "-F", "#{window_name}")
 	out, err := cmd.Output()
 	if err != nil {
