@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/ryanthedev/grid-cli/internal/jsonlog"
+	"github.com/ryanthedev/grid-cli/internal/tmux"
 )
 
 // cleanEnv returns the current environment with tmux-related variables removed.
@@ -101,23 +102,27 @@ func openDirInTmux(ctx context.Context, dirPath string) error {
 	}))
 
 	// Boost frecency in zoxide
-	zoxideAdd := exec.CommandContext(ctx, "zoxide", "add", dirPath)
-	_ = zoxideAdd.Run() // ignore errors - zoxide may not be installed
+	if zoxidePath, err := findZoxideBinary(""); err == nil {
+		_ = exec.CommandContext(ctx, zoxidePath, "add", dirPath).Run()
+	}
+
+	// Resolve tmux binary (checks common paths like /opt/homebrew/bin)
+	tmuxPath := tmux.FindTmux()
 
 	// Check if session already exists
-	hasSession := exec.CommandContext(ctx, "tmux", "has-session", "-t", sessionName)
+	hasSession := exec.CommandContext(ctx, tmuxPath, "has-session", "-t", sessionName)
 	sessionExists := hasSession.Run() == nil
 
 	if !sessionExists {
 		// Create new detached session
-		newSession := exec.CommandContext(ctx, "tmux", "new-session", "-d", "-s", sessionName, "-c", dirPath)
+		newSession := exec.CommandContext(ctx, tmuxPath, "new-session", "-d", "-s", sessionName, "-c", dirPath)
 		if err := newSession.Run(); err != nil {
 			return fmt.Errorf("failed to create tmux session: %w", err)
 		}
 	}
 
 	// Open new Ghostty window with tmux attach
-	cmd := exec.CommandContext(ctx, "open", "-na", "Ghostty", "--args", "-e", "tmux", "attach", "-t", sessionName)
+	cmd := exec.CommandContext(ctx, "open", "-na", "Ghostty", "--args", "-e", tmuxPath, "attach", "-t", sessionName)
 	cmd.Env = cleanEnv()
 	return cmd.Run()
 }
