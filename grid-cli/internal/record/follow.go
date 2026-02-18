@@ -211,7 +211,7 @@ func ApplyCropFilter(input, output, filter string, outW, outH int) error {
 		output,
 	}
 
-	cmd := exec.Command("ffmpeg", args...)
+	cmd := exec.Command(FindFfmpeg(), args...)
 	combinedOutput, err := cmd.CombinedOutput()
 
 	if err != nil {

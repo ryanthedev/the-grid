@@ -1689,9 +1689,11 @@ var windows: [String: WindowState] = [:]
             oldSpaceIDs[display.uuid] = display.currentSpaceID
         }
 
-        // 2. Refresh spaces and update currentSpaceID for each display
+        // 2. Capture old space IDs, refresh, and diff for created/destroyed
+        let oldSpaceKeys = Set(state.spaces.keys)
         refreshSpaces()
         refreshDisplayCurrentSpaces()
+        await diffAndRouteSpaceEvents(oldSpaceKeys: oldSpaceKeys)
 
         // 3. Find which display's space changed - that's the active one
         var foundChangedDisplay = false
@@ -1801,9 +1803,36 @@ return
         }
     }
 
+    /// Diffs old vs current space keys and routes spaceCreated/spaceDestroyed events.
+    private func diffAndRouteSpaceEvents(oldSpaceKeys: Set<String>) async {
+        let newSpaceKeys = Set(state.spaces.keys)
+        let createdSpaces = newSpaceKeys.subtracting(oldSpaceKeys)
+        let destroyedSpaces = oldSpaceKeys.subtracting(newSpaceKeys)
+
+        for spaceKey in createdSpaces {
+            if let spaceID = UInt64(spaceKey),
+               let space = state.spaces[spaceKey] {
+                await EventRouter.shared.route(
+                    .spaceCreated(spaceID: spaceID, displayUUID: space.displayUUID),
+                    from: .workspaceObserver
+                )
+            }
+        }
+
+        for spaceKey in destroyedSpaces {
+            if let spaceID = UInt64(spaceKey) {
+                await EventRouter.shared.route(
+                    .spaceDestroyed(spaceID: spaceID),
+                    from: .workspaceObserver
+                )
+            }
+        }
+    }
+
     private func handleDisplayConfigurationChanged() async {
         // Capture old display UUIDs before refresh
         let oldDisplayUUIDs = Set(state.displays.map { $0.uuid })
+        let oldSpaceKeys = Set(state.spaces.keys)
 
         // Debug: log state before refresh
         JSONLogger.shared.log("dbg.dsp.reconfig.start", data: [
@@ -1827,12 +1856,21 @@ return
             "connected": Array(connectedDisplays)
         ])
 
+        for displayUUID in connectedDisplays {
+            await EventRouter.shared.route(
+                .displayConnected(displayUUID: displayUUID),
+                from: .workspaceObserver
+            )
+        }
+
         for displayUUID in disconnectedDisplays {
             await EventRouter.shared.route(
                 .displayDisconnected(displayUUID: displayUUID),
                 from: .workspaceObserver
             )
         }
+
+        await diffAndRouteSpaceEvents(oldSpaceKeys: oldSpaceKeys)
 
         state.metadata.update()
     }
