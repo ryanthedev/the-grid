@@ -1417,6 +1417,122 @@ This is useful when windows have moved or displays have changed.`,
 	},
 }
 
+// layoutSaveCmd saves current runtime layout modifications to config.local.yaml
+var layoutSaveCmd = &cobra.Command{
+	Use:   "save",
+	Short: "Save current layout proportions and cell modes to config",
+	Long: `Saves runtime layout modifications (cell resize ratios and stack modes)
+to config.local.yaml so they become the permanent defaults for this layout.
+
+After saving, runtime ratios are cleared since the layout definition
+now reflects those proportions.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx := context.Background()
+
+		cfg, err := gridConfig.LoadConfig("")
+		if err != nil {
+			return fmt.Errorf("failed to load config: %w", err)
+		}
+
+		runtimeState, err := gridState.LoadState()
+		if err != nil {
+			return fmt.Errorf("failed to load state: %w", err)
+		}
+
+		c := client.NewClient(socketPath, timeout)
+		defer c.Close()
+
+		snap, err := gridServer.Fetch(ctx, c)
+		if err != nil {
+			return fmt.Errorf("failed to fetch server state: %w", err)
+		}
+
+		spaceState := runtimeState.GetSpaceReadOnly(snap.SpaceID)
+		if spaceState == nil {
+			return fmt.Errorf("no layout applied for current space")
+		}
+
+		layoutID := spaceState.CurrentLayoutID
+		if layoutID == "" {
+			return fmt.Errorf("no layout applied for current space")
+		}
+
+		// Get the base layout (without overrides) to access original track definitions
+		layout, err := cfg.GetLayout(layoutID)
+		if err != nil {
+			return fmt.Errorf("layout %q not found: %w", layoutID, err)
+		}
+
+		override := gridConfig.LayoutOverrideConfig{}
+		hasChanges := false
+
+		// Convert column ratios to track strings
+		if len(spaceState.ColumnRatios) > 0 {
+			columns := gridLayout.RatiosToTrackStrings(layout.Columns, spaceState.ColumnRatios)
+			if override.Grid == nil {
+				override.Grid = &gridConfig.GridConfig{}
+			}
+			override.Grid.Columns = columns
+			hasChanges = true
+		}
+
+		// Convert row ratios to track strings
+		if len(spaceState.RowRatios) > 0 {
+			rows := gridLayout.RatiosToTrackStrings(layout.Rows, spaceState.RowRatios)
+			if override.Grid == nil {
+				override.Grid = &gridConfig.GridConfig{}
+			}
+			override.Grid.Rows = rows
+			hasChanges = true
+		}
+
+		// Collect cell mode overrides
+		for cellID, cellState := range spaceState.Cells {
+			if cellState.StackMode != "" {
+				if override.CellModes == nil {
+					override.CellModes = make(map[string]gridTypes.StackMode)
+				}
+				override.CellModes[cellID] = cellState.StackMode
+				hasChanges = true
+			}
+		}
+
+		if !hasChanges {
+			fmt.Println("No layout modifications to save")
+			return nil
+		}
+
+		if err := gridConfig.SaveLayoutOverride(layoutID, override); err != nil {
+			return fmt.Errorf("failed to save layout override: %w", err)
+		}
+
+		// Clear runtime ratios — they're now baked into config
+		mutableSpace := runtimeState.GetSpace(snap.SpaceID)
+		mutableSpace.ColumnRatios = nil
+		mutableSpace.RowRatios = nil
+		runtimeState.MarkUpdated()
+		if err := runtimeState.Save(); err != nil {
+			return fmt.Errorf("failed to save state: %w", err)
+		}
+
+		successColor.Printf("Saved layout %q overrides to config.local.yaml\n", layoutID)
+
+		if override.Grid != nil {
+			if len(override.Grid.Columns) > 0 {
+				fmt.Printf("  columns: %v\n", override.Grid.Columns)
+			}
+			if len(override.Grid.Rows) > 0 {
+				fmt.Printf("  rows: %v\n", override.Grid.Rows)
+			}
+		}
+		if len(override.CellModes) > 0 {
+			fmt.Printf("  cellModes: %v\n", override.CellModes)
+		}
+
+		return nil
+	},
+}
+
 // MARK: - Config Commands
 
 // gridConfigCmd is the parent command for config subcommands
@@ -4332,6 +4448,7 @@ func init() {
 	gridLayoutCmd.AddCommand(layoutApplyCmd)
 	gridLayoutCmd.AddCommand(layoutCurrentCmd)
 	gridLayoutCmd.AddCommand(layoutRefreshCmd)
+	gridLayoutCmd.AddCommand(layoutSaveCmd)
 
 	// Add layout command flags
 	layoutApplyCmd.Flags().String("space", "", "Space ID to apply layout to")

@@ -50,19 +50,49 @@ func GetConfigPath() string {
 	return filepath.Join(home, DefaultConfigDir, DefaultConfigFile)
 }
 
-// GetLayout returns a layout by ID, converting from LayoutConfig to types.Layout
+// GetLayout returns a layout by ID, converting from LayoutConfig to types.Layout.
+// If layoutOverrides exist for this layout ID, they are applied before conversion.
 func (c *Config) GetLayout(id string) (*types.Layout, error) {
+	var lc *LayoutConfig
+
 	// Check user layouts first
-	for _, lc := range c.Layouts {
-		if lc.ID == id {
-			return lc.ToLayout()
+	for i := range c.Layouts {
+		if c.Layouts[i].ID == id {
+			lc = &c.Layouts[i]
+			break
 		}
 	}
 	// Check builtins
-	if builtin := GetBuiltinLayout(id); builtin != nil {
-		return builtin.ToLayout()
+	if lc == nil {
+		lc = GetBuiltinLayout(id)
 	}
-	return nil, fmt.Errorf("layout not found: %s", id)
+	if lc == nil {
+		return nil, fmt.Errorf("layout not found: %s", id)
+	}
+
+	// Apply overrides if present
+	if override, ok := c.LayoutOverrides[id]; ok {
+		cloned := *lc
+		if override.Grid != nil {
+			if len(override.Grid.Columns) > 0 {
+				cloned.Grid.Columns = override.Grid.Columns
+			}
+			if len(override.Grid.Rows) > 0 {
+				cloned.Grid.Rows = override.Grid.Rows
+			}
+		}
+		if len(override.CellModes) > 0 {
+			if cloned.CellModes == nil {
+				cloned.CellModes = make(map[string]types.StackMode)
+			}
+			for k, v := range override.CellModes {
+				cloned.CellModes[k] = v
+			}
+		}
+		return cloned.ToLayout()
+	}
+
+	return lc.ToLayout()
 }
 
 // GetLayoutIDs returns all available layout IDs
