@@ -66,6 +66,38 @@ struct ServerConfig: Codable {
         }
 
         let yamlStr = try Yams.dump(object: merged)
-        return try YAMLDecoder().decode(ServerConfig.self, from: yamlStr)
+        var config = try YAMLDecoder().decode(ServerConfig.self, from: yamlStr)
+        config.cliPath = resolveCliPath(config.cliPath)
+        return config
+    }
+
+    /// Resolve CLI binary to an absolute path.
+    /// In daemon context, PATH may not include /opt/homebrew/bin etc.
+    private static func resolveCliPath(_ path: String) -> String {
+        if path.hasPrefix("/") {
+            return path
+        }
+        let searchPaths = [
+            "/opt/homebrew/bin/\(path)",
+            "/usr/local/bin/\(path)",
+            NSHomeDirectory() + "/.local/bin/\(path)",
+            "/usr/bin/\(path)",
+        ]
+        let fm = FileManager.default
+        for candidate in searchPaths {
+            if fm.isExecutableFile(atPath: candidate) {
+                JSONLogger.shared.log("srv.cfg.cli_resolved", data: [
+                    "from": path,
+                    "to": candidate
+                ])
+                return candidate
+            }
+        }
+        // Fall back to bare name (will use /usr/bin/env resolution)
+        JSONLogger.shared.log("srv.cfg.cli_unresolved", msg: "binary not found in search paths", data: [
+            "name": path,
+            "searched": searchPaths
+        ])
+        return path
     }
 }
