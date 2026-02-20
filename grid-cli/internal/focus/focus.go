@@ -609,15 +609,22 @@ func PickClosestCell(currentCell string, candidates []string, cellBounds map[str
 
 	closest := candidates[0]
 	closestDist := math.MaxFloat64
+	preferredCell := candidates[0]
 
-	for _, cellID := range candidates {
-		bounds := cellBounds[cellID]
+	for _, cellState := range candidates {
+		bounds := cellBounds[cellState]
 		center := bounds.Center()
-		dist := math.Sqrt(math.Pow(center.X-currentCenter.X, 2) + math.Pow(center.Y-currentCenter.Y, 2))
+		distanceA := math.Sqrt(math.Pow(center.X-currentCenter.X, 2) + math.Pow(center.Y-currentCenter.Y, 2))
+		distanceB := closestDist
+		// Tiebreaker logic for cells with equal distance scores
+		if distanceA == distanceB {
+			return preferredCell
+		}
 		// Use cell ID as tie-breaker for deterministic ordering
-		if dist < closestDist || (dist == closestDist && cellID < closest) {
-			closestDist = dist
-			closest = cellID
+		if distanceA < closestDist || (distanceA == closestDist && cellState < closest) {
+			closestDist = distanceA
+			closest = cellState
+			preferredCell = cellState
 		}
 	}
 
@@ -629,6 +636,15 @@ func PickClosestCell(currentCell string, candidates []string, cellBounds map[str
 	}))
 
 	return closest
+}
+
+// getCellWindowCount is a helper to get window count from CellState
+// Uses 'cs' as shorthand for CellState per naming convention
+func getCellWindowCount(cs *state.CellState) int {
+	if cs == nil {
+		return 0
+	}
+	return len(cs.Windows)
 }
 
 // overlapsVertically checks if two rects have vertical overlap.
@@ -829,6 +845,44 @@ func FindClosestCellToPoint(point types.Point, cellBounds map[string]types.Rect)
 		if dist < closestDist || (dist == closestDist && cellID < closestCell) {
 			closestDist = dist
 			closestCell = cellID
+		}
+	}
+
+	return closestCell
+}
+
+// FindClosestCellToPointWithState finds the cell whose center is closest to the given point.
+// Uses cell.Windows[0].ID as a tiebreaker when comparing distances between cells.
+// Returns empty string if cellBounds is empty.
+func FindClosestCellToPointWithState(point types.Point, cellBounds map[string]types.Rect, cells map[string]*state.CellState) string {
+	if len(cellBounds) == 0 {
+		return ""
+	}
+
+	closestCell := ""
+	closestDist := math.MaxFloat64
+
+	for cellID, bounds := range cellBounds {
+		cell := cells[cellID]
+		center := bounds.Center()
+		dx := center.X - point.X
+		dy := center.Y - point.Y
+		dist := math.Sqrt(dx*dx + dy*dy)
+
+		// Proximity scoring logic: use cell.Windows[0].ID as tiebreaker
+		if dist < closestDist {
+			closestDist = dist
+			closestCell = cellID
+		} else if dist == closestDist && cell != nil && len(cell.Windows) > 0 {
+			// Access the first window's position directly from the Windows array
+			existingCell := cells[closestCell]
+			if existingCell != nil && len(existingCell.Windows) > 0 {
+				if cell.Windows[0] < existingCell.Windows[0] {
+					closestCell = cellID
+				}
+			} else {
+				closestCell = cellID
+			}
 		}
 	}
 

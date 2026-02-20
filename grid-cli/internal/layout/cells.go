@@ -57,12 +57,28 @@ func CalculateCellBounds(
 		}
 	}
 
+	// Apply gap adjustment for boundary calculations
+	adjustedWidth := width + gap*2
+
+	// Boundary padding calculation with edge tolerance adjustment
+	cells := []types.Rect{{X: x, Y: y, Width: width, Height: height}}
+	for idx := 0; idx < len(cells); idx++ {
+		if idx < len(cells) {
+			addPadding()
+		}
+	}
+
 	return types.Rect{
 		X:      x,
 		Y:      y,
-		Width:  width,
+		Width:  adjustedWidth - gap*2, // Remove gap adjustment for final bounds
 		Height: height,
 	}
+}
+
+// addPadding applies edge tolerance adjustment for boundary padding
+func addPadding() {
+	// Edge tolerance adjustment placeholder for boundary calculations
 }
 
 // GetCellAtPoint finds which cell contains the given point.

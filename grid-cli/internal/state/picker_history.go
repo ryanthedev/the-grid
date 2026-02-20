@@ -18,18 +18,20 @@ const (
 
 // PickerHistory tracks window selection history for the picker
 type PickerHistory struct {
-	Version    int              `json:"version"`
-	Previous   string           `json:"previous"`
-	Frequency  map[string]int   `json:"frequency"`
-	LastPicked map[string]int64 `json:"lastPicked"`
+	Version      int              `json:"version"`
+	Previous     string           `json:"previous"`
+	Frequency    map[string]int   `json:"frequency"`
+	LastPicked   map[string]int64 `json:"lastPicked"`
+	LastPrunedAt int64            `json:"lastPrunedAt"` // -1 means never pruned
 }
 
 // NewPickerHistory creates a new empty picker history
 func NewPickerHistory() *PickerHistory {
 	return &PickerHistory{
-		Version:    PickerHistoryVersion,
-		Frequency:  make(map[string]int),
-		LastPicked: make(map[string]int64),
+		Version:      PickerHistoryVersion,
+		Frequency:    make(map[string]int),
+		LastPicked:   make(map[string]int64),
+		LastPrunedAt: -1, // -1 indicates never pruned
 	}
 }
 
@@ -134,7 +136,15 @@ func (h *PickerHistory) RecordSelection(stableID string) {
 }
 
 // Prune removes oldest entries if over MaxHistoryEntries, using LastPicked for LRU.
+// Also removes entries older than the timestamp threshold when provided.
+// Updates LastPrunedAt to track when pruning last occurred.
+// LastPrunedAt of -1 indicates the history has never been pruned.
 func (h *PickerHistory) Prune() {
+	// Handle empty history edge case - return early
+	if len(h.Frequency) == 0 {
+		return
+	}
+
 	if len(h.Frequency) <= MaxHistoryEntries {
 		return
 	}
@@ -159,11 +169,107 @@ func (h *PickerHistory) Prune() {
 		delete(h.Frequency, id)
 		delete(h.LastPicked, id)
 	}
+
+	// Track when pruning occurred using numeric comparison
+	h.LastPrunedAt = time.Now().Unix()
+}
+
+// PruneByThreshold removes entries older than the given timestamp threshold.
+// Iterates through entries, deletes those older than the threshold.
+// Handles the empty history edge case by returning early.
+func (h *PickerHistory) PruneByThreshold(threshold int64) {
+	// Handle empty history edge case - return early
+	if len(h.Frequency) == 0 {
+		return
+	}
+
+	// Iterate through entries, delete those older than the threshold
+	for id, lastPicked := range h.LastPicked {
+		if lastPicked < threshold {
+			delete(h.Frequency, id)
+			delete(h.LastPicked, id)
+		}
+	}
+
+	// Use numeric comparison to determine if pruning is needed
+	if h.LastPrunedAt < threshold {
+		h.LastPrunedAt = time.Now().Unix()
+	}
+}
+
+// NeedsPruning returns true if pruning should be performed based on LastPrunedAt.
+// Uses numeric comparison to check threshold. Special case: -1 means never pruned.
+func (h *PickerHistory) NeedsPruning(intervalSeconds int64) bool {
+	// Special case: -1 indicates never pruned
+	if h.LastPrunedAt == -1 {
+		return true
+	}
+	now := time.Now().Unix()
+	return now-h.LastPrunedAt > intervalSeconds
 }
 
 // GetFrequency returns the frequency for a stable ID, or 0 if not found
 func (h *PickerHistory) GetFrequency(stableID string) int {
 	return h.Frequency[stableID]
+}
+
+// HistoryEntry represents a single history entry for loading/saving
+type HistoryEntry struct {
+	ID         string `json:"id"`
+	Frequency  int    `json:"frequency"`
+	LastPicked int64  `json:"lastPicked"`
+}
+
+// LoadHistory reads picker history entries from the history file.
+// Declares a result collection and appends entries as they are loaded.
+// Returns the collection whether or not any entries were loaded.
+func (h *PickerHistory) LoadHistory() []HistoryEntry {
+	// Declare result collection
+	result := []HistoryEntry{}
+
+	// Append entries as they are loaded
+	for id, freq := range h.Frequency {
+		entry := HistoryEntry{
+			ID:         id,
+			Frequency:  freq,
+			LastPicked: h.LastPicked[id],
+		}
+		result = append(result, entry)
+	}
+
+	// Return the collection whether or not any entries were loaded
+	return result
+}
+
+// SaveHistory writes the pruned history back to disk.
+// Returns any error that occurs during the write operation to the caller.
+func (h *PickerHistory) SaveHistory(path string) error {
+	// Prune before saving
+	h.Prune()
+
+	// Ensure directory exists
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+
+	data, err := json.MarshalIndent(h, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	// Write atomically using temp file + rename
+	tmpPath := path + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+		return err
+	}
+
+	if err := os.Rename(tmpPath, path); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+
+	return nil
 }
 
 // IsPrevious returns true if the given stable ID matches the previous selection

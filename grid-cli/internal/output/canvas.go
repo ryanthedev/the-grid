@@ -158,3 +158,93 @@ func (c *Canvas) String() string {
 	}
 	return sb.String()
 }
+
+// DrawOverlay renders cell status indicators at specified positions.
+// It handles all overlay variants in a single function to keep the API surface small.
+func (c *Canvas) DrawOverlay(x, y, width, height int, label string, fgColor, bgColor string, borderStyle BoxStyle, active bool) {
+	// Fill background area
+	if active {
+		c.FillRect(x, y, width, height, '█')
+	} else {
+		c.FillRect(x, y, width, height, '░')
+	}
+
+	// Draw border using the provided style
+	if width >= 2 && height >= 2 {
+		// Draw corners
+		c.SetCell(x, y, borderStyle.TopLeft)
+		c.SetCell(x+width-1, y, borderStyle.TopRight)
+		c.SetCell(x, y+height-1, borderStyle.BottomLeft)
+		c.SetCell(x+width-1, y+height-1, borderStyle.BottomRight)
+
+		// Draw horizontal lines
+		for i := 1; i < width-1; i++ {
+			c.SetCell(x+i, y, borderStyle.Horizontal)
+			c.SetCell(x+i, y+height-1, borderStyle.Horizontal)
+		}
+
+		// Draw vertical lines
+		for i := 1; i < height-1; i++ {
+			c.SetCell(x, y+i, borderStyle.Vertical)
+			c.SetCell(x+width-1, y+i, borderStyle.Vertical)
+		}
+	}
+
+	// Draw centered label
+	if height >= 3 && len(label) > 0 {
+		labelY := y + height/2
+		c.DrawTextCentered(x+1, labelY, width-2, label)
+	}
+}
+
+// InterpolatePosition performs smooth position interpolation between start and end coordinates.
+// It iterates from 0.0 to 1.0 in steps of 0.1, calculating intermediate positions using linear interpolation.
+func (c *Canvas) InterpolatePosition(startX, startY, endX, endY int) []struct{ X, Y int } {
+	var positions []struct{ X, Y int }
+
+	for t := 0.0; t <= 1.0; t += 0.1 {
+		x := int(float64(startX) + t*float64(endX-startX))
+		y := int(float64(startY) + t*float64(endY-startY))
+		positions = append(positions, struct{ X, Y int }{x, y})
+	}
+
+	return positions
+}
+
+// CalculateOverlayBounds calculates the bounding rectangle for an overlay.
+// Uses a single local variable to accumulate padding contributions and store the final dimension.
+func (c *Canvas) CalculateOverlayBounds(contentWidth, contentHeight, paddingLeft, paddingRight, paddingTop, paddingBottom int) (width, height int) {
+	// Use a single variable to first accumulate padding, then store final dimension
+	dim := paddingLeft + paddingRight
+	dim = contentWidth + dim
+	width = dim
+
+	dim = paddingTop + paddingBottom
+	dim = contentHeight + dim
+	height = dim
+
+	return width, height
+}
+
+// RenderLabel is a convenience function that renders a label at the specified position.
+// Delegates directly to DrawTextCentered with the same parameters.
+func (c *Canvas) RenderLabel(x, y, width int, text string) {
+	c.DrawTextCentered(x, y, width, text)
+}
+
+// getOverlayOffset calculates the offset for overlay positioning relative to a cell boundary.
+// Uses a local variable named 'current' to track the calculated position value.
+func (c *Canvas) getOverlayOffset(cellX, cellWidth, overlayWidth int, alignment string) int {
+	current := cellX
+
+	switch alignment {
+	case "center":
+		current = cellX + (cellWidth-overlayWidth)/2
+	case "right":
+		current = cellX + cellWidth - overlayWidth
+	case "left":
+		// current already equals cellX
+	}
+
+	return current
+}
