@@ -73,6 +73,18 @@ func (c *Config) GetLayout(id string) (*types.Layout, error) {
 	// Apply overrides if present
 	if override, ok := c.LayoutOverrides[id]; ok {
 		cloned := *lc
+		// Deep-copy slices and maps so mutations don't affect the original
+		cloned.Grid.Columns = make([]string, len(lc.Grid.Columns))
+		copy(cloned.Grid.Columns, lc.Grid.Columns)
+		cloned.Grid.Rows = make([]string, len(lc.Grid.Rows))
+		copy(cloned.Grid.Rows, lc.Grid.Rows)
+		if lc.CellModes != nil {
+			cloned.CellModes = make(map[string]types.StackMode, len(lc.CellModes))
+			for k, v := range lc.CellModes {
+				cloned.CellModes[k] = v
+			}
+		}
+
 		if override.Grid != nil {
 			if len(override.Grid.Columns) > 0 {
 				cloned.Grid.Columns = override.Grid.Columns

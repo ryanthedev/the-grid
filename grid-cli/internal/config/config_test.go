@@ -457,6 +457,47 @@ func TestGetLayoutWithOverrides(t *testing.T) {
 	}
 }
 
+func TestGetLayoutWithOverrides_DoesNotMutateOriginal(t *testing.T) {
+	cfg := Config{
+		Layouts: []LayoutConfig{
+			{
+				ID:   "test",
+				Name: "Test",
+				Grid: GridConfig{
+					Columns: []string{"1fr", "1fr"},
+					Rows:    []string{"1fr"},
+				},
+				Cells: []CellConfig{
+					{ID: "left", Column: "1/2", Row: "1/2"},
+					{ID: "right", Column: "2/3", Row: "1/2"},
+				},
+			},
+		},
+		LayoutOverrides: map[string]LayoutOverrideConfig{
+			"test": {
+				Grid: &GridConfig{
+					Columns: []string{"2fr", "1fr"},
+				},
+				CellModes: map[string]types.StackMode{
+					"left": types.StackTabs,
+				},
+			},
+		},
+	}
+
+	// Call GetLayout twice
+	_, _ = cfg.GetLayout("test")
+	_, _ = cfg.GetLayout("test")
+
+	// Original LayoutConfig must be unchanged
+	if cfg.Layouts[0].Grid.Columns[0] != "1fr" || cfg.Layouts[0].Grid.Columns[1] != "1fr" {
+		t.Errorf("original columns mutated: %v", cfg.Layouts[0].Grid.Columns)
+	}
+	if cfg.Layouts[0].CellModes != nil {
+		t.Errorf("original CellModes mutated: %v", cfg.Layouts[0].CellModes)
+	}
+}
+
 func TestGetLayoutWithoutOverrides(t *testing.T) {
 	cfg := Config{
 		Layouts: []LayoutConfig{

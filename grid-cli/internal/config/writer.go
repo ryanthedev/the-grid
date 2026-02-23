@@ -41,6 +41,11 @@ func SaveLayoutOverride(layoutID string, override LayoutOverrideConfig) error {
 	if !ok {
 		overrides = make(map[string]any)
 	}
+	// Merge with existing override for this layout (preserves fields from
+	// previous saves, e.g. cell modes saved earlier when only ratios changed now)
+	if existingOverride, ok := overrides[layoutID].(map[string]any); ok {
+		overrideMap = deepMerge(existingOverride, overrideMap)
+	}
 	overrides[layoutID] = overrideMap
 	existing["layoutOverrides"] = overrides
 
