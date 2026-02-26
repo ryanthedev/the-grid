@@ -162,9 +162,22 @@ func (rs *RuntimeState) SetWindowAssignments(spaceID string, assignments map[str
 
 		// Preserve existing cell state if cell existed
 		if existingCell, ok := existingCells[cellID]; ok {
-			// Preserve stack mode and focus
+			// Preserve stack mode
 			cell.StackMode = existingCell.StackMode
-			cell.LastFocusedIdx = existingCell.LastFocusedIdx
+
+			// Preserve focus by window ID (not index) since window order may change
+			if existingCell.LastFocusedIdx >= 0 && existingCell.LastFocusedIdx < len(existingCell.Windows) {
+				focusedWID := existingCell.Windows[existingCell.LastFocusedIdx]
+				cell.LastFocusedIdx = 0
+				for i, wid := range windowIDs {
+					if wid == focusedWID {
+						cell.LastFocusedIdx = i
+						break
+					}
+				}
+			} else {
+				cell.LastFocusedIdx = 0
+			}
 
 			// Preserve or adjust splitRatios
 			if len(existingCell.SplitRatios) > 0 {

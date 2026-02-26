@@ -2,6 +2,7 @@ import Foundation
 import Logging
 import mss
 import CoreGraphics
+import AppKit
 
 /// Handles incoming requests and routes them to appropriate handlers
 class MessageHandler {
@@ -428,6 +429,106 @@ class MessageHandler {
                     completion(Response(id: request.id, result: AnyCodable(["windowId": windowId, "layer": layerStr])))
                 } else {
                     completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to get window layer")))
+                }
+            }
+        }
+
+        // MARK: - Window Visibility Methods (SLS)
+
+        // Check if window is ordered in (visible)
+        register(method: "window.isOrderedIn") { request, completion in
+            guard let params = request.params else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
+                return
+            }
+
+            guard let windowId = params["windowId"]?.value as? String,
+                  let windowID = UInt32(windowId) else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Missing windowId")))
+                return
+            }
+
+            Task {
+                let state = await StateManager.shared.getState()
+                var value: UInt8 = 0
+                let err = SLSWindowIsOrderedIn(state.metadata.connectionID, windowID, &value)
+                if err == .success {
+                    completion(Response(id: request.id, result: AnyCodable(["windowId": windowId, "isOrderedIn": value != 0])))
+                } else {
+                    completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to check window ordered-in state")))
+                }
+            }
+        }
+
+        // Hide window (NSRunningApplication.hide for cross-process, MSS fallback)
+        register(method: "window.hide") { request, completion in
+            guard let params = request.params else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
+                return
+            }
+
+            guard let windowId = params["windowId"]?.value as? String,
+                  let windowID = UInt32(windowId) else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Missing windowId")))
+                return
+            }
+
+            Task {
+                let state = await StateManager.shared.getState()
+                let cid = state.metadata.connectionID
+
+                // Try MSS first (works when available)
+                let manipulator = WindowManipulator(connectionID: cid)
+                if manipulator.mssClient.orderWindowOut(windowID) {
+                    completion(Response(id: request.id, result: AnyCodable(["success": true, "windowId": windowId])))
+                    return
+                }
+
+                // Fallback: hide via NSRunningApplication (hides entire app process)
+                if let windowState = state.windows[windowId],
+                   let app = NSRunningApplication(processIdentifier: windowState.pid) {
+                    app.hide()
+                    completion(Response(id: request.id, result: AnyCodable(["success": true, "windowId": windowId])))
+                } else {
+                    completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to hide window")))
+                }
+            }
+        }
+
+        // Show window (NSRunningApplication.unhide + activate, MSS fallback)
+        register(method: "window.show") { request, completion in
+            guard let params = request.params else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
+                return
+            }
+
+            guard let windowId = params["windowId"]?.value as? String,
+                  let windowID = UInt32(windowId) else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Missing windowId")))
+                return
+            }
+
+            Task {
+                let state = await StateManager.shared.getState()
+                let cid = state.metadata.connectionID
+
+                // Try MSS first
+                let manipulator = WindowManipulator(connectionID: cid)
+                let ordered = manipulator.mssClient.orderWindowToFront(windowID)
+                let focused = manipulator.mssClient.focusWindow(windowID)
+                if ordered || focused {
+                    completion(Response(id: request.id, result: AnyCodable(["success": true, "windowId": windowId])))
+                    return
+                }
+
+                // Fallback: unhide + activate via NSRunningApplication
+                if let windowState = state.windows[windowId],
+                   let app = NSRunningApplication(processIdentifier: windowState.pid) {
+                    app.unhide()
+                    app.activate(options: .activateIgnoringOtherApps)
+                    completion(Response(id: request.id, result: AnyCodable(["success": true, "windowId": windowId])))
+                } else {
+                    completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to show window")))
                 }
             }
         }

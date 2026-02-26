@@ -547,6 +547,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, LocalProcessTerminalViewDele
 
         tlog("term.init", data: ["tmux": tmuxPath])
 
+        setupMainMenu()
+
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
 
@@ -564,6 +566,21 @@ class AppDelegate: NSObject, NSApplicationDelegate, LocalProcessTerminalViewDele
         self.signalSource = src
 
         tlog("term.ready")
+    }
+
+    private func setupMainMenu() {
+        let mainMenu = NSMenu()
+
+        // Edit menu — enables Cmd+C/V/A via responder chain
+        let editMenuItem = NSMenuItem()
+        let editMenu = NSMenu(title: "Edit")
+        editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        editMenuItem.submenu = editMenu
+        mainMenu.addItem(editMenuItem)
+
+        NSApp.mainMenu = mainMenu
     }
 
     func applicationWillTerminate(_ notification: Notification) {
