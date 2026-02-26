@@ -25,6 +25,14 @@ class ResizeManager {
     /// Event broadcaster for notifying clients of resize events
     weak var eventBroadcaster: EventBroadcaster?
 
+    /// Resolved CLI binary path (set from StateManager on startup)
+    /// Write-once at startup before any resize operations can occur.
+    private var _cliPath: String?
+    var cliPath: String? {
+        get { queue.sync { _cliPath } }
+        set { queue.sync { _cliPath = newValue } }
+    }
+
     /// Minimum pixels of movement before triggering a resize
     private let resizeThreshold: CGFloat = 5.0
 
@@ -211,30 +219,22 @@ class ResizeManager {
         let resizeType = type == .cell ? "cell" : "split"
         let deltaStr = String(format: "%.2f", delta)
 
-        // Path to grid CLI (assumes it's in PATH or we can find it)
-        // Try common locations
-        let gridPaths = [
-            "/usr/local/bin/grid",
-            "\(FileManager.default.homeDirectoryForCurrentUser.path)/.local/bin/grid",
-            "\(FileManager.default.homeDirectoryForCurrentUser.path)/repos/theGrid/bin/grid"
-        ]
-
-        var gridPath: String?
-        for path in gridPaths {
-            if FileManager.default.fileExists(atPath: path) {
-                gridPath = path
-                break
-            }
-        }
-
-        guard let path = gridPath else {
-            JSONLogger.shared.log("warn.resize.cli_not_found", data: [:])
+        guard let path = _cliPath else {
+            JSONLogger.shared.log("warn.resize.cli_not_found", data: [
+                "resize_type": resizeType,
+                "direction": direction
+            ])
             return
         }
 
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: path)
-        process.arguments = ["resize", resizeType, direction, deltaStr]
+        if path.hasPrefix("/") {
+            process.executableURL = URL(fileURLWithPath: path)
+            process.arguments = ["resize", resizeType, direction, deltaStr]
+        } else {
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            process.arguments = [path, "resize", resizeType, direction, deltaStr]
+        }
 
         let pipe = Pipe()
         process.standardOutput = pipe

@@ -54,6 +54,7 @@ type WindowInfo struct {
 	HasMinimizeButton   bool
 	HasZoomButton       bool
 	IsModal             bool
+	PID             int
 	DisplayUUID         string // Geometrically computed display UUID
 }
 
@@ -521,6 +522,7 @@ func parseWindow(w interface{}, spaceID string) *WindowInfo {
 		HasMinimizeButton:   toBool(win["hasMinimizeButton"]),
 		HasZoomButton:       toBool(win["hasZoomButton"]),
 		IsModal:             toBool(win["isModal"]),
+		PID:                 int(toFloat64(win["pid"])),
 		DisplayUUID:         toString(win["displayUUID"]),
 	}
 

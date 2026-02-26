@@ -4,12 +4,20 @@ import "github.com/ryanthedev/grid-cli/internal/types"
 
 // Config is the root configuration structure
 type Config struct {
-	Settings Settings               `yaml:"settings" json:"settings"`
-	Layouts  []LayoutConfig         `yaml:"layouts" json:"layouts"`
-	Spaces   map[string]SpaceConfig `yaml:"spaces" json:"spaces"`
-	AppRules []AppRule              `yaml:"appRules" json:"appRules"`
-	Borders  *BorderConfig          `yaml:"borders,omitempty" json:"borders,omitempty"`
-	Picker   *PickerConfig          `yaml:"picker,omitempty" json:"picker,omitempty"`
+	Settings        Settings                          `yaml:"settings" json:"settings"`
+	Layouts         []LayoutConfig                    `yaml:"layouts" json:"layouts"`
+	LayoutOverrides map[string]LayoutOverrideConfig   `yaml:"layoutOverrides,omitempty" json:"layoutOverrides,omitempty"`
+	Spaces          map[string]SpaceConfig            `yaml:"spaces" json:"spaces"`
+	AppRules        []AppRule                         `yaml:"appRules" json:"appRules"`
+	Borders         *BorderConfig                     `yaml:"borders,omitempty" json:"borders,omitempty"`
+	Picker          *PickerConfig                     `yaml:"picker,omitempty" json:"picker,omitempty"`
+}
+
+// LayoutOverrideConfig holds overrides for a specific layout's grid and cell modes.
+// Applied on top of the base layout definition during GetLayout().
+type LayoutOverrideConfig struct {
+	Grid      *GridConfig                `yaml:"grid,omitempty" json:"grid,omitempty"`
+	CellModes map[string]types.StackMode `yaml:"cellModes,omitempty" json:"cellModes,omitempty"`
 }
 
 // DisplayOffset defines X,Y offset for a display (for positioning workarounds)

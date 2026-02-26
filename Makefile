@@ -40,11 +40,6 @@ picker:
 	@echo "Building grid-picker..."
 	@cd grid-server && swift build --product grid-picker
 
-# Terminal target (floating terminal window)
-terminal:
-	@echo "Building grid-terminal..."
-	@cd grid-server && swift build --product grid-terminal
-
 server-release: generate-version
 	@echo "Building grid-server (release)..."
 	@cd grid-server && swift build -c release
@@ -139,17 +134,6 @@ picker-universal:
 	@echo "Created universal binary: grid-server/.build/apple/Products/Release/grid-picker"
 	@file grid-server/.build/apple/Products/Release/grid-picker
 
-terminal-universal:
-	@echo "Building grid-terminal (universal binary)..."
-	@cd grid-server && swift build -c release --product grid-terminal --arch arm64 --arch x86_64
-	@echo "Verifying universal binary..."
-	@if ! file grid-server/.build/apple/Products/Release/grid-terminal | grep -q "universal binary"; then \
-		echo "Error: Failed to create universal binary for grid-terminal"; \
-		exit 1; \
-	fi
-	@echo "Created universal binary: grid-server/.build/apple/Products/Release/grid-terminal"
-	@file grid-server/.build/apple/Products/Release/grid-terminal
-
 # Create GridServer.app bundle
 app-bundle: server-universal
 	@echo "Creating GridServer.app bundle..."
@@ -169,14 +153,13 @@ app-bundle: server-universal
 	@echo "✓ GridServer.app created"
 
 # Distribution tarball with universal binaries (for Homebrew)
-dist-universal: app-bundle cli-universal picker-universal terminal-universal
+dist-universal: app-bundle cli-universal picker-universal
 	@echo "Creating universal distribution tarball v$(VERSION)..."
 	@rm -rf dist/thegrid-$(VERSION)
 	@mkdir -p dist/thegrid-$(VERSION)/bin
 	@cp -R dist/GridServer.app dist/thegrid-$(VERSION)/
 	@cp grid-cli/bin/thegrid dist/thegrid-$(VERSION)/bin/
 	@cp grid-server/.build/apple/Products/Release/grid-picker dist/thegrid-$(VERSION)/bin/
-	@cp grid-server/.build/apple/Products/Release/grid-terminal dist/thegrid-$(VERSION)/bin/
 	@cp VERSION dist/thegrid-$(VERSION)/
 	@cp LICENSE dist/thegrid-$(VERSION)/ 2>/dev/null || echo "No LICENSE file"
 	@cp README.md dist/thegrid-$(VERSION)/ 2>/dev/null || true
@@ -192,8 +175,6 @@ dist-universal: app-bundle cli-universal picker-universal terminal-universal
 	@file dist/thegrid-$(VERSION)/GridServer.app/Contents/MacOS/grid-server
 	@file dist/thegrid-$(VERSION)/bin/thegrid
 	@file dist/thegrid-$(VERSION)/bin/grid-picker
-	@file dist/thegrid-$(VERSION)/bin/grid-terminal
-
 # Show help
 help:
 	@echo "TheGrid Monorepo Build System"
@@ -256,9 +237,8 @@ dev: server cli picker terminal
 
 # Build and restart thegrid service
 run: dev install-dev
-	@echo "Killing any stray grid-server and grid-terminal processes..."
+	@echo "Killing any stray grid-server processes..."
 	@pkill -9 -f grid-server 2>/dev/null || true
-	@pkill -9 -f grid-terminal 2>/dev/null || true
 	@sleep 0.5
 	@echo "Clearing state, logs, and config cache..."
 	@rm -f ~/.local/state/thegrid/*.json
@@ -268,14 +248,12 @@ run: dev install-dev
 	@echo "✓ Service restarted"
 
 # Install dev build to ~/.local/bin
-install-dev: cli picker terminal
+install-dev: cli picker
 	@mkdir -p ~/.local/bin
 	@cp grid-cli/bin/thegrid ~/.local/bin/thegrid
 	@cp grid-server/.build/debug/grid-picker ~/.local/bin/grid-picker
-	@cp grid-server/.build/debug/grid-terminal ~/.local/bin/grid-terminal
 	@echo "✓ Installed dev CLI to ~/.local/bin/thegrid"
 	@echo "✓ Installed grid-picker to ~/.local/bin/grid-picker"
-	@echo "✓ Installed grid-terminal to ~/.local/bin/grid-terminal"
 
 # Install utility scripts to ~/.local/bin
 install-scripts:

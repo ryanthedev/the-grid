@@ -78,7 +78,9 @@ class WorkspaceObserver {
             object: nil
         )
 
-        nc.addObserver(
+        // NOTE: This notification is posted on NotificationCenter.default,
+        // not NSWorkspace.shared.notificationCenter
+        NotificationCenter.default.addObserver(
             self,
             selector: #selector(screenParametersChanged(_:)),
             name: NSApplication.didChangeScreenParametersNotification,
@@ -93,6 +95,7 @@ class WorkspaceObserver {
     /// Stop observing
     func stopObserving() {
         NSWorkspace.shared.notificationCenter.removeObserver(self)
+        NotificationCenter.default.removeObserver(self)
         Task {
             JSONLogger.shared.log("ws.stop", data: [:])
         }

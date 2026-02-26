@@ -398,6 +398,138 @@ func TestGetLayout(t *testing.T) {
 	}
 }
 
+func TestGetLayoutWithOverrides(t *testing.T) {
+	cfg := Config{
+		Layouts: []LayoutConfig{
+			{
+				ID:   "3col",
+				Name: "Three Column",
+				Grid: GridConfig{
+					Columns: []string{"1fr", "1fr", "1fr"},
+					Rows:    []string{"1fr"},
+				},
+				Cells: []CellConfig{
+					{ID: "left", Column: "1/2", Row: "1/2"},
+					{ID: "center", Column: "2/3", Row: "1/2"},
+					{ID: "right", Column: "3/4", Row: "1/2"},
+				},
+				CellModes: map[string]types.StackMode{
+					"left": types.StackVertical,
+				},
+			},
+		},
+		LayoutOverrides: map[string]LayoutOverrideConfig{
+			"3col": {
+				Grid: &GridConfig{
+					Columns: []string{"1fr", "3fr", "1fr"},
+				},
+				CellModes: map[string]types.StackMode{
+					"center": types.StackTabs,
+				},
+			},
+		},
+	}
+
+	layout, err := cfg.GetLayout("3col")
+	if err != nil {
+		t.Fatalf("GetLayout() error: %v", err)
+	}
+
+	// Columns should be overridden
+	if len(layout.Columns) != 3 {
+		t.Fatalf("expected 3 columns, got %d", len(layout.Columns))
+	}
+	if layout.Columns[1].Value != 3 {
+		t.Errorf("expected column[1] fr=3, got %v", layout.Columns[1].Value)
+	}
+
+	// Rows should remain unchanged (not in override)
+	if len(layout.Rows) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(layout.Rows))
+	}
+
+	// CellModes should merge: left from base, center from override
+	if layout.CellModes["left"] != types.StackVertical {
+		t.Errorf("expected left=vertical, got %s", layout.CellModes["left"])
+	}
+	if layout.CellModes["center"] != types.StackTabs {
+		t.Errorf("expected center=tabs, got %s", layout.CellModes["center"])
+	}
+}
+
+func TestGetLayoutWithOverrides_DoesNotMutateOriginal(t *testing.T) {
+	cfg := Config{
+		Layouts: []LayoutConfig{
+			{
+				ID:   "test",
+				Name: "Test",
+				Grid: GridConfig{
+					Columns: []string{"1fr", "1fr"},
+					Rows:    []string{"1fr"},
+				},
+				Cells: []CellConfig{
+					{ID: "left", Column: "1/2", Row: "1/2"},
+					{ID: "right", Column: "2/3", Row: "1/2"},
+				},
+			},
+		},
+		LayoutOverrides: map[string]LayoutOverrideConfig{
+			"test": {
+				Grid: &GridConfig{
+					Columns: []string{"2fr", "1fr"},
+				},
+				CellModes: map[string]types.StackMode{
+					"left": types.StackTabs,
+				},
+			},
+		},
+	}
+
+	// Call GetLayout twice
+	_, _ = cfg.GetLayout("test")
+	_, _ = cfg.GetLayout("test")
+
+	// Original LayoutConfig must be unchanged
+	if cfg.Layouts[0].Grid.Columns[0] != "1fr" || cfg.Layouts[0].Grid.Columns[1] != "1fr" {
+		t.Errorf("original columns mutated: %v", cfg.Layouts[0].Grid.Columns)
+	}
+	if cfg.Layouts[0].CellModes != nil {
+		t.Errorf("original CellModes mutated: %v", cfg.Layouts[0].CellModes)
+	}
+}
+
+func TestGetLayoutWithoutOverrides(t *testing.T) {
+	cfg := Config{
+		Layouts: []LayoutConfig{
+			{
+				ID:   "simple",
+				Name: "Simple",
+				Grid: GridConfig{
+					Columns: []string{"1fr", "1fr"},
+					Rows:    []string{"1fr"},
+				},
+				Cells: []CellConfig{
+					{ID: "left", Column: "1/2", Row: "1/2"},
+					{ID: "right", Column: "2/3", Row: "1/2"},
+				},
+			},
+		},
+	}
+
+	layout, err := cfg.GetLayout("simple")
+	if err != nil {
+		t.Fatalf("GetLayout() error: %v", err)
+	}
+
+	// Should return base layout unchanged
+	if len(layout.Columns) != 2 {
+		t.Fatalf("expected 2 columns, got %d", len(layout.Columns))
+	}
+	if layout.Columns[0].Value != 1 || layout.Columns[1].Value != 1 {
+		t.Errorf("expected equal columns, got %v and %v", layout.Columns[0].Value, layout.Columns[1].Value)
+	}
+}
+
 func TestGetLayoutIDs(t *testing.T) {
 	cfg := Config{
 		Layouts: []LayoutConfig{

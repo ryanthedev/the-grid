@@ -106,6 +106,7 @@ actor StateManager: StateEventHandler {
             let config = try await ServerConfig.load()
             windowBlacklist = Set(config.windowBlacklist)
             cliPath = config.cliPath
+            ResizeManager.shared.cliPath = config.cliPath
             JSONLogger.shared.log("srv.cfg.loaded", data: [
                 "blacklist_count": windowBlacklist.count,
                 "cli_path": cliPath
@@ -1549,8 +1550,13 @@ var windows: [String: WindowState] = [:]
 
         Task.detached {
             let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-            process.arguments = [path, "event", "focus", String(windowID)]
+            if path.hasPrefix("/") {
+                process.executableURL = URL(fileURLWithPath: path)
+                process.arguments = ["event", "focus", String(windowID)]
+            } else {
+                process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+                process.arguments = [path, "event", "focus", String(windowID)]
+            }
             process.standardOutput = FileHandle.nullDevice
             process.standardError = FileHandle.nullDevice
 

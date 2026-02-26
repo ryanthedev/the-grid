@@ -1417,6 +1417,122 @@ This is useful when windows have moved or displays have changed.`,
 	},
 }
 
+// layoutSaveCmd saves current runtime layout modifications to config.local.yaml
+var layoutSaveCmd = &cobra.Command{
+	Use:   "save",
+	Short: "Save current layout proportions and cell modes to config",
+	Long: `Saves runtime layout modifications (cell resize ratios and stack modes)
+to config.local.yaml so they become the permanent defaults for this layout.
+
+After saving, runtime ratios are cleared since the layout definition
+now reflects those proportions.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx := context.Background()
+
+		cfg, err := gridConfig.LoadConfig("")
+		if err != nil {
+			return fmt.Errorf("failed to load config: %w", err)
+		}
+
+		runtimeState, err := gridState.LoadState()
+		if err != nil {
+			return fmt.Errorf("failed to load state: %w", err)
+		}
+
+		c := client.NewClient(socketPath, timeout)
+		defer c.Close()
+
+		snap, err := gridServer.Fetch(ctx, c)
+		if err != nil {
+			return fmt.Errorf("failed to fetch server state: %w", err)
+		}
+
+		spaceState := runtimeState.GetSpaceReadOnly(snap.SpaceID)
+		if spaceState == nil {
+			return fmt.Errorf("no layout applied for current space")
+		}
+
+		layoutID := spaceState.CurrentLayoutID
+		if layoutID == "" {
+			return fmt.Errorf("no layout applied for current space")
+		}
+
+		// Get the base layout (without overrides) to access original track definitions
+		layout, err := cfg.GetLayout(layoutID)
+		if err != nil {
+			return fmt.Errorf("layout %q not found: %w", layoutID, err)
+		}
+
+		override := gridConfig.LayoutOverrideConfig{}
+		hasChanges := false
+
+		// Convert column ratios to track strings
+		if len(spaceState.ColumnRatios) > 0 {
+			columns := gridLayout.RatiosToTrackStrings(layout.Columns, spaceState.ColumnRatios)
+			if override.Grid == nil {
+				override.Grid = &gridConfig.GridConfig{}
+			}
+			override.Grid.Columns = columns
+			hasChanges = true
+		}
+
+		// Convert row ratios to track strings
+		if len(spaceState.RowRatios) > 0 {
+			rows := gridLayout.RatiosToTrackStrings(layout.Rows, spaceState.RowRatios)
+			if override.Grid == nil {
+				override.Grid = &gridConfig.GridConfig{}
+			}
+			override.Grid.Rows = rows
+			hasChanges = true
+		}
+
+		// Collect cell mode overrides
+		for cellID, cellState := range spaceState.Cells {
+			if cellState.StackMode != "" {
+				if override.CellModes == nil {
+					override.CellModes = make(map[string]gridTypes.StackMode)
+				}
+				override.CellModes[cellID] = cellState.StackMode
+				hasChanges = true
+			}
+		}
+
+		if !hasChanges {
+			fmt.Println("No layout modifications to save")
+			return nil
+		}
+
+		if err := gridConfig.SaveLayoutOverride(layoutID, override); err != nil {
+			return fmt.Errorf("failed to save layout override: %w", err)
+		}
+
+		// Clear runtime ratios — they're now baked into config
+		mutableSpace := runtimeState.GetSpace(snap.SpaceID)
+		mutableSpace.ColumnRatios = nil
+		mutableSpace.RowRatios = nil
+		runtimeState.MarkUpdated()
+		if err := runtimeState.Save(); err != nil {
+			return fmt.Errorf("failed to save state: %w", err)
+		}
+
+		successColor.Printf("Saved layout %q overrides to config.local.yaml\n", layoutID)
+
+		if override.Grid != nil {
+			if len(override.Grid.Columns) > 0 {
+				fmt.Printf("  columns: %v\n", override.Grid.Columns)
+			}
+			if len(override.Grid.Rows) > 0 {
+				fmt.Printf("  rows: %v\n", override.Grid.Rows)
+			}
+		}
+		if len(override.CellModes) > 0 {
+			fmt.Printf("  cellModes: %v\n", override.CellModes)
+		}
+
+		return nil
+	},
+}
+
 // MARK: - Config Commands
 
 // gridConfigCmd is the parent command for config subcommands
@@ -1823,44 +1939,6 @@ func findPickerExecutable(overridePath string) (string, error) {
 
 	// Build error message listing all searched locations
 	return "", fmt.Errorf("grid-picker not found in:\n  - %s", strings.Join(searchedLocations, "\n  - "))
-}
-
-// findTerminalExecutable locates the grid-terminal binary by checking standard locations.
-func findTerminalExecutable() (string, error) {
-	var searchPaths []string
-	var searchedLocations []string
-
-	// 1. XDG state home: ~/.local/state/thegrid/grid-terminal
-	stateDir := filepath.Join(xdg.StateHome(), "thegrid")
-	statePath := filepath.Join(stateDir, "grid-terminal")
-	searchPaths = append(searchPaths, statePath)
-	searchedLocations = append(searchedLocations, statePath)
-
-	// 2. Same directory as current executable
-	if execPath, err := os.Executable(); err == nil {
-		execDir := filepath.Dir(execPath)
-		execDirPath := filepath.Join(execDir, "grid-terminal")
-		searchPaths = append(searchPaths, execDirPath)
-		searchedLocations = append(searchedLocations, execDirPath)
-	}
-
-	// 3. System PATH lookup
-	if pathExec, err := exec.LookPath("grid-terminal"); err == nil {
-		searchPaths = append(searchPaths, pathExec)
-	}
-	searchedLocations = append(searchedLocations, "system PATH")
-
-	for _, path := range searchPaths {
-		info, err := os.Stat(path)
-		if err != nil {
-			continue
-		}
-		if info.Mode()&0111 != 0 {
-			return path, nil
-		}
-	}
-
-	return "", fmt.Errorf("grid-terminal not found in:\n  - %s", strings.Join(searchedLocations, "\n  - "))
 }
 
 // pickerSocketPath returns the path to the picker daemon Unix socket.
@@ -4245,35 +4323,326 @@ Examples:
 var terminalCmd = &cobra.Command{
 	Use:   "terminal",
 	Short: "Toggle the floating scratchpad terminal",
-	Long: `Toggle the floating scratchpad terminal (tmux session "grid-scratch").
+	Long: `Toggle the floating scratchpad terminal (Ghostty running tmux session "grid-scratch").
 
-First invocation launches the grid-terminal daemon. Subsequent invocations
-toggle the terminal window visibility. The tmux session persists across
-toggle cycles and daemon restarts.`,
+First invocation launches Ghostty with no decorations, floating above other
+windows on all spaces. Subsequent invocations toggle window visibility.
+The tmux session persists across toggle cycles.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		terminalPath, err := findTerminalExecutable()
-		if err != nil {
-			return err
+		ctx := context.Background()
+		c := client.NewClient(socketPath, timeout)
+		defer c.Close()
+
+		stateDir := filepath.Join(xdg.StateHome(), "thegrid")
+		widFile := filepath.Join(stateDir, "terminal-wid")
+		pidFile := filepath.Join(stateDir, "terminal-pid")
+
+		savedWID, _ := loadTerminalWID(widFile)
+		savedPID, _ := loadTerminalPID(pidFile)
+
+		// Tier 1: Fast path — saved PID alive + saved WID
+		if savedPID > 0 && pidAlive(savedPID) && savedWID > 0 {
+			params := map[string]interface{}{"windowId": fmt.Sprintf("%d", savedWID)}
+			result, err := c.CallMethod(ctx, "window.isOrderedIn", params)
+			if err == nil {
+				if isOrderedIn, ok := result["isOrderedIn"].(bool); ok {
+					if isOrderedIn {
+						if _, err := c.CallMethod(ctx, "window.hide", params); err == nil {
+							return nil
+						}
+					} else {
+						if _, err := c.CallMethod(ctx, "window.show", params); err == nil {
+							moveTerminalToActiveDisplay(ctx, c, int(savedWID))
+							return nil
+						}
+					}
+				}
+			}
+			// RPC failed — WID is stale, clear it but keep PID
+			os.Remove(widFile)
+			savedWID = 0
 		}
 
-		// Launch grid-terminal as a detached process.
-		// The binary handles single-instance internally:
-		// - If no daemon running: starts daemon, shows window
-		// - If daemon running: sends toggle notification, exits
-		p := exec.Command(terminalPath)
-		p.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-		p.Stdout = nil
-		p.Stderr = os.Stderr
-		if err := p.Start(); err != nil {
-			return fmt.Errorf("failed to launch grid-terminal: %w", err)
+		// Tier 2: PID alive but WID stale — find window by PID in dump
+		if savedPID > 0 && pidAlive(savedPID) {
+			raw, err := c.Dump(ctx)
+			if err == nil {
+				if wid, _, found := findTerminalInDump(raw, savedPID); found {
+					saveTerminalWID(widFile, wid)
+					// Toggle it (it's visible since findTerminalInDump requires !isHidden)
+					params := map[string]interface{}{"windowId": fmt.Sprintf("%d", wid)}
+					c.CallMethod(ctx, "window.hide", params)
+					return nil
+				}
+			}
+			// PID alive but no matching window — process may be starting up or window closed
+			os.Remove(widFile)
+			os.Remove(pidFile)
+		} else if savedPID > 0 {
+			// PID is dead — clear stale state
+			os.Remove(widFile)
+			os.Remove(pidFile)
 		}
 
-		// Don't wait for the daemon process
-		go p.Wait()
+		// Tier 3: No saved state — search dump for orphaned grid-terminal
+		raw, err := c.Dump(ctx)
+		if err == nil {
+			if wid, pid, found := findTerminalInDump(raw, 0); found {
+				saveTerminalWID(widFile, wid)
+				saveTerminalPID(pidFile, pid)
+				// Found existing window — toggle hide
+				params := map[string]interface{}{"windowId": fmt.Sprintf("%d", wid)}
+				c.CallMethod(ctx, "window.hide", params)
+				return nil
+			}
+		}
+
+		// Tier 4: Launch fresh Ghostty
+		p := exec.Command("open", "-na", "Ghostty.app", "--args",
+			"--title=grid-terminal",
+			"--window-decoration=none",
+			"--quit-after-last-window-closed=true",
+			"-e", "tmux", "new-session", "-A", "-s", "grid-scratch")
+		if err := p.Run(); err != nil {
+			return fmt.Errorf("failed to launch Ghostty: %w", err)
+		}
+
+		// Poll dump (all spaces) for new window
+		var newWinID uint32
+		var newPID int
+		for i := 0; i < 50; i++ {
+			time.Sleep(100 * time.Millisecond)
+			raw, err := c.Dump(ctx)
+			if err != nil {
+				continue
+			}
+			if wid, pid, found := findTerminalInDump(raw, 0); found {
+				newWinID = wid
+				newPID = pid
+				break
+			}
+		}
+
+		if newWinID == 0 {
+			return fmt.Errorf("timed out waiting for Ghostty window to appear")
+		}
+
+		// Save state and configure window
+		wid := fmt.Sprintf("%d", newWinID)
+		saveTerminalWID(widFile, newWinID)
+		saveTerminalPID(pidFile, newPID)
+
+		centerTerminalOnDisplay(ctx, c, int(newWinID))
+		c.CallMethod(ctx, "window.setLayer", map[string]interface{}{"windowId": wid, "layer": "above"})
+		c.CallMethod(ctx, "window.setSticky", map[string]interface{}{"windowId": wid, "sticky": true})
 
 		return nil
 	},
+}
+
+func saveTerminalWID(path string, wid uint32) {
+	os.WriteFile(path, []byte(fmt.Sprintf("%d", wid)), 0644)
+}
+
+func loadTerminalWID(path string) (uint32, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, err
+	}
+	val, err := strconv.ParseUint(strings.TrimSpace(string(data)), 10, 32)
+	if err != nil {
+		return 0, err
+	}
+	return uint32(val), nil
+}
+
+func saveTerminalPID(path string, pid int) {
+	os.WriteFile(path, []byte(fmt.Sprintf("%d", pid)), 0644)
+}
+
+func loadTerminalPID(path string) (int, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, err
+	}
+	val, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		return 0, err
+	}
+	return val, nil
+}
+
+func pidAlive(pid int) bool {
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	// On Unix, kill(pid, 0) checks if process exists without sending a signal
+	return proc.Signal(syscall.Signal(0)) == nil
+}
+
+// findTerminalInDump searches the raw dump for a Ghostty window with title "grid-terminal".
+// If filterPID > 0, only matches windows belonging to that PID.
+// Returns the window ID, PID, and whether a match was found.
+func findTerminalInDump(raw map[string]interface{}, filterPID int) (uint32, int, bool) {
+	rawWindows, ok := raw["windows"].(map[string]interface{})
+	if !ok {
+		return 0, 0, false
+	}
+	for _, w := range rawWindows {
+		win, ok := w.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		appName, _ := win["appName"].(string)
+		if appName != "Ghostty" {
+			continue
+		}
+		title, _ := win["title"].(string)
+		if title != "grid-terminal" {
+			continue
+		}
+		hidden, _ := win["isHidden"].(bool)
+		if hidden {
+			continue
+		}
+		// Parse frame height to skip toolbar/tab bar windows
+		var height float64
+		if frame, ok := win["frame"].([]interface{}); ok && len(frame) >= 2 {
+			if size, ok := frame[1].([]interface{}); ok && len(size) >= 2 {
+				height, _ = size[1].(float64)
+			}
+		}
+		if height <= 100 {
+			continue
+		}
+		pid := int(toFloat64ForTerminal(win["pid"]))
+		if filterPID > 0 && pid != filterPID {
+			continue
+		}
+		wid := uint32(toFloat64ForTerminal(win["id"]))
+		return wid, pid, true
+	}
+	return 0, 0, false
+}
+
+// toFloat64ForTerminal converts interface{} to float64 for terminal dump parsing.
+func toFloat64ForTerminal(v interface{}) float64 {
+	switch val := v.(type) {
+	case float64:
+		return val
+	case int:
+		return float64(val)
+	case int64:
+		return float64(val)
+	default:
+		return 0
+	}
+}
+
+// moveTerminalToActiveDisplay moves the terminal to the active display only
+// if it's currently on a different one. Preserves relative position when
+// crossing monitors; does nothing if already on the active display.
+func moveTerminalToActiveDisplay(ctx context.Context, c *client.Client, windowID int) {
+	snap, err := gridServer.Fetch(ctx, c)
+	if err != nil {
+		return
+	}
+	activeDB := snap.DisplayBounds
+	if activeDB.Width == 0 || activeDB.Height == 0 {
+		return
+	}
+
+	// Find window's current frame
+	var winFrame gridTypes.Rect
+	var found bool
+	for _, w := range snap.Windows {
+		if w.ID == uint32(windowID) {
+			winFrame = w.Frame
+			found = true
+			break
+		}
+	}
+
+	// Window not in snapshot (common race after orderWindowIn) — center on active display
+	if !found || winFrame.Width == 0 {
+		winW := activeDB.Width * 0.8
+		winH := activeDB.Height * 0.6
+		x := activeDB.X + (activeDB.Width-winW)/2
+		y := activeDB.Y + (activeDB.Height-winH)/2
+		c.UpdateWindow(ctx, windowID, map[string]interface{}{
+			"x": x,
+			"y": y,
+		})
+		return
+	}
+
+	// Determine which display the window is currently on
+	winCenterX := winFrame.X + winFrame.Width/2
+	winCenterY := winFrame.Y + winFrame.Height/2
+	var currentDB *gridTypes.Rect
+	for _, d := range snap.AllDisplays {
+		vf := d.VisibleFrame
+		if vf == (gridTypes.Rect{}) {
+			vf = d.Frame
+		}
+		if winCenterX >= vf.X && winCenterX < vf.X+vf.Width &&
+			winCenterY >= vf.Y && winCenterY < vf.Y+vf.Height {
+			currentDB = &vf
+			break
+		}
+	}
+
+	// If window is already on the active display, keep position
+	if currentDB != nil &&
+		currentDB.X == activeDB.X && currentDB.Y == activeDB.Y &&
+		currentDB.Width == activeDB.Width && currentDB.Height == activeDB.Height {
+		return
+	}
+
+	// Map relative position from current display to active display
+	if currentDB != nil && currentDB.Width > 0 && currentDB.Height > 0 {
+		relX := (winFrame.X - currentDB.X) / currentDB.Width
+		relY := (winFrame.Y - currentDB.Y) / currentDB.Height
+		newX := activeDB.X + relX*activeDB.Width
+		newY := activeDB.Y + relY*activeDB.Height
+		c.UpdateWindow(ctx, windowID, map[string]interface{}{
+			"x": newX,
+			"y": newY,
+		})
+	} else {
+		// Can't determine source display — center on active
+		x := activeDB.X + (activeDB.Width-winFrame.Width)/2
+		y := activeDB.Y + (activeDB.Height-winFrame.Height)/2
+		c.UpdateWindow(ctx, windowID, map[string]interface{}{
+			"x": x,
+			"y": y,
+		})
+	}
+}
+
+// centerTerminalOnDisplay sizes and centers a new terminal window (80%×60%)
+// on the active display.
+func centerTerminalOnDisplay(ctx context.Context, c *client.Client, windowID int) {
+	snap, err := gridServer.Fetch(ctx, c)
+	if err != nil {
+		return
+	}
+	db := snap.DisplayBounds
+	if db.Width == 0 || db.Height == 0 {
+		return
+	}
+	winW := db.Width * 0.8
+	winH := db.Height * 0.6
+	x := db.X + (db.Width-winW)/2
+	y := db.Y + (db.Height-winH)/2
+	c.UpdateWindow(ctx, windowID, map[string]interface{}{
+		"x":      x,
+		"y":      y,
+		"width":  winW,
+		"height": winH,
+	})
 }
 
 // humanSize formats bytes into a human-readable string
@@ -4332,6 +4701,7 @@ func init() {
 	gridLayoutCmd.AddCommand(layoutApplyCmd)
 	gridLayoutCmd.AddCommand(layoutCurrentCmd)
 	gridLayoutCmd.AddCommand(layoutRefreshCmd)
+	gridLayoutCmd.AddCommand(layoutSaveCmd)
 
 	// Add layout command flags
 	layoutApplyCmd.Flags().String("space", "", "Space ID to apply layout to")

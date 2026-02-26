@@ -264,6 +264,17 @@ class MSSClient {
         }
     }
 
+    /// Order a window out (hide without minimizing)
+    /// - Parameter windowID: The window ID
+    /// - Returns: true if successful
+    func orderWindowOut(_ windowID: UInt32) -> Bool {
+        return queue.sync {
+            guard let ctx = ctx else { return false }
+
+            return mss_window_order(ctx, windowID, MSS_ORDER_OUT, 0)
+        }
+    }
+
     /// Order a window to the front of the z-stack
     /// - Parameter windowID: The window ID
     /// - Returns: true if successful
