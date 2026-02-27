@@ -462,10 +462,22 @@ func focusCellByID(ctx context.Context, c *client.Client, rs *state.RuntimeState
 		return 0, fmt.Errorf("no windows in cell %s", cellID)
 	}
 
-	// Use LastFocusedIdx instead of hardcoded 0
-	idx := cell.LastFocusedIdx
-	if idx < 0 || idx >= len(cell.Windows) {
-		idx = 0 // Fallback if index is out of bounds
+	// Look up by LastFocusedWID first (stable across reorders)
+	idx := -1
+	if cell.LastFocusedWID != 0 {
+		for i, wid := range cell.Windows {
+			if wid == cell.LastFocusedWID {
+				idx = i
+				break
+			}
+		}
+	}
+	// Fall back to LastFocusedIdx
+	if idx < 0 {
+		idx = cell.LastFocusedIdx
+		if idx < 0 || idx >= len(cell.Windows) {
+			idx = 0
+		}
 	}
 
 	windowID := cell.Windows[idx]

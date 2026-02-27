@@ -4338,6 +4338,7 @@ The tmux session persists across toggle cycles.`,
 		stateDir := filepath.Join(xdg.StateHome(), "thegrid")
 		widFile := filepath.Join(stateDir, "terminal-wid")
 		pidFile := filepath.Join(stateDir, "terminal-pid")
+		frameFile := filepath.Join(stateDir, "terminal-frame")
 
 		savedWID, _ := loadTerminalWID(widFile)
 		savedPID, _ := loadTerminalPID(pidFile)
@@ -4355,22 +4356,43 @@ The tmux session persists across toggle cycles.`,
 
 		// Tier 1: Fast path — saved PID alive + saved WID
 		if savedPID > 0 && pidAlive(savedPID) && savedWID > 0 {
+			// Capture active display BEFORE show (user's current context)
+			activeDisplay, displayErr := c.GetActiveDisplay(ctx)
+
 			params := map[string]interface{}{"windowId": fmt.Sprintf("%d", savedWID)}
 			result, err := c.CallMethod(ctx, "window.isOrderedIn", params)
 			if err == nil {
-				if isOrderedIn, ok := result["isOrderedIn"].(bool); ok {
-					if isOrderedIn {
-						if _, err := c.CallMethod(ctx, "window.hide", params); err == nil {
-							logTerminal(1, "hide", nil)
-							return nil
+				isOrderedIn, _ := result["isOrderedIn"].(bool)
+				onCurrentSpace := isWindowOnSpace(result, activeDisplay)
+
+				if isOrderedIn && onCurrentSpace {
+					// Save window position per-display before hiding
+					if frameData, ok := result["frame"].(map[string]interface{}); ok && activeDisplay != nil {
+						frames := loadTerminalFrames(frameFile)
+						frames[activeDisplay.UUID] = terminalFrame{
+							X:      toTermFloat(frameData["x"]),
+							Y:      toTermFloat(frameData["y"]),
+							Width:  toTermFloat(frameData["width"]),
+							Height: toTermFloat(frameData["height"]),
 						}
-					} else {
-						if _, err := c.CallMethod(ctx, "window.show", params); err == nil {
-							logTerminal(1, "show", nil)
-							moveTerminalToActiveDisplay(ctx, c, int(savedWID))
-							return nil
-						}
+						saveTerminalFrames(frameFile, frames)
 					}
+					// Visible on current space → hide
+					c.CallMethod(ctx, "window.hide", params)
+					logTerminal(1, "hide", map[string]any{
+						"display": activeDisplay.UUID,
+					})
+					return nil
+				} else {
+					// Hidden OR on different space → move + show + position
+					if displayErr == nil && activeDisplay != nil {
+						frames := loadTerminalFrames(frameFile)
+						saved := frames[activeDisplay.UUID]
+						positionTerminalOnDisplay(ctx, c, int(savedWID), activeDisplay, false, saved)
+					}
+					c.CallMethod(ctx, "window.show", params)
+					logTerminal(1, "show", map[string]any{"onCurrentSpace": onCurrentSpace})
+					return nil
 				}
 			}
 			// RPC failed — WID is stale, clear it but keep PID
@@ -4379,42 +4401,43 @@ The tmux session persists across toggle cycles.`,
 			savedWID = 0
 		}
 
-		// Tier 2: PID alive but WID stale — find window by PID in dump
+		// Tier 2: PID alive but WID stale — find window via server query
 		if savedPID > 0 && pidAlive(savedPID) {
-			raw, err := c.Dump(ctx)
-			if err == nil {
-				if wid, _, found := findTerminalInDump(raw, savedPID); found {
-					saveTerminalWID(widFile, wid)
-					params := map[string]interface{}{"windowId": fmt.Sprintf("%d", wid)}
-					c.CallMethod(ctx, "window.hide", params)
-					logTerminal(2, "hide", map[string]any{"foundWid": wid})
-					return nil
-				}
+			wid, _, found, err := c.FindWindow(ctx, "Ghostty", "grid-terminal")
+			if err == nil && found {
+				saveTerminalWID(widFile, wid)
+				params := map[string]interface{}{"windowId": fmt.Sprintf("%d", wid)}
+				c.CallMethod(ctx, "window.hide", params)
+				logTerminal(2, "hide", map[string]any{"foundWid": wid})
+				return nil
 			}
 			logTerminal(2, "no_window", nil)
 			os.Remove(widFile)
 			os.Remove(pidFile)
+			os.Remove(frameFile)
 		} else if savedPID > 0 {
 			logTerminal(2, "pid_dead", nil)
 			os.Remove(widFile)
 			os.Remove(pidFile)
+			os.Remove(frameFile)
 		}
 
-		// Tier 3: No saved state — search dump for orphaned grid-terminal
-		raw, err := c.Dump(ctx)
-		if err == nil {
-			if wid, pid, found := findTerminalInDump(raw, 0); found {
-				saveTerminalWID(widFile, wid)
-				saveTerminalPID(pidFile, pid)
-				params := map[string]interface{}{"windowId": fmt.Sprintf("%d", wid)}
-				c.CallMethod(ctx, "window.hide", params)
-				logTerminal(3, "hide", map[string]any{"foundWid": wid, "foundPid": pid})
-				return nil
-			}
+		// Tier 3: No saved state — search for orphaned grid-terminal
+		if wid, pid, found, err := c.FindWindow(ctx, "Ghostty", "grid-terminal"); err == nil && found {
+			saveTerminalWID(widFile, wid)
+			saveTerminalPID(pidFile, pid)
+			params := map[string]interface{}{"windowId": fmt.Sprintf("%d", wid)}
+			c.CallMethod(ctx, "window.hide", params)
+			logTerminal(3, "hide", map[string]any{"foundWid": wid, "foundPid": pid})
+			return nil
 		}
 
 		// Tier 4: Launch fresh Ghostty
 		logTerminal(4, "launch", nil)
+
+		// Capture active display before launch (user's current context)
+		activeDisplay, _ := c.GetActiveDisplay(ctx)
+
 		tmuxPath := tmux.FindTmux()
 		p := exec.Command("open", "-na", "Ghostty.app", "--args",
 			"--title=grid-terminal",
@@ -4425,16 +4448,13 @@ The tmux session persists across toggle cycles.`,
 			return fmt.Errorf("failed to launch Ghostty: %w", err)
 		}
 
-		// Poll dump (all spaces) for new window
+		// Poll with lightweight window.find instead of full dump
 		var newWinID uint32
 		var newPID int
 		for i := 0; i < 50; i++ {
 			time.Sleep(100 * time.Millisecond)
-			raw, err := c.Dump(ctx)
-			if err != nil {
-				continue
-			}
-			if wid, pid, found := findTerminalInDump(raw, 0); found {
+			wid, pid, found, err := c.FindWindow(ctx, "Ghostty", "grid-terminal")
+			if err == nil && found {
 				newWinID = wid
 				newPID = pid
 				break
@@ -4450,9 +4470,12 @@ The tmux session persists across toggle cycles.`,
 		saveTerminalWID(widFile, newWinID)
 		saveTerminalPID(pidFile, newPID)
 
-		centerTerminalOnDisplay(ctx, c, int(newWinID))
+		// Position on active display with offset correction
+		if activeDisplay != nil {
+			positionTerminalOnDisplay(ctx, c, int(newWinID), activeDisplay, true, terminalFrame{})
+		}
 		c.CallMethod(ctx, "window.setLayer", map[string]interface{}{"windowId": wid, "layer": "above"})
-		c.CallMethod(ctx, "window.setSticky", map[string]interface{}{"windowId": wid, "sticky": true})
+		// No setSticky — terminal follows user to current space on toggle
 		logTerminal(4, "ready", map[string]any{"wid": newWinID, "pid": newPID})
 
 		return nil
@@ -4491,6 +4514,43 @@ func loadTerminalPID(path string) (int, error) {
 	return val, nil
 }
 
+// terminalFrame stores the terminal's last known position and size.
+type terminalFrame struct {
+	X, Y, Width, Height float64
+}
+
+// terminalFrames maps display UUID → last known terminal position on that display
+type terminalFrames map[string]terminalFrame
+
+func saveTerminalFrames(path string, frames terminalFrames) {
+	data, _ := json.Marshal(frames)
+	os.WriteFile(path, data, 0644)
+}
+
+func loadTerminalFrames(path string) terminalFrames {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return terminalFrames{}
+	}
+	var frames terminalFrames
+	if json.Unmarshal(data, &frames) != nil {
+		return terminalFrames{}
+	}
+	return frames
+}
+
+// toTermFloat converts an interface{} value from JSON map to float64.
+func toTermFloat(v interface{}) float64 {
+	switch n := v.(type) {
+	case float64:
+		return n
+	case int:
+		return float64(n)
+	default:
+		return 0
+	}
+}
+
 func pidAlive(pid int) bool {
 	proc, err := os.FindProcess(pid)
 	if err != nil {
@@ -4500,197 +4560,89 @@ func pidAlive(pid int) bool {
 	return proc.Signal(syscall.Signal(0)) == nil
 }
 
-// findTerminalInDump searches the raw dump for a Ghostty window with title "grid-terminal".
-// If filterPID > 0, only matches windows belonging to that PID.
-// Returns the window ID, PID, and whether a match was found.
-func findTerminalInDump(raw map[string]interface{}, filterPID int) (uint32, int, bool) {
-	rawWindows, ok := raw["windows"].(map[string]interface{})
+
+// isWindowOnSpace checks if a window (from isOrderedIn response with spaces array)
+// is on the same space as the given display.
+func isWindowOnSpace(result map[string]interface{}, display *client.DisplayInfo) bool {
+	if display == nil {
+		return false
+	}
+	spacesRaw, ok := result["spaces"].([]interface{})
 	if !ok {
-		return 0, 0, false
+		return false
 	}
-	for _, w := range rawWindows {
-		win, ok := w.(map[string]interface{})
-		if !ok {
-			continue
+	for _, s := range spacesRaw {
+		if fmt.Sprintf("%v", s) == display.CurrentSpaceID {
+			return true
 		}
-		appName, _ := win["appName"].(string)
-		if appName != "Ghostty" {
-			continue
-		}
-		title, _ := win["title"].(string)
-		if title != "grid-terminal" {
-			continue
-		}
-		hidden, _ := win["isHidden"].(bool)
-		if hidden {
-			continue
-		}
-		// Parse frame height to skip toolbar/tab bar windows
-		var height float64
-		if frame, ok := win["frame"].([]interface{}); ok && len(frame) >= 2 {
-			if size, ok := frame[1].([]interface{}); ok && len(size) >= 2 {
-				height, _ = size[1].(float64)
-			}
-		}
-		if height <= 100 {
-			continue
-		}
-		pid := int(toFloat64ForTerminal(win["pid"]))
-		if filterPID > 0 && pid != filterPID {
-			continue
-		}
-		wid := uint32(toFloat64ForTerminal(win["id"]))
-		return wid, pid, true
 	}
-	return 0, 0, false
+	return false
 }
 
-// toFloat64ForTerminal converts interface{} to float64 for terminal dump parsing.
-func toFloat64ForTerminal(v interface{}) float64 {
-	switch val := v.(type) {
-	case float64:
-		return val
-	case int:
-		return float64(val)
-	case int64:
-		return float64(val)
-	default:
-		return 0
+// positionTerminalOnDisplay positions the terminal on the given display.
+// resize=true: fresh launch, size to 80%×60% and center.
+// resize=false: toggle show. If saved frame is on same display, restore exact position.
+// If different display (or no saved frame), center using saved dimensions.
+func positionTerminalOnDisplay(ctx context.Context, c *client.Client, windowID int, display *client.DisplayInfo, resize bool, saved terminalFrame) {
+	logData := map[string]any{"wid": windowID, "displayUUID": display.UUID}
+
+	// Use visibleFrame (excludes menu bar/dock), fall back to frame
+	vf := display.VisibleFrame
+	if vf.Width == 0 {
+		vf = display.Frame
 	}
-}
-
-// moveTerminalToActiveDisplay moves the terminal to the active display only
-// if it's currently on a different one. Preserves relative position when
-// crossing monitors; does nothing if already on the active display.
-func moveTerminalToActiveDisplay(ctx context.Context, c *client.Client, windowID int) {
-	logData := map[string]any{"wid": windowID}
-	defer func() {
-		jsonlog.Log("term.move", jsonlog.WithData(logData))
-	}()
-
-	snap, err := gridServer.Fetch(ctx, c)
-	if err != nil {
-		logData["result"] = "fetch_err"
-		logData["err"] = err.Error()
-		return
-	}
-	activeDB := snap.DisplayBounds
-	logData["activeDisplay"] = map[string]any{"x": activeDB.X, "y": activeDB.Y, "w": activeDB.Width, "h": activeDB.Height}
-
-	if activeDB.Width == 0 || activeDB.Height == 0 {
-		logData["result"] = "no_display"
+	if vf.Width == 0 {
+		logData["result"] = "no_bounds"
+		jsonlog.Log("term.position", jsonlog.WithData(logData))
 		return
 	}
 
-	// Find window's current frame
-	var winFrame gridTypes.Rect
-	var found bool
-	for _, w := range snap.Windows {
-		if w.ID == uint32(windowID) {
-			winFrame = w.Frame
-			found = true
-			break
-		}
+	// Load config for display offset
+	var offsetX, offsetY float64
+	cfg, err := gridConfig.LoadConfig("")
+	if err == nil {
+		offset := cfg.GetDisplayOffset(display.UUID, display.Name)
+		offsetX = offset.X
+		offsetY = offset.Y
 	}
 
-	// Window not in snapshot (common race after orderWindowIn) — center on active display
-	if !found || winFrame.Width == 0 {
-		winW := activeDB.Width * 0.8
-		winH := activeDB.Height * 0.6
-		x := activeDB.X + (activeDB.Width-winW)/2
-		y := activeDB.Y + (activeDB.Height-winH)/2
+	if resize {
+		// Fresh launch: 80%×60% centered
+		winW := vf.Width * 0.8
+		winH := vf.Height * 0.6
+		x := vf.X + (vf.Width-winW)/2 + offsetX
+		y := vf.Y + (vf.Height-winH)/2 + offsetY
 		c.UpdateWindow(ctx, windowID, map[string]interface{}{
-			"x": x,
-			"y": y,
+			"x": x, "y": y, "width": winW, "height": winH,
 		})
-		logData["result"] = "not_in_snapshot"
-		logData["moveTo"] = map[string]any{"x": x, "y": y}
-		return
-	}
-
-	logData["winFrame"] = map[string]any{"x": winFrame.X, "y": winFrame.Y, "w": winFrame.Width, "h": winFrame.Height}
-
-	// Determine which display the window is currently on
-	winCenterX := winFrame.X + winFrame.Width/2
-	winCenterY := winFrame.Y + winFrame.Height/2
-	var currentDB *gridTypes.Rect
-	for _, d := range snap.AllDisplays {
-		vf := d.VisibleFrame
-		if vf == (gridTypes.Rect{}) {
-			vf = d.Frame
-		}
-		if winCenterX >= vf.X && winCenterX < vf.X+vf.Width &&
-			winCenterY >= vf.Y && winCenterY < vf.Y+vf.Height {
-			currentDB = &vf
-			break
-		}
-	}
-
-	if currentDB != nil {
-		logData["currentDisplay"] = map[string]any{"x": currentDB.X, "y": currentDB.Y, "w": currentDB.Width, "h": currentDB.Height}
-	}
-
-	// If window is already on the active display, keep position
-	if currentDB != nil &&
-		currentDB.X == activeDB.X && currentDB.Y == activeDB.Y &&
-		currentDB.Width == activeDB.Width && currentDB.Height == activeDB.Height {
-		logData["result"] = "already_on_active"
-		return
-	}
-
-	// Map relative position from current display to active display
-	if currentDB != nil && currentDB.Width > 0 && currentDB.Height > 0 {
-		relX := (winFrame.X - currentDB.X) / currentDB.Width
-		relY := (winFrame.Y - currentDB.Y) / currentDB.Height
-		newX := activeDB.X + relX*activeDB.Width
-		newY := activeDB.Y + relY*activeDB.Height
+		logData["mode"] = "fresh"
+		logData["placed"] = map[string]any{"x": x, "y": y, "w": winW, "h": winH}
+	} else if saved.Width > 0 && saved.Height > 0 {
+		// Saved position for this display: restore exact x,y
 		c.UpdateWindow(ctx, windowID, map[string]interface{}{
-			"x": newX,
-			"y": newY,
+			"spaceId": display.CurrentSpaceID,
+			"x": saved.X, "y": saved.Y,
 		})
-		logData["result"] = "mapped"
-		logData["moveTo"] = map[string]any{"x": newX, "y": newY}
+		logData["mode"] = "restore"
+		logData["placed"] = map[string]any{"x": saved.X, "y": saved.Y, "w": saved.Width, "h": saved.Height}
 	} else {
-		// Can't determine source display — center on active
-		x := activeDB.X + (activeDB.Width-winFrame.Width)/2
-		y := activeDB.Y + (activeDB.Height-winFrame.Height)/2
+		// No saved position for this display: center at 80%×60% without resizing
+		winW := vf.Width * 0.8
+		winH := vf.Height * 0.6
+		x := vf.X + (vf.Width-winW)/2 + offsetX
+		y := vf.Y + (vf.Height-winH)/2 + offsetY
 		c.UpdateWindow(ctx, windowID, map[string]interface{}{
-			"x": x,
-			"y": y,
+			"spaceId": display.CurrentSpaceID,
+			"x": x, "y": y,
 		})
-		logData["result"] = "centered"
-		logData["moveTo"] = map[string]any{"x": x, "y": y}
+		logData["mode"] = "center"
+		logData["placed"] = map[string]any{"x": x, "y": y, "w": winW, "h": winH}
 	}
-}
 
-// centerTerminalOnDisplay sizes and centers a new terminal window (80%×60%)
-// on the active display.
-func centerTerminalOnDisplay(ctx context.Context, c *client.Client, windowID int) {
-	snap, err := gridServer.Fetch(ctx, c)
-	if err != nil {
-		jsonlog.Log("term.center", jsonlog.WithData(map[string]any{"wid": windowID, "result": "fetch_err", "err": err.Error()}))
-		return
-	}
-	db := snap.DisplayBounds
-	if db.Width == 0 || db.Height == 0 {
-		jsonlog.Log("term.center", jsonlog.WithData(map[string]any{"wid": windowID, "result": "no_display"}))
-		return
-	}
-	winW := db.Width * 0.8
-	winH := db.Height * 0.6
-	x := db.X + (db.Width-winW)/2
-	y := db.Y + (db.Height-winH)/2
-	c.UpdateWindow(ctx, windowID, map[string]interface{}{
-		"x":      x,
-		"y":      y,
-		"width":  winW,
-		"height": winH,
-	})
-	jsonlog.Log("term.center", jsonlog.WithData(map[string]any{
-		"wid": windowID,
-		"display": map[string]any{"x": db.X, "y": db.Y, "w": db.Width, "h": db.Height},
-		"placed":  map[string]any{"x": x, "y": y, "w": winW, "h": winH},
-	}))
+	logData["result"] = "positioned"
+	logData["resize"] = resize
+	logData["offset"] = map[string]any{"x": offsetX, "y": offsetY}
+	jsonlog.Log("term.position", jsonlog.WithData(logData))
 }
 
 // humanSize formats bytes into a human-readable string
