@@ -4366,24 +4366,28 @@ The tmux session persists across toggle cycles.`,
 				onCurrentSpace := isWindowOnSpace(result, activeDisplay)
 
 				if isOrderedIn && onCurrentSpace {
-					// Save window frame before hiding
-					if frameData, ok := result["frame"].(map[string]interface{}); ok {
-						sf := terminalFrame{
+					// Save window position per-display before hiding
+					if frameData, ok := result["frame"].(map[string]interface{}); ok && activeDisplay != nil {
+						frames := loadTerminalFrames(frameFile)
+						frames[activeDisplay.UUID] = terminalFrame{
 							X:      toTermFloat(frameData["x"]),
 							Y:      toTermFloat(frameData["y"]),
 							Width:  toTermFloat(frameData["width"]),
 							Height: toTermFloat(frameData["height"]),
 						}
-						saveTerminalFrame(frameFile, sf)
+						saveTerminalFrames(frameFile, frames)
 					}
 					// Visible on current space → hide
 					c.CallMethod(ctx, "window.hide", params)
-					logTerminal(1, "hide", nil)
+					logTerminal(1, "hide", map[string]any{
+						"display": activeDisplay.UUID,
+					})
 					return nil
 				} else {
 					// Hidden OR on different space → move + show + position
 					if displayErr == nil && activeDisplay != nil {
-						saved, _ := loadTerminalFrame(frameFile)
+						frames := loadTerminalFrames(frameFile)
+						saved := frames[activeDisplay.UUID]
 						positionTerminalOnDisplay(ctx, c, int(savedWID), activeDisplay, false, saved)
 					}
 					c.CallMethod(ctx, "window.show", params)
@@ -4515,19 +4519,24 @@ type terminalFrame struct {
 	X, Y, Width, Height float64
 }
 
-func saveTerminalFrame(path string, f terminalFrame) {
-	data, _ := json.Marshal(f)
+// terminalFrames maps display UUID → last known terminal position on that display
+type terminalFrames map[string]terminalFrame
+
+func saveTerminalFrames(path string, frames terminalFrames) {
+	data, _ := json.Marshal(frames)
 	os.WriteFile(path, data, 0644)
 }
 
-func loadTerminalFrame(path string) (terminalFrame, error) {
+func loadTerminalFrames(path string) terminalFrames {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return terminalFrame{}, err
+		return terminalFrames{}
 	}
-	var f terminalFrame
-	err = json.Unmarshal(data, &f)
-	return f, err
+	var frames terminalFrames
+	if json.Unmarshal(data, &frames) != nil {
+		return terminalFrames{}
+	}
+	return frames
 }
 
 // toTermFloat converts an interface{} value from JSON map to float64.
@@ -4570,10 +4579,10 @@ func isWindowOnSpace(result map[string]interface{}, display *client.DisplayInfo)
 	return false
 }
 
-// positionTerminalOnDisplay centers the terminal on the given display with offset correction.
-// If resize=true, sets size to 80%×60% (fresh launch).
-// If resize=false and saved has non-zero dimensions, centers using the saved window size.
-// If resize=false and saved is zero, falls back to centering at 80%×60% without resizing.
+// positionTerminalOnDisplay positions the terminal on the given display.
+// resize=true: fresh launch, size to 80%×60% and center.
+// resize=false: toggle show. If saved frame is on same display, restore exact position.
+// If different display (or no saved frame), center using saved dimensions.
 func positionTerminalOnDisplay(ctx context.Context, c *client.Client, windowID int, display *client.DisplayInfo, resize bool, saved terminalFrame) {
 	logData := map[string]any{"wid": windowID, "displayUUID": display.UUID}
 
@@ -4606,18 +4615,18 @@ func positionTerminalOnDisplay(ctx context.Context, c *client.Client, windowID i
 		c.UpdateWindow(ctx, windowID, map[string]interface{}{
 			"x": x, "y": y, "width": winW, "height": winH,
 		})
+		logData["mode"] = "fresh"
 		logData["placed"] = map[string]any{"x": x, "y": y, "w": winW, "h": winH}
 	} else if saved.Width > 0 && saved.Height > 0 {
-		// Toggle show with saved frame: center using actual window size
-		x := vf.X + (vf.Width-saved.Width)/2 + offsetX
-		y := vf.Y + (vf.Height-saved.Height)/2 + offsetY
+		// Saved position for this display: restore exact x,y
 		c.UpdateWindow(ctx, windowID, map[string]interface{}{
 			"spaceId": display.CurrentSpaceID,
-			"x": x, "y": y,
+			"x": saved.X, "y": saved.Y,
 		})
-		logData["placed"] = map[string]any{"x": x, "y": y, "w": saved.Width, "h": saved.Height}
+		logData["mode"] = "restore"
+		logData["placed"] = map[string]any{"x": saved.X, "y": saved.Y, "w": saved.Width, "h": saved.Height}
 	} else {
-		// Toggle show, no saved frame: center at 80%×60% without resizing
+		// No saved position for this display: center at 80%×60% without resizing
 		winW := vf.Width * 0.8
 		winH := vf.Height * 0.6
 		x := vf.X + (vf.Width-winW)/2 + offsetX
@@ -4626,6 +4635,7 @@ func positionTerminalOnDisplay(ctx context.Context, c *client.Client, windowID i
 			"spaceId": display.CurrentSpaceID,
 			"x": x, "y": y,
 		})
+		logData["mode"] = "center"
 		logData["placed"] = map[string]any{"x": x, "y": y, "w": winW, "h": winH}
 	}
 
