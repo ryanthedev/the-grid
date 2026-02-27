@@ -80,6 +80,24 @@ class MessageHandler {
         }
     }
 
+    /// Convert a DisplayState to a dictionary for RPC responses
+    private func displayToDict(_ display: DisplayState) -> [String: Any] {
+        var dict: [String: Any] = [
+            "uuid": display.uuid,
+            "name": display.name ?? "",
+            "currentSpaceID": String(display.currentSpaceID),
+            "isMain": display.isMain ?? false,
+            "backingScaleFactor": display.backingScaleFactor ?? 1.0
+        ]
+        if let f = display.frame {
+            dict["frame"] = ["x": f.origin.x, "y": f.origin.y, "width": f.width, "height": f.height]
+        }
+        if let f = display.visibleFrame {
+            dict["visibleFrame"] = ["x": f.origin.x, "y": f.origin.y, "width": f.width, "height": f.height]
+        }
+        return dict
+    }
+
     /// Register built-in handlers for demonstration
     private func registerBuiltInHandlers() {
         // Ping handler - simple echo to test connectivity
@@ -125,6 +143,113 @@ class MessageHandler {
                 result: AnyCodable(info)
             )
             completion(response)
+        }
+
+        // MARK: - Lightweight Query Methods
+
+        // metadata.get - returns cached metadata without window enumeration
+        register(method: "metadata.get") { request, completion in
+            Task {
+                let state = await StateManager.shared.getState()
+                let meta = state.metadata
+
+                var result: [String: Any] = [
+                    "lastUpdate": meta.lastUpdate.timeIntervalSince1970,
+                    "version": meta.version,
+                    "connectionID": meta.connectionID
+                ]
+                if let fwid = meta.focusedWindowID {
+                    result["focusedWindowID"] = fwid
+                }
+                if let uuid = meta.activeDisplayUUID {
+                    result["activeDisplayUUID"] = uuid
+                }
+                if let sid = meta.activeSpaceID {
+                    result["activeSpaceID"] = String(sid)
+                }
+
+                completion(Response(id: request.id, result: AnyCodable(result)))
+            }
+        }
+
+        // display.list - returns all connected displays (no windows/apps/spaces)
+        register(method: "display.list") { [self] request, completion in
+            Task {
+                let state = await StateManager.shared.getState()
+                let displayArray = state.displays.map { self.displayToDict($0) }
+                completion(Response(id: request.id, result: AnyCodable(["displays": displayArray])))
+            }
+        }
+
+        // display.get - returns a single display by UUID or active shorthand
+        register(method: "display.get") { [self] request, completion in
+            guard let params = request.params else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
+                return
+            }
+
+            Task {
+                let state = await StateManager.shared.getState()
+
+                let display: DisplayState?
+
+                if let active = params["active"]?.value as? Bool, active {
+                    // Look up by active display UUID from metadata
+                    guard let activeUUID = state.metadata.activeDisplayUUID else {
+                        completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "No active display")))
+                        return
+                    }
+                    display = state.displays.first { $0.uuid == activeUUID }
+                } else if let uuid = params["uuid"]?.value as? String {
+                    display = state.displays.first { $0.uuid == uuid }
+                } else {
+                    completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Missing uuid or active param")))
+                    return
+                }
+
+                guard let found = display else {
+                    completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Display not found")))
+                    return
+                }
+
+                completion(Response(id: request.id, result: AnyCodable(self.displayToDict(found))))
+            }
+        }
+
+        // window.find - searches state.windows by criteria, returns immediately
+        register(method: "window.find") { request, completion in
+            guard let params = request.params else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
+                return
+            }
+
+            let appNameFilter = params["appName"]?.value as? String
+            let titleFilter = params["title"]?.value as? String
+
+            guard appNameFilter != nil || titleFilter != nil else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "At least one of appName or title required")))
+                return
+            }
+
+            Task {
+                let state = await StateManager.shared.getState()
+
+                for window in state.windows.values {
+                    if let appName = appNameFilter, window.appName != appName { continue }
+                    if let title = titleFilter, !(window.title?.contains(title) ?? false) { continue }
+                    if window.isHidden { continue }
+                    if window.frame.height < 100 { continue }
+
+                    completion(Response(id: request.id, result: AnyCodable([
+                        "found": true,
+                        "windowId": String(window.id),
+                        "pid": window.pid
+                    ])))
+                    return
+                }
+
+                completion(Response(id: request.id, result: AnyCodable(["found": false])))
+            }
         }
 
         // Dump - returns complete window manager state
@@ -453,7 +578,14 @@ class MessageHandler {
                 var value: UInt8 = 0
                 let err = SLSWindowIsOrderedIn(state.metadata.connectionID, windowID, &value)
                 if err == .success {
-                    completion(Response(id: request.id, result: AnyCodable(["windowId": windowId, "isOrderedIn": value != 0])))
+                    // Include window's space membership for space-aware toggle
+                    let spaces = state.windows[windowId]?.spaces ?? []
+                    let spacesStrings = spaces.map { String($0) }
+                    completion(Response(id: request.id, result: AnyCodable([
+                        "windowId": windowId,
+                        "isOrderedIn": value != 0,
+                        "spaces": spacesStrings
+                    ])))
                 } else {
                     completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to check window ordered-in state")))
                 }
