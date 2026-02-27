@@ -41,6 +41,7 @@ import (
 	"github.com/ryanthedev/grid-cli/internal/process"
 	"github.com/ryanthedev/grid-cli/internal/enrichers"
 	gridRecord "github.com/ryanthedev/grid-cli/internal/record"
+	"github.com/ryanthedev/grid-cli/internal/tmux"
 	"gopkg.in/yaml.v3"
 )
 
@@ -4399,11 +4400,12 @@ The tmux session persists across toggle cycles.`,
 		}
 
 		// Tier 4: Launch fresh Ghostty
+		tmuxPath := tmux.FindTmux()
 		p := exec.Command("open", "-na", "Ghostty.app", "--args",
 			"--title=grid-terminal",
 			"--window-decoration=none",
 			"--quit-after-last-window-closed=true",
-			"-e", "tmux", "new-session", "-A", "-s", "grid-scratch")
+			"-e", tmuxPath, "new-session", "-A", "-s", "grid-scratch")
 		if err := p.Run(); err != nil {
 			return fmt.Errorf("failed to launch Ghostty: %w", err)
 		}
