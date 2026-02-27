@@ -578,14 +578,19 @@ class MessageHandler {
                 var value: UInt8 = 0
                 let err = SLSWindowIsOrderedIn(state.metadata.connectionID, windowID, &value)
                 if err == .success {
-                    // Include window's space membership for space-aware toggle
-                    let spaces = state.windows[windowId]?.spaces ?? []
+                    // Include window's space membership and frame for space-aware toggle
+                    let win = state.windows[windowId]
+                    let spaces = win?.spaces ?? []
                     let spacesStrings = spaces.map { String($0) }
-                    completion(Response(id: request.id, result: AnyCodable([
+                    var result: [String: Any] = [
                         "windowId": windowId,
                         "isOrderedIn": value != 0,
                         "spaces": spacesStrings
-                    ])))
+                    ]
+                    if let f = win?.frame {
+                        result["frame"] = ["x": f.origin.x, "y": f.origin.y, "width": f.width, "height": f.height]
+                    }
+                    completion(Response(id: request.id, result: AnyCodable(result)))
                 } else {
                     completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to check window ordered-in state")))
                 }
