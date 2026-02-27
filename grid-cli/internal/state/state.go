@@ -40,6 +40,8 @@ type CellState struct {
 	SplitRatios    []float64       `json:"splitRatios"`    // One per window, sum to 1.0
 	StackMode      types.StackMode `json:"stackMode"`      // Override stack mode (empty = use default)
 	LastFocusedIdx int             `json:"lastFocusedIdx"` // Last focused window index in this cell
+	LastFocusedWID uint32          `json:"lastFocusedWid"` // Last focused window ID (stable across reorders)
+	PrevFocusedWID uint32          `json:"prevFocusedWid"` // Previous focused WID (restored when current is removed)
 }
 
 // NewRuntimeState creates a new empty runtime state
@@ -176,8 +178,9 @@ func (ss *SpaceState) AssignWindow(windowID uint32, cellID string) {
 
 	// Append to cell
 	cell.Windows = append(cell.Windows, windowID)
-	// New window becomes "top" (focused) via LastFocusedIdx
+	// New window becomes "top" (focused)
 	cell.LastFocusedIdx = len(cell.Windows) - 1
+	cell.LastFocusedWID = windowID
 
 	// Update split ratios to be equal
 	cell.SplitRatios = equalRatios(len(cell.Windows))
@@ -198,7 +201,7 @@ func (ss *SpaceState) PrependWindowToCell(windowID uint32, cellID string) {
 
 	// Prepend to cell
 	cell.Windows = append([]uint32{windowID}, cell.Windows...)
-	cell.LastFocusedIdx = 0 // Prepended window becomes top
+	cell.LastFocusedIdx = 0
 
 	// Update split ratios to be equal
 	cell.SplitRatios = equalRatios(len(cell.Windows))
@@ -224,6 +227,7 @@ func (ss *SpaceState) InsertWindowAtIndex(windowID uint32, cellID string, index 
 	// Insert at index
 	cell.Windows = append(cell.Windows[:index], append([]uint32{windowID}, cell.Windows[index:]...)...)
 	cell.LastFocusedIdx = index
+	cell.LastFocusedWID = windowID
 
 	// Update split ratios to be equal
 	cell.SplitRatios = equalRatios(len(cell.Windows))
@@ -237,11 +241,33 @@ func (ss *SpaceState) RemoveWindow(windowID uint32) {
 				// Remove window
 				cell.Windows = append(cell.Windows[:i], cell.Windows[i+1:]...)
 
-				// Adjust LastFocusedIdx if needed
+				// Adjust focus tracking
 				if len(cell.Windows) == 0 {
 					cell.LastFocusedIdx = 0
-				} else if cell.LastFocusedIdx >= len(cell.Windows) {
-					cell.LastFocusedIdx = len(cell.Windows) - 1
+					cell.LastFocusedWID = 0
+					cell.PrevFocusedWID = 0
+				} else {
+					if cell.LastFocusedIdx >= len(cell.Windows) {
+						cell.LastFocusedIdx = len(cell.Windows) - 1
+					}
+					if cell.LastFocusedWID == windowID {
+						// Restore previous focus if it's still in this cell
+						cell.LastFocusedWID = 0
+						if cell.PrevFocusedWID != 0 {
+							for j, wid := range cell.Windows {
+								if wid == cell.PrevFocusedWID {
+									cell.LastFocusedWID = cell.PrevFocusedWID
+									cell.LastFocusedIdx = j
+									break
+								}
+							}
+						}
+						cell.PrevFocusedWID = 0
+					}
+					// Also clear prev if it was the removed window
+					if cell.PrevFocusedWID == windowID {
+						cell.PrevFocusedWID = 0
+					}
 				}
 
 				// Update split ratios
@@ -269,16 +295,24 @@ func (ss *SpaceState) GetWindowCell(windowID uint32) string {
 }
 
 // SetFocus sets the focused cell and window index.
-// Also updates the cell's LastFocusedIdx for persistence across cell switches.
+// Also updates the cell's LastFocusedIdx/WID for persistence across cell switches.
 func (ss *SpaceState) SetFocus(cellID string, windowIndex int) {
 	ss.FocusedCell = cellID
 	ss.FocusedWindow = windowIndex
 
-	// Also update the cell's LastFocusedIdx for persistence
 	if cell, ok := ss.Cells[cellID]; ok {
 		cell.LastFocusedIdx = windowIndex
+		if windowIndex >= 0 && windowIndex < len(cell.Windows) {
+			newWID := cell.Windows[windowIndex]
+			// Track previous WID so we can restore it if the current one is removed
+			if cell.LastFocusedWID != 0 && cell.LastFocusedWID != newWID {
+				cell.PrevFocusedWID = cell.LastFocusedWID
+			}
+			cell.LastFocusedWID = newWID
+		}
 	}
 }
+
 
 // GetFocusedWindow returns the currently focused window ID, or 0 if none
 func (ss *SpaceState) GetFocusedWindow() uint32 {

@@ -129,7 +129,7 @@ func moveWindowToCell(
 	mutableSpace := rs.GetSpace(spaceID)
 	mutableSpace.PrependWindowToCell(windowID, targetCell)
 
-	// Update focus to follow the window
+	// Update focus to follow the moved window (PrevFocusedWID preserves old choice if moved out)
 	mutableSpace.SetFocus(targetCell, 0)
 
 	// Calculate placements for affected cells only (not full layout re-assignment)
@@ -213,7 +213,36 @@ func moveWindowToCell(
 		return nil, fmt.Errorf("failed to apply placements: %w", err)
 	}
 
-	// Focus the window
+	// In tabbed mode, raise the next window in the source cell so it's visible
+	sourceMode := cellModes[sourceCell]
+	if sourceMode == "" {
+		sourceMode = cfg.Settings.DefaultStackMode
+	}
+	if sourceMode == types.StackTabs {
+		if srcCell := mutableSpace.Cells[sourceCell]; srcCell != nil && len(srcCell.Windows) > 0 {
+			// Use WID-based lookup (matches focusCellByID logic)
+			nextIdx := -1
+			if srcCell.LastFocusedWID != 0 {
+				for i, wid := range srcCell.Windows {
+					if wid == srcCell.LastFocusedWID {
+						nextIdx = i
+						break
+					}
+				}
+			}
+			if nextIdx < 0 {
+				nextIdx = srcCell.LastFocusedIdx
+				if nextIdx < 0 || nextIdx >= len(srcCell.Windows) {
+					nextIdx = 0
+				}
+			}
+			c.CallMethod(ctx, "window.raise", map[string]interface{}{
+				"windowId": srcCell.Windows[nextIdx],
+			})
+		}
+	}
+
+	// Focus the moved window in target cell
 	if err := focus.FocusWindow(ctx, c, windowID); err != nil {
 		jsonlog.Log("warn.focus_moved", jsonlog.WithData(map[string]any{"wid": windowID, "err": err.Error()}))
 		// Non-fatal - window was moved successfully
@@ -479,6 +508,35 @@ func moveWindowCrossDisplay(
 
 			if err := layout.ApplyPlacements(ctx, c, sourcePlacements); err != nil {
 				jsonlog.Log("warn.placements_source", jsonlog.WithData(map[string]any{"err": err.Error()}))
+			}
+
+			// In tabbed mode, raise the next window in the source cell
+			srcMode := sourceCellModes[currentCell]
+			if srcMode == "" {
+				srcMode = cfg.Settings.DefaultStackMode
+			}
+			if srcMode == types.StackTabs {
+				if srcCell := sourceSpace.Cells[currentCell]; srcCell != nil && len(srcCell.Windows) > 0 {
+					// Use WID-based lookup (matches focusCellByID logic)
+					nextIdx := -1
+					if srcCell.LastFocusedWID != 0 {
+						for i, wid := range srcCell.Windows {
+							if wid == srcCell.LastFocusedWID {
+								nextIdx = i
+								break
+							}
+						}
+					}
+					if nextIdx < 0 {
+						nextIdx = srcCell.LastFocusedIdx
+						if nextIdx < 0 || nextIdx >= len(srcCell.Windows) {
+							nextIdx = 0
+						}
+					}
+					c.CallMethod(ctx, "window.raise", map[string]interface{}{
+						"windowId": srcCell.Windows[nextIdx],
+					})
+				}
 			}
 		}
 	}
