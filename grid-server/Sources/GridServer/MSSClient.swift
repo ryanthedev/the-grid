@@ -48,11 +48,13 @@ enum WindowLayer: String, CustomStringConvertible {
 class MSSClient {
     private var ctx: OpaquePointer?
     private let queue = DispatchQueue(label: "com.grid.mss")
+    private let socketPath: String?
 
     /// Initialize MSS client with optional custom socket path
     /// - Parameters:
     ///   - socketPath: Optional custom socket path (defaults to MSS default)
     init(socketPath: String? = nil) {
+        self.socketPath = socketPath
         queue.sync {
             // Create MSS context
             if let path = socketPath {
@@ -78,25 +80,52 @@ class MSSClient {
 
     // MARK: - Availability & Status
 
-    /// Check if MSS payload is loaded and available
+    /// Reconnect by destroying and recreating the MSS context.
+    /// Must be called within queue.sync.
+    private func reconnect() {
+        if let ctx = ctx {
+            mss_destroy(ctx)
+        }
+        if let path = socketPath {
+            self.ctx = mss_create(path)
+        } else {
+            self.ctx = mss_create(nil)
+        }
+    }
+
+    /// Check if MSS payload is loaded and available.
+    /// Retries up to 3 times with reconnection on failure (handles post-wake instability).
     /// - Returns: true if MSS is ready to use
     func isAvailable() -> Bool {
         return queue.sync {
-            guard let ctx = ctx else {
-                return false
+            for attempt in 0..<3 {
+                guard let ctx = ctx else {
+                    reconnect()
+                    continue
+                }
+
+                var capabilities: UInt32 = 0
+                var version: UnsafePointer<CChar>?
+                let result = mss_handshake(ctx, &capabilities, &version)
+
+                if result == 0 {
+                    return true
+                }
+
+                JSONLogger.shared.log("mss.fail", data: [
+                    "op": "handshake",
+                    "err": result,
+                    "attempt": attempt + 1
+                ])
+
+                // Reconnect and retry (except on last attempt)
+                if attempt < 2 {
+                    reconnect()
+                    // Brief sync pause to let Dock.app recover
+                    Thread.sleep(forTimeInterval: 0.3)
+                }
             }
-
-            var capabilities: UInt32 = 0
-            var version: UnsafePointer<CChar>?
-
-            let result = mss_handshake(ctx, &capabilities, &version)
-
-            if result == 0 {  // MSS_SUCCESS = 0
-                return true
-            } else {
-                JSONLogger.shared.log("mss.fail", data: ["op": "handshake", "err": result])
-                return false
-            }
+            return false
         }
     }
 

@@ -821,6 +821,30 @@ class MessageHandler {
 
         // MARK: - Window Focus Methods
 
+        // Raise window to front without changing keyboard focus
+        register(method: "window.raise") { request, completion in
+            guard let params = request.params else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
+                return
+            }
+
+            guard let windowId = params["windowId"]?.value as? String,
+                  let windowID = UInt32(windowId) else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Missing windowId")))
+                return
+            }
+
+            Task {
+                let state = await StateManager.shared.getState()
+                let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
+                if manipulator.mssClient.orderWindowToFront(windowID) {
+                    completion(Response(id: request.id, result: AnyCodable(["success": true, "windowId": windowId])))
+                } else {
+                    completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to raise window")))
+                }
+            }
+        }
+
         // Focus window (raise and activate)
         register(method: "window.focus") { request, completion in
             guard let params = request.params else {

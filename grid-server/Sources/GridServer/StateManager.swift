@@ -1533,6 +1533,46 @@ var windows: [String: WindowState] = [:]
         }
     }
 
+    /// Invoke CLI to refresh layouts after a space change.
+    /// Fire-and-forget: spawns process asynchronously so the server isn't blocked.
+    private func invokeCLIForLayoutRefresh() {
+        let path = cliPath
+        let seq = cliInvokeSequence
+        cliInvokeSequence += 1
+
+        JSONLogger.shared.log("cli.invoke.spawn", data: [
+            "cmd": "layout refresh",
+            "seq": seq
+        ])
+
+        Task.detached {
+            let process = Process()
+            if path.hasPrefix("/") {
+                process.executableURL = URL(fileURLWithPath: path)
+                process.arguments = ["layout", "refresh"]
+            } else {
+                process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+                process.arguments = [path, "layout", "refresh"]
+            }
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+
+            do {
+                try process.run()
+                process.waitUntilExit()
+
+                let status = process.terminationStatus
+                if status == 0 {
+                    JSONLogger.shared.log("cli.invoke.ok", data: ["cmd": "layout refresh", "seq": seq])
+                } else {
+                    JSONLogger.shared.log("cli.invoke.err", data: ["cmd": "layout refresh", "seq": seq, "status": status])
+                }
+            } catch {
+                JSONLogger.shared.log("cli.invoke.err", data: ["cmd": "layout refresh", "seq": seq, "error": "\(error)"])
+            }
+        }
+    }
+
     /// Invoke CLI to sync borders for external focus changes
     /// Fire-and-forget: spawns process asynchronously, logs result, no retries
     private func invokeCLIForBorderSync(windowID: UInt32) {
@@ -1745,9 +1785,10 @@ var windows: [String: WindowState] = [:]
             restoreFocusForSpace(spaceID)
         }
 
-        // Note: Border system handles space changes via cell assignments from CLI
-
         state.metadata.update()
+
+        // Reapply layouts after state is fully updated so windows snap into position
+        invokeCLIForLayoutRefresh()
     }
 
     /// Update activeDisplayUUID and activeSpaceID based on which display has the focused/active space
@@ -2006,18 +2047,47 @@ return
     }
 
     private func handleSystemWoke() async {
-        // Debug: log wake entry with current display state
         JSONLogger.shared.log("dbg.wake.start", data: [
             "displayCount": state.displays.count,
             "displayUUIDs": state.displays.map { $0.uuid }
         ])
 
+        // Let macOS stabilize displays, spaces, and accessibility subsystem.
+        // Without this delay, SkyLight/AX queries return stale or incomplete data.
+        // BFD uses a similar 1s delay for event tap recovery.
+        try? await Task.sleep(nanoseconds: 2_000_000_000)
+
         await refreshCompleteState()
 
-        // Debug: log wake complete with new display state
+        // Rebuild AX observers — existing observers may have stale connections
+        // after sleep, causing role queries to return AXApplication instead of AXWindow
+        await rebuildAXObservers()
+
         JSONLogger.shared.log("dbg.wake.complete", data: [
             "displayCount": state.displays.count,
             "displayUUIDs": state.displays.map { $0.uuid }
+        ])
+    }
+
+    /// Stop all AX observers and re-create them with fresh connections.
+    /// Called after wake to ensure role/attribute queries return correct data.
+    private func rebuildAXObservers() async {
+        let oldCount = applicationObservers.count
+
+        // Stop all existing observers on the main thread (required for RunLoop cleanup)
+        for (_, observer) in applicationObservers {
+            await MainActor.run {
+                observer.stopObserving()
+            }
+        }
+        applicationObservers.removeAll()
+
+        // Re-create observers for all running applications
+        observeExistingApplications()
+
+        JSONLogger.shared.log("ax.observer.rebuild", data: [
+            "old": oldCount,
+            "new": applicationObservers.count
         ])
     }
 

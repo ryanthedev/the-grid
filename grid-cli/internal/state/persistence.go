@@ -51,6 +51,9 @@ func LoadStateFrom(path string) (*RuntimeState, error) {
 	if state.Spaces == nil {
 		state.Spaces = make(map[string]*SpaceState)
 	}
+	if state.DisplaySpaces == nil {
+		state.DisplaySpaces = make(map[string][]string)
+	}
 
 	// Ensure nested maps are initialized
 	for _, space := range state.Spaces {

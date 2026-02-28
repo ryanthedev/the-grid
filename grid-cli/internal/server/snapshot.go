@@ -22,6 +22,7 @@ type DisplayInfo struct {
 	VisibleFrame   types.Rect  // Excludes menu bar/dock
 	CurrentSpaceID interface{} // Can be int, float64, or bool (for overflow)
 	IsMain         bool
+	Spaces         []string    // Ordered list of all space IDs on this display
 }
 
 // Snapshot is a parsed, read-only view of server state at a point in time.
@@ -358,6 +359,7 @@ func parseAllDisplays(raw map[string]interface{}) []DisplayInfo {
 			Name:           toString(display["name"]),
 			CurrentSpaceID: display["currentSpaceID"], // Keep as interface{} for overflow handling
 			IsMain:         toBool(display["isMain"]),
+			Spaces:         parseSpaceIDList(display["spaces"]),
 		}
 
 		// Parse frame (full screen bounds)
@@ -602,6 +604,27 @@ func toBool(v interface{}) bool {
 		return b
 	}
 	return false
+}
+
+// parseSpaceIDList converts a raw JSON array of space IDs (UInt64 from Swift,
+// decoded as float64 by encoding/json) into an ordered []string.
+// Returns nil if the value is absent or not an array.
+func parseSpaceIDList(v interface{}) []string {
+	arr, ok := v.([]interface{})
+	if !ok || len(arr) == 0 {
+		return nil
+	}
+	result := make([]string, 0, len(arr))
+	for _, item := range arr {
+		id := fmt.Sprintf("%.0f", toFloat64(item))
+		if id != "0" {
+			result = append(result, id)
+		}
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
 }
 
 func interfaceToInt(v interface{}) int64 {
