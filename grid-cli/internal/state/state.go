@@ -4,6 +4,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ryanthedev/grid-cli/internal/jsonlog"
 	"github.com/ryanthedev/grid-cli/internal/types"
 )
 
@@ -14,9 +15,10 @@ const (
 
 // RuntimeState is the root state structure persisted to disk
 type RuntimeState struct {
-	Version     int                    `json:"version"`
-	Spaces      map[string]*SpaceState `json:"spaces"`
-	LastUpdated time.Time              `json:"lastUpdated"`
+	Version       int                    `json:"version"`
+	Spaces        map[string]*SpaceState `json:"spaces"`
+	DisplaySpaces map[string]string      `json:"displaySpaces"` // displayUUID -> last known spaceID
+	LastUpdated   time.Time              `json:"lastUpdated"`
 
 	mu sync.RWMutex `json:"-"` // For thread-safe access (not serialized)
 }
@@ -47,10 +49,56 @@ type CellState struct {
 // NewRuntimeState creates a new empty runtime state
 func NewRuntimeState() *RuntimeState {
 	return &RuntimeState{
-		Version:     StateVersion,
-		Spaces:      make(map[string]*SpaceState),
-		LastUpdated: time.Now(),
+		Version:       StateVersion,
+		Spaces:        make(map[string]*SpaceState),
+		DisplaySpaces: make(map[string]string),
+		LastUpdated:   time.Now(),
 	}
+}
+
+// MigrateSpaceIDs detects when macOS has reassigned space IDs (e.g., after
+// sleep/wake) and migrates layout state from old to new space IDs.
+// currentDisplaySpaces maps displayUUID -> current spaceID from the server.
+// Returns true if any migration occurred.
+func (rs *RuntimeState) MigrateSpaceIDs(currentDisplaySpaces map[string]string) bool {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+
+	migrated := false
+
+	for displayUUID, newSpaceID := range currentDisplaySpaces {
+		if newSpaceID == "" || displayUUID == "" {
+			continue
+		}
+
+		oldSpaceID := rs.DisplaySpaces[displayUUID]
+
+		if oldSpaceID != "" && oldSpaceID != newSpaceID {
+			// Space ID changed for this display — migrate state if significant
+			if oldState, ok := rs.Spaces[oldSpaceID]; ok && hasSignificantState(oldState) {
+				oldState.SpaceID = newSpaceID
+				rs.Spaces[newSpaceID] = oldState
+				delete(rs.Spaces, oldSpaceID)
+				migrated = true
+
+				jsonlog.Log("state.space_migrated", jsonlog.WithData(map[string]any{
+					"display": displayUUID,
+					"old":     oldSpaceID,
+					"new":     newSpaceID,
+				}))
+			}
+		}
+
+		// Update mapping regardless (new baseline for next check)
+		rs.DisplaySpaces[displayUUID] = newSpaceID
+	}
+
+	return migrated
+}
+
+// hasSignificantState returns true if a space has layout or cell state worth migrating.
+func hasSignificantState(ss *SpaceState) bool {
+	return ss.CurrentLayoutID != "" || len(ss.Cells) > 0
 }
 
 // NewSpaceState creates a new empty space state

@@ -2,6 +2,7 @@ package reconcile
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/ryanthedev/grid-cli/internal/client"
 	"github.com/ryanthedev/grid-cli/internal/config"
@@ -21,6 +22,17 @@ import (
 // NOTE: This does NOT sync borders. Call SyncBorders explicitly after
 // operations that change cell assignments or bounds.
 func Sync(ctx context.Context, c *client.Client, snap *server.Snapshot, rs *state.RuntimeState, cfg *config.Config) error {
+	// Migrate space IDs if macOS reassigned them (e.g., after sleep/wake)
+	if displaySpaces := buildDisplaySpaceMap(snap.AllDisplays); len(displaySpaces) > 0 {
+		if rs.MigrateSpaceIDs(displaySpaces) {
+			rs.MarkUpdated()
+			if err := rs.Save(); err != nil {
+				return err
+			}
+			jsonlog.Log("sync.space_migration_saved")
+		}
+	}
+
 	spaceState := rs.GetSpaceReadOnly(snap.SpaceID)
 	if spaceState == nil {
 		return nil
@@ -365,5 +377,36 @@ func SyncBorderFocus(ctx context.Context, c *client.Client, displayUUID string, 
 	if err := c.SendBorderFocus(ctx, displayUUID, windowID); err != nil {
 		jsonlog.Log("warn.sync_border_focus", jsonlog.WithData(map[string]any{"err": err.Error()}))
 		return
+	}
+}
+
+// buildDisplaySpaceMap converts snapshot AllDisplays into a displayUUID -> spaceID map.
+func buildDisplaySpaceMap(allDisplays []server.DisplayInfo) map[string]string {
+	m := make(map[string]string, len(allDisplays))
+	for _, d := range allDisplays {
+		if d.UUID == "" {
+			continue
+		}
+		spaceID := convertSpaceID(d.CurrentSpaceID)
+		if spaceID != "" {
+			m[d.UUID] = spaceID
+		}
+	}
+	return m
+}
+
+// convertSpaceID converts an interface{} space ID to string, mirroring snapshot.go logic.
+func convertSpaceID(v interface{}) string {
+	switch val := v.(type) {
+	case float64:
+		return fmt.Sprintf("%.0f", val)
+	case int:
+		return fmt.Sprintf("%d", val)
+	case int64:
+		return fmt.Sprintf("%d", val)
+	case string:
+		return val
+	default:
+		return ""
 	}
 }

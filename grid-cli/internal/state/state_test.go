@@ -649,6 +649,115 @@ func abs(x float64) float64 {
 	return x
 }
 
+// === Space Migration Tests ===
+
+func TestMigrateSpaceIDs_NoChange(t *testing.T) {
+	rs := NewRuntimeState()
+	rs.DisplaySpaces["UUID-A"] = "100"
+	space := rs.GetSpace("100")
+	space.SetCurrentLayout("3-col", 0)
+
+	migrated := rs.MigrateSpaceIDs(map[string]string{
+		"UUID-A": "100",
+	})
+
+	if migrated {
+		t.Error("expected no migration when space ID unchanged")
+	}
+	if rs.Spaces["100"].CurrentLayoutID != "3-col" {
+		t.Error("layout should be preserved")
+	}
+}
+
+func TestMigrateSpaceIDs_SpaceChanged(t *testing.T) {
+	rs := NewRuntimeState()
+	rs.DisplaySpaces["UUID-A"] = "4688"
+	space := rs.GetSpace("4688")
+	space.SetCurrentLayout("3-col", 0)
+	space.AssignWindow(123, "left")
+
+	migrated := rs.MigrateSpaceIDs(map[string]string{
+		"UUID-A": "4787",
+	})
+
+	if !migrated {
+		t.Error("expected migration when space ID changed")
+	}
+	if _, ok := rs.Spaces["4688"]; ok {
+		t.Error("old space ID should be removed")
+	}
+	newSpace := rs.Spaces["4787"]
+	if newSpace == nil {
+		t.Fatal("new space ID should exist")
+	}
+	if newSpace.SpaceID != "4787" {
+		t.Errorf("SpaceID field should be updated, got %q", newSpace.SpaceID)
+	}
+	if newSpace.CurrentLayoutID != "3-col" {
+		t.Error("layout should be migrated")
+	}
+	if rs.DisplaySpaces["UUID-A"] != "4787" {
+		t.Error("DisplaySpaces should be updated")
+	}
+}
+
+func TestMigrateSpaceIDs_EmptySpaceSkipped(t *testing.T) {
+	rs := NewRuntimeState()
+	rs.DisplaySpaces["UUID-A"] = "100"
+	// Create space with no layout or cells (not significant)
+	rs.GetSpace("100")
+
+	migrated := rs.MigrateSpaceIDs(map[string]string{
+		"UUID-A": "200",
+	})
+
+	if migrated {
+		t.Error("should not migrate empty space state")
+	}
+	// DisplaySpaces should still be updated
+	if rs.DisplaySpaces["UUID-A"] != "200" {
+		t.Error("DisplaySpaces should be updated even without migration")
+	}
+}
+
+func TestMigrateSpaceIDs_NewDisplay(t *testing.T) {
+	rs := NewRuntimeState()
+
+	migrated := rs.MigrateSpaceIDs(map[string]string{
+		"UUID-NEW": "500",
+	})
+
+	if migrated {
+		t.Error("no migration for previously unknown display")
+	}
+	if rs.DisplaySpaces["UUID-NEW"] != "500" {
+		t.Error("new display should be tracked")
+	}
+}
+
+func TestMigrateSpaceIDs_MultiDisplay(t *testing.T) {
+	rs := NewRuntimeState()
+	rs.DisplaySpaces["UUID-A"] = "100"
+	rs.DisplaySpaces["UUID-B"] = "200"
+	rs.GetSpace("100").SetCurrentLayout("layout-a", 0)
+	rs.GetSpace("200").SetCurrentLayout("layout-b", 0)
+
+	migrated := rs.MigrateSpaceIDs(map[string]string{
+		"UUID-A": "300",
+		"UUID-B": "400",
+	})
+
+	if !migrated {
+		t.Error("expected migration")
+	}
+	if rs.Spaces["300"] == nil || rs.Spaces["300"].CurrentLayoutID != "layout-a" {
+		t.Error("display A layout not migrated correctly")
+	}
+	if rs.Spaces["400"] == nil || rs.Spaces["400"].CurrentLayoutID != "layout-b" {
+		t.Error("display B layout not migrated correctly")
+	}
+}
+
 func TestHasState(t *testing.T) {
 	state := NewRuntimeState()
 
