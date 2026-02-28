@@ -2006,18 +2006,47 @@ return
     }
 
     private func handleSystemWoke() async {
-        // Debug: log wake entry with current display state
         JSONLogger.shared.log("dbg.wake.start", data: [
             "displayCount": state.displays.count,
             "displayUUIDs": state.displays.map { $0.uuid }
         ])
 
+        // Let macOS stabilize displays, spaces, and accessibility subsystem.
+        // Without this delay, SkyLight/AX queries return stale or incomplete data.
+        // BFD uses a similar 1s delay for event tap recovery.
+        try? await Task.sleep(nanoseconds: 2_000_000_000)
+
         await refreshCompleteState()
 
-        // Debug: log wake complete with new display state
+        // Rebuild AX observers — existing observers may have stale connections
+        // after sleep, causing role queries to return AXApplication instead of AXWindow
+        await rebuildAXObservers()
+
         JSONLogger.shared.log("dbg.wake.complete", data: [
             "displayCount": state.displays.count,
             "displayUUIDs": state.displays.map { $0.uuid }
+        ])
+    }
+
+    /// Stop all AX observers and re-create them with fresh connections.
+    /// Called after wake to ensure role/attribute queries return correct data.
+    private func rebuildAXObservers() async {
+        let oldCount = applicationObservers.count
+
+        // Stop all existing observers on the main thread (required for RunLoop cleanup)
+        for (_, observer) in applicationObservers {
+            await MainActor.run {
+                observer.stopObserving()
+            }
+        }
+        applicationObservers.removeAll()
+
+        // Re-create observers for all running applications
+        observeExistingApplications()
+
+        JSONLogger.shared.log("ax.observer.rebuild", data: [
+            "old": oldCount,
+            "new": applicationObservers.count
         ])
     }
 
