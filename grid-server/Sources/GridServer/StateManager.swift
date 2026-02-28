@@ -1533,6 +1533,46 @@ var windows: [String: WindowState] = [:]
         }
     }
 
+    /// Invoke CLI to refresh layouts after a space change.
+    /// Fire-and-forget: spawns process asynchronously so the server isn't blocked.
+    private func invokeCLIForLayoutRefresh() {
+        let path = cliPath
+        let seq = cliInvokeSequence
+        cliInvokeSequence += 1
+
+        JSONLogger.shared.log("cli.invoke.spawn", data: [
+            "cmd": "layout refresh",
+            "seq": seq
+        ])
+
+        Task.detached {
+            let process = Process()
+            if path.hasPrefix("/") {
+                process.executableURL = URL(fileURLWithPath: path)
+                process.arguments = ["layout", "refresh"]
+            } else {
+                process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+                process.arguments = [path, "layout", "refresh"]
+            }
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+
+            do {
+                try process.run()
+                process.waitUntilExit()
+
+                let status = process.terminationStatus
+                if status == 0 {
+                    JSONLogger.shared.log("cli.invoke.ok", data: ["cmd": "layout refresh", "seq": seq])
+                } else {
+                    JSONLogger.shared.log("cli.invoke.err", data: ["cmd": "layout refresh", "seq": seq, "status": status])
+                }
+            } catch {
+                JSONLogger.shared.log("cli.invoke.err", data: ["cmd": "layout refresh", "seq": seq, "error": "\(error)"])
+            }
+        }
+    }
+
     /// Invoke CLI to sync borders for external focus changes
     /// Fire-and-forget: spawns process asynchronously, logs result, no retries
     private func invokeCLIForBorderSync(windowID: UInt32) {
@@ -1745,9 +1785,10 @@ var windows: [String: WindowState] = [:]
             restoreFocusForSpace(spaceID)
         }
 
-        // Note: Border system handles space changes via cell assignments from CLI
-
         state.metadata.update()
+
+        // Reapply layouts after state is fully updated so windows snap into position
+        invokeCLIForLayoutRefresh()
     }
 
     /// Update activeDisplayUUID and activeSpaceID based on which display has the focused/active space
