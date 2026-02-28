@@ -380,16 +380,23 @@ func SyncBorderFocus(ctx context.Context, c *client.Client, displayUUID string, 
 	}
 }
 
-// buildDisplaySpaceMap converts snapshot AllDisplays into a displayUUID -> spaceID map.
-func buildDisplaySpaceMap(allDisplays []server.DisplayInfo) map[string]string {
-	m := make(map[string]string, len(allDisplays))
+// buildDisplaySpaceMap converts snapshot AllDisplays into a displayUUID -> ordered space ID list map.
+// Uses the full Spaces list when available (populated from dump's spaces array).
+// Falls back to a single-element slice containing CurrentSpaceID when Spaces is absent.
+func buildDisplaySpaceMap(allDisplays []server.DisplayInfo) map[string][]string {
+	m := make(map[string][]string, len(allDisplays))
 	for _, d := range allDisplays {
 		if d.UUID == "" {
 			continue
 		}
-		spaceID := convertSpaceID(d.CurrentSpaceID)
-		if spaceID != "" {
-			m[d.UUID] = spaceID
+		if len(d.Spaces) > 0 {
+			m[d.UUID] = d.Spaces
+		} else {
+			// Fall back to current space only when the full list is unavailable
+			spaceID := convertSpaceID(d.CurrentSpaceID)
+			if spaceID != "" {
+				m[d.UUID] = []string{spaceID}
+			}
 		}
 	}
 	return m
