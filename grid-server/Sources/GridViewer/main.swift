@@ -142,24 +142,12 @@ func videoNaturalSize(asset: AVAsset) -> CGSize {
 
 // MARK: - Video Content View
 
-class VideoContentView: NSView {
-    let playerLayer: AVPlayerLayer
-
-    init(player: AVPlayer, frame: NSRect) {
-        playerLayer = AVPlayerLayer(player: player)
-        playerLayer.videoGravity = .resizeAspect
-        playerLayer.backgroundColor = CGColor.black
-        super.init(frame: frame)
-        wantsLayer = true
-        layer!.addSublayer(playerLayer)
-    }
-
-    required init?(coder: NSCoder) { fatalError("not used") }
-
-    override func layout() {
-        super.layout()
-        playerLayer.frame = bounds
-    }
+func makePlayerView(player: AVPlayer, frame: NSRect) -> AVPlayerView {
+    let pv = AVPlayerView(frame: frame)
+    pv.player = player
+    pv.controlsStyle = .floating
+    pv.autoresizingMask = [.width, .height]
+    return pv
 }
 
 // MARK: - GIF Content View
@@ -428,9 +416,7 @@ class ViewerWindow: NSWindow {
             setupWindowStyle()
             let avPlayer = AVPlayer(url: url)
             self.player = avPlayer
-            let videoView = VideoContentView(player: avPlayer, frame: self.contentView!.bounds)
-            videoView.autoresizingMask = [.width, .height]
-            self.contentView!.addSubview(videoView)
+            self.contentView!.addSubview(makePlayerView(player: avPlayer, frame: self.contentView!.bounds))
             NotificationCenter.default.addObserver(
                 forName: .AVPlayerItemDidPlayToEndTime,
                 object: avPlayer.currentItem,
@@ -523,9 +509,7 @@ class ViewerWindow: NSWindow {
             setFrame(newFrame, display: true)
             let avPlayer = AVPlayer(url: url)
             self.player = avPlayer
-            let videoView = VideoContentView(player: avPlayer, frame: contentView!.bounds)
-            videoView.autoresizingMask = [.width, .height]
-            contentView!.addSubview(videoView)
+            contentView!.addSubview(makePlayerView(player: avPlayer, frame: contentView!.bounds))
             NotificationCenter.default.addObserver(
                 forName: .AVPlayerItemDidPlayToEndTime,
                 object: avPlayer.currentItem,
@@ -576,6 +560,7 @@ class ViewerWindow: NSWindow {
         self.hasShadow = true
         self.titleVisibility = .hidden
         self.titlebarAppearsTransparent = true
+        self.isMovableByWindowBackground = true
     }
 
     override func keyDown(with event: NSEvent) {
