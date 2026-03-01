@@ -7,12 +7,18 @@ import (
 )
 
 // FormatWindowLine formats a window entry for the edit buffer.
-// Format: "67842  Firefox — GitHub - PR #45"
-func FormatWindowLine(wid uint32, appName, title string) string {
+// Format: "67842  Firefox — GitHub - PR #45" or "67842  Firefox — GitHub - PR #45 (2 tabs)"
+func FormatWindowLine(wid uint32, appName, title, subtitle string) string {
+	var base string
 	if title != "" {
-		return fmt.Sprintf("%d  %s — %s", wid, appName, title)
+		base = fmt.Sprintf("%d  %s — %s", wid, appName, title)
+	} else {
+		base = fmt.Sprintf("%d  %s", wid, appName)
 	}
-	return fmt.Sprintf("%d  %s", wid, appName)
+	if subtitle != "" {
+		return base + " (" + subtitle + ")"
+	}
+	return base
 }
 
 // ParseWindowLine extracts the window ID from the start of a line.

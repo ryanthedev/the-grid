@@ -5,13 +5,30 @@ import (
 )
 
 func TestFormatAndParseWindowLine(t *testing.T) {
-	line := FormatWindowLine(67842, "Firefox", "GitHub - PR #45")
+	// Case 1: no subtitle (empty string)
+	line := FormatWindowLine(67842, "Firefox", "GitHub - PR #45", "")
 	wid, err := ParseWindowLine(line)
 	if err != nil {
 		t.Fatalf("ParseWindowLine failed: %v", err)
 	}
 	if wid != 67842 {
 		t.Errorf("expected 67842, got %d", wid)
+	}
+	if line != "67842  Firefox — GitHub - PR #45" {
+		t.Errorf("unexpected line without subtitle: %q", line)
+	}
+
+	// Case 2: non-empty subtitle
+	line2 := FormatWindowLine(67842, "Firefox", "GitHub - PR #45", "2 tabs")
+	wid2, err := ParseWindowLine(line2)
+	if err != nil {
+		t.Fatalf("ParseWindowLine with subtitle failed: %v", err)
+	}
+	if wid2 != 67842 {
+		t.Errorf("expected 67842, got %d", wid2)
+	}
+	if line2 != "67842  Firefox — GitHub - PR #45 (2 tabs)" {
+		t.Errorf("unexpected line with subtitle: %q", line2)
 	}
 }
 

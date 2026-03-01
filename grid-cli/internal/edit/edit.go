@@ -16,9 +16,10 @@ type CellInfo struct {
 
 // WindowEntry describes a window for display in the edit buffer.
 type WindowEntry struct {
-	WID     uint32
-	AppName string
-	Title   string
+	WID      uint32
+	AppName  string
+	Title    string
+	Subtitle string
 }
 
 // EditResult describes the changes detected after editing.
@@ -40,7 +41,7 @@ func BuildBuffer(cell CellInfo) string {
 	b.WriteString("#\n")
 
 	for _, w := range cell.Windows {
-		b.WriteString(FormatWindowLine(w.WID, w.AppName, w.Title))
+		b.WriteString(FormatWindowLine(w.WID, w.AppName, w.Title, w.Subtitle))
 		b.WriteString("\n")
 	}
 
@@ -60,7 +61,7 @@ func BuildBufferAll(cells []CellInfo) string {
 		b.WriteString(FormatCellHeader(cell.CellID))
 		b.WriteString("\n")
 		for _, w := range cell.Windows {
-			b.WriteString(FormatWindowLine(w.WID, w.AppName, w.Title))
+			b.WriteString(FormatWindowLine(w.WID, w.AppName, w.Title, w.Subtitle))
 			b.WriteString("\n")
 		}
 	}
