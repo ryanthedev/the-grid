@@ -40,6 +40,7 @@ import (
 	"github.com/ryanthedev/grid-cli/internal/xdg"
 	"github.com/ryanthedev/grid-cli/internal/process"
 	"github.com/ryanthedev/grid-cli/internal/enrichers"
+	gridEdit "github.com/ryanthedev/grid-cli/internal/edit"
 	gridRecord "github.com/ryanthedev/grid-cli/internal/record"
 	"github.com/ryanthedev/grid-cli/internal/tmux"
 	"gopkg.in/yaml.v3"
@@ -1528,6 +1529,270 @@ now reflects those proportions.`,
 		}
 		if len(override.CellModes) > 0 {
 			fmt.Printf("  cellModes: %v\n", override.CellModes)
+		}
+
+		return nil
+	},
+}
+
+// layoutEditCmd opens $EDITOR to reorder/reorganize windows in cells
+var layoutEditCmd = &cobra.Command{
+	Use:   "edit",
+	Short: "Edit window order in cells using $EDITOR",
+	Long: `Opens your editor with the current window list. Reorder lines to
+reorder windows, delete lines to close windows. In --all mode, move
+lines between cell sections to move windows between cells.
+
+Save and quit to apply changes. Quit without saving to abort.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx := context.Background()
+		allCells, _ := cmd.Flags().GetBool("all")
+
+		// Phase 1: Snapshot (with mutex)
+		stateDir := filepath.Join(xdg.StateHome(), "thegrid")
+		editMutex := mutex.New(stateDir)
+		if err := editMutex.Lock(mutex.DefaultTimeout); err != nil {
+			return fmt.Errorf("failed to acquire lock: %w", err)
+		}
+
+		cfg, err := gridConfig.LoadConfig("")
+		if err != nil {
+			editMutex.Unlock()
+			return fmt.Errorf("failed to load config: %w", err)
+		}
+
+		runtimeState, err := gridState.LoadState()
+		if err != nil {
+			editMutex.Unlock()
+			return fmt.Errorf("failed to load state: %w", err)
+		}
+
+		c := client.NewClient(socketPath, timeout)
+		defer c.Close()
+
+		snap, err := gridServer.Fetch(ctx, c)
+		if err != nil {
+			editMutex.Unlock()
+			return fmt.Errorf("failed to fetch server state: %w", err)
+		}
+
+		if err := gridReconcile.Sync(ctx, c, snap, runtimeState, cfg); err != nil {
+			editMutex.Unlock()
+			return fmt.Errorf("failed to reconcile state: %w", err)
+		}
+
+		// Initialize enrichers for window title enrichment
+		registry := enrichers.NewRegistry()
+		registry.RefreshCaches()
+		process.RefreshProcessTree()
+		defer registry.Cleanup()
+
+		spaceState := runtimeState.GetSpaceReadOnly(snap.SpaceID)
+		if spaceState == nil || spaceState.CurrentLayoutID == "" {
+			editMutex.Unlock()
+			return fmt.Errorf("no layout applied — run 'thegrid layout apply' first")
+		}
+
+		// Build cell info for the edit buffer
+		var cells []gridEdit.CellInfo
+
+		if allCells {
+			// Get layout for cell bounds sorting
+			layoutDef, err := cfg.GetLayout(spaceState.CurrentLayoutID)
+			if err != nil {
+				editMutex.Unlock()
+				return fmt.Errorf("layout not found: %w", err)
+			}
+			calculated := gridLayout.CalculateLayout(layoutDef, snap.DisplayBounds, 0)
+			sortedCellIDs := gridLayout.SortCellsByPosition(calculated.CellBounds)
+
+			for _, cellID := range sortedCellIDs {
+				cellState := spaceState.Cells[cellID]
+				cell := gridEdit.CellInfo{CellID: cellID}
+				if cellState != nil {
+					for _, wid := range cellState.Windows {
+						entry := gridEdit.WindowEntry{WID: wid, AppName: "unknown"}
+						if w := snap.GetWindowByID(wid); w != nil {
+							entry.AppName = w.AppName
+							entry.Title = w.Title
+							if enrichResult := registry.Enrich(w.BundleID, w.PID, w.Title); enrichResult != nil {
+								if enrichResult.Title != "" {
+									entry.Title = enrichResult.Title
+								}
+								if enrichResult.Subtitle != "" {
+									entry.Subtitle = enrichResult.Subtitle
+								}
+							}
+						}
+						cell.Windows = append(cell.Windows, entry)
+					}
+				}
+				cells = append(cells, cell)
+			}
+		} else {
+			focusedCell := spaceState.FocusedCell
+			if focusedCell == "" {
+				editMutex.Unlock()
+				return fmt.Errorf("no focused cell")
+			}
+			cellState := spaceState.Cells[focusedCell]
+			cell := gridEdit.CellInfo{CellID: focusedCell}
+			if cellState != nil {
+				for _, wid := range cellState.Windows {
+					entry := gridEdit.WindowEntry{WID: wid, AppName: "unknown"}
+					if w := snap.GetWindowByID(wid); w != nil {
+						entry.AppName = w.AppName
+						entry.Title = w.Title
+						if enrichResult := registry.Enrich(w.BundleID, w.PID, w.Title); enrichResult != nil {
+							if enrichResult.Title != "" {
+								entry.Title = enrichResult.Title
+							}
+							if enrichResult.Subtitle != "" {
+								entry.Subtitle = enrichResult.Subtitle
+							}
+						}
+					}
+					cell.Windows = append(cell.Windows, entry)
+				}
+			}
+			cells = append(cells, cell)
+		}
+
+		// Build buffer and write temp file
+		var bufferContent string
+		if allCells {
+			bufferContent = gridEdit.BuildBufferAll(cells)
+		} else {
+			bufferContent = gridEdit.BuildBuffer(cells[0])
+		}
+
+		original := gridEdit.OriginalAssignments(cells)
+		originalHash := gridEdit.HashContent([]byte(bufferContent))
+
+		tmpFile, err := gridEdit.WriteTempFile(bufferContent)
+		if err != nil {
+			editMutex.Unlock()
+			return fmt.Errorf("failed to create temp file: %w", err)
+		}
+		defer os.Remove(tmpFile)
+
+		// Release mutex before opening editor
+		editMutex.Unlock()
+
+		// Phase 2: Editor (no mutex)
+		editorErr := gridEdit.OpenEditor(tmpFile)
+
+		// Read back the edited file
+		editedBytes, err := os.ReadFile(tmpFile)
+		if err != nil {
+			return fmt.Errorf("failed to read edited file: %w", err)
+		}
+
+		// Check for no-op: editor error or unchanged content
+		editedHash := gridEdit.HashContent(editedBytes)
+		if editorErr != nil || originalHash == editedHash {
+			if editorErr != nil {
+				fmt.Println("Editor exited without saving — no changes applied")
+			} else {
+				fmt.Println("No changes detected")
+			}
+			return nil
+		}
+
+		// Phase 3: Apply (reacquire mutex)
+		if err := editMutex.Lock(mutex.DefaultTimeout); err != nil {
+			return fmt.Errorf("failed to reacquire lock: %w", err)
+		}
+		defer editMutex.Unlock()
+
+		// Re-fetch fresh state
+		snap, err = gridServer.Fetch(ctx, c)
+		if err != nil {
+			return fmt.Errorf("failed to re-fetch server state: %w", err)
+		}
+
+		runtimeState, err = gridState.LoadState()
+		if err != nil {
+			return fmt.Errorf("failed to reload state: %w", err)
+		}
+
+		if err := gridReconcile.Sync(ctx, c, snap, runtimeState, cfg); err != nil {
+			return fmt.Errorf("failed to reconcile state: %w", err)
+		}
+
+		// Parse the edited buffer
+		var edited map[string][]uint32
+		if allCells {
+			edited, err = gridEdit.ParseBufferAll(string(editedBytes))
+		} else {
+			edited, err = gridEdit.ParseBufferSingle(string(editedBytes), cells[0].CellID)
+		}
+		if err != nil {
+			return fmt.Errorf("failed to parse edited buffer: %w", err)
+		}
+
+		// Diff changes
+		result := gridEdit.DiffChanges(original, edited)
+		if !result.Changed {
+			fmt.Println("No changes detected")
+			return nil
+		}
+
+		// Close deleted windows
+		for _, wid := range result.CloseWindows {
+			if closeErr := c.CloseWindow(ctx, wid); closeErr != nil {
+				warnColor.Printf("⚠ Failed to close window %d: %v\n", wid, closeErr)
+			}
+		}
+
+		// Filter closed windows out of assignments
+		closedSet := make(map[uint32]bool)
+		for _, wid := range result.CloseWindows {
+			closedSet[wid] = true
+		}
+		filteredAssignments := make(map[string][]uint32)
+		for cellID, wids := range result.CellWindows {
+			var filtered []uint32
+			for _, wid := range wids {
+				if !closedSet[wid] {
+					filtered = append(filtered, wid)
+				}
+			}
+			filteredAssignments[cellID] = filtered
+		}
+
+		// Apply new assignments
+		runtimeState.SetWindowAssignments(snap.SpaceID, filteredAssignments)
+		runtimeState.MarkUpdated()
+		if err := runtimeState.Save(); err != nil {
+			return fmt.Errorf("failed to save state: %w", err)
+		}
+
+		// Reapply layout
+		opts := gridLayout.DefaultApplyOptions()
+		opts.Strategy = gridTypes.AssignPreserve
+		opts.BaseSpacing = cfg.GetBaseSpacing()
+		if settingsPadding, err := cfg.GetSettingsPadding(); err == nil {
+			opts.SettingsPadding = settingsPadding
+		}
+		if settingsWindowSpacing, err := cfg.GetSettingsWindowSpacing(); err == nil {
+			opts.SettingsWindowSpacing = settingsWindowSpacing
+		}
+
+		if err := gridLayout.ReapplyLayout(ctx, c, snap, cfg, runtimeState, opts); err != nil {
+			return fmt.Errorf("failed to reapply layout: %w", err)
+		}
+
+		// Sync borders
+		gridReconcile.SyncBorders(ctx, c, snap, runtimeState, cfg)
+		gridReconcile.SyncBorderFocus(ctx, c, snap.GetCurrentDisplayUUID(), snap.FocusedWindowID, cfg)
+
+		// Summary
+		closedCount := len(result.CloseWindows)
+		if closedCount > 0 {
+			successColor.Printf("✓ Applied changes (closed %d window(s))\n", closedCount)
+		} else {
+			successColor.Println("✓ Applied changes")
 		}
 
 		return nil
@@ -4702,11 +4967,13 @@ func init() {
 	gridLayoutCmd.AddCommand(layoutCurrentCmd)
 	gridLayoutCmd.AddCommand(layoutRefreshCmd)
 	gridLayoutCmd.AddCommand(layoutSaveCmd)
+	gridLayoutCmd.AddCommand(layoutEditCmd)
 
 	// Add layout command flags
 	layoutApplyCmd.Flags().String("space", "", "Space ID to apply layout to")
 	layoutCurrentCmd.Flags().String("space", "", "Space ID to check")
 	layoutRefreshCmd.Flags().String("display", "", "Only refresh specific display (UUID)")
+	layoutEditCmd.Flags().Bool("all", false, "Edit all cells (not just focused cell)")
 
 	// Add the-grid config commands
 	rootCmd.AddCommand(gridConfigCmd)
@@ -4901,6 +5168,7 @@ func shouldSkipMutex(cmd *cobra.Command) bool {
 		"thegrid terminal":    true,
 		"thegrid pick":        true,
 		"thegrid pick window": true,
+		"thegrid layout edit": true, // manages its own mutex (release during editor)
 	}
 
 	if skipExact[cmdPath] {

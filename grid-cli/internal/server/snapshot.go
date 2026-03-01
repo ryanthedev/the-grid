@@ -247,7 +247,8 @@ func parseSnapshotForSpace(raw map[string]interface{}, targetSpaceID string) (*S
 	}
 
 	// 4. Parse windows for the TARGET space (not active space)
-	snap.Windows = parseWindows(raw, targetSpaceID)
+	appBundleIDs := parseAppBundleIDs(raw)
+	snap.Windows = parseWindows(raw, targetSpaceID, appBundleIDs)
 
 	// 5. Build window ID lookup map
 	for _, w := range snap.Windows {
@@ -293,7 +294,8 @@ func parseSnapshot(raw map[string]interface{}) (*Snapshot, error) {
 	snap.DisplayBounds = bounds
 
 	// 4. Parse and filter windows for the active space
-	snap.Windows = parseWindows(raw, snap.SpaceID)
+	appBundleIDs := parseAppBundleIDs(raw)
+	snap.Windows = parseWindows(raw, snap.SpaceID, appBundleIDs)
 
 	// 5. Build window ID lookup map (only tileable windows)
 	for _, w := range snap.Windows {
@@ -454,7 +456,30 @@ func findDisplayBounds(raw map[string]interface{}, activeDisplayUUID string) (ty
 	return types.Rect{}, fmt.Errorf("active display %s not found", activeDisplayUUID)
 }
 
-func parseWindows(raw map[string]interface{}, spaceID string) []WindowInfo {
+func parseAppBundleIDs(raw map[string]interface{}) map[int]string {
+	result := make(map[int]string)
+
+	apps, ok := raw["applications"].(map[string]interface{})
+	if !ok {
+		return result
+	}
+
+	for _, v := range apps {
+		app, ok := v.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		bundleID := toString(app["bundleIdentifier"])
+		pid := int(toFloat64(app["pid"]))
+		if bundleID != "" && pid != 0 {
+			result[pid] = bundleID
+		}
+	}
+
+	return result
+}
+
+func parseWindows(raw map[string]interface{}, spaceID string, appBundleIDs map[int]string) []WindowInfo {
 	var windows []WindowInfo
 
 	rawWindows, ok := raw["windows"].(map[string]interface{})
@@ -462,7 +487,7 @@ func parseWindows(raw map[string]interface{}, spaceID string) []WindowInfo {
 		// Try as array
 		if rawArr, ok := raw["windows"].([]interface{}); ok {
 			for _, w := range rawArr {
-				if win := parseWindow(w, spaceID); win != nil {
+				if win := parseWindow(w, spaceID, appBundleIDs); win != nil {
 					windows = append(windows, *win)
 				}
 			}
@@ -471,7 +496,7 @@ func parseWindows(raw map[string]interface{}, spaceID string) []WindowInfo {
 	}
 
 	for _, w := range rawWindows {
-		if win := parseWindow(w, spaceID); win != nil {
+		if win := parseWindow(w, spaceID, appBundleIDs); win != nil {
 			windows = append(windows, *win)
 		}
 	}
@@ -479,7 +504,7 @@ func parseWindows(raw map[string]interface{}, spaceID string) []WindowInfo {
 	return windows
 }
 
-func parseWindow(w interface{}, spaceID string) *WindowInfo {
+func parseWindow(w interface{}, spaceID string, appBundleIDs map[int]string) *WindowInfo {
 	win, ok := w.(map[string]interface{})
 	if !ok {
 		return nil
@@ -526,6 +551,13 @@ func parseWindow(w interface{}, spaceID string) *WindowInfo {
 		IsModal:             toBool(win["isModal"]),
 		PID:                 int(toFloat64(win["pid"])),
 		DisplayUUID:         toString(win["displayUUID"]),
+	}
+
+	// Fallback: populate BundleID from applications map if per-window field was empty
+	if window.BundleID == "" && window.PID != 0 {
+		if bid, ok := appBundleIDs[window.PID]; ok {
+			window.BundleID = bid
+		}
 	}
 
 	// Parse frame
