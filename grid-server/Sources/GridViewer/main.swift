@@ -1,6 +1,7 @@
 import AppKit
 import AVFoundation
 import AVKit
+import ImageIO
 import UniformTypeIdentifiers
 
 // MARK: - Logging
@@ -116,11 +117,126 @@ class VideoContentView: NSView {
     }
 }
 
+// MARK: - GIF Content View
+
+private func gifFrameDelay(source: CGImageSource, index: Int) -> TimeInterval {
+    let properties = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [String: Any]
+    let gifProps = properties?[kCGImagePropertyGIFDictionary as String] as? [String: Any]
+    let delay = gifProps?[kCGImagePropertyGIFUnclampedDelayTime as String] as? Double
+        ?? gifProps?[kCGImagePropertyGIFDelayTime as String] as? Double
+        ?? 0.1
+    // GIF spec: delays < 0.02s should be treated as 0.1s
+    return delay < 0.02 ? 0.1 : delay
+}
+
+class GIFContentView: NSView {
+    private struct GIFFrame {
+        let image: NSImage
+        let delay: TimeInterval
+    }
+
+    private let imageView: NSImageView
+    private var frames: [GIFFrame] = []
+    private var currentFrame: Int = 0
+    private(set) var isPaused: Bool = false
+    private var timer: DispatchSourceTimer?
+
+    init(url: URL, frame: NSRect) {
+        imageView = NSImageView(frame: NSRect(origin: .zero, size: frame.size))
+        imageView.imageScaling = .scaleProportionallyUpOrDown
+        imageView.autoresizingMask = [.width, .height]
+
+        super.init(frame: frame)
+
+        addSubview(imageView)
+
+        // Extract all frames from the GIF
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else {
+            vlog("viewer.gif.error", msg: "failed to create image source", data: ["file": url.path])
+            return
+        }
+
+        let frameCount = CGImageSourceGetCount(source)
+        for i in 0..<frameCount {
+            guard let cgImage = CGImageSourceCreateImageAtIndex(source, i, nil) else { continue }
+            let size = CGSize(width: cgImage.width, height: cgImage.height)
+            let nsImage = NSImage(cgImage: cgImage, size: size)
+            let delay = gifFrameDelay(source: source, index: i)
+            frames.append(GIFFrame(image: nsImage, delay: delay))
+        }
+
+        guard !frames.isEmpty else {
+            vlog("viewer.gif.error", msg: "no frames extracted", data: ["file": url.path])
+            return
+        }
+
+        // Show first frame immediately before timer fires
+        imageView.image = frames[0].image
+
+        startTimer()
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    // Create and arm a new timer starting at the current frame's delay
+    private func startTimer() {
+        let t = DispatchSource.makeTimerSource(queue: .main)
+        timer = t
+        t.setEventHandler { [weak self] in
+            guard let self = self else { return }
+            // Advance to next frame (wrapping)
+            self.currentFrame = (self.currentFrame + 1) % self.frames.count
+            self.imageView.image = self.frames[self.currentFrame].image
+            // Reschedule with the NEW frame's delay
+            t.schedule(deadline: .now() + self.frames[self.currentFrame].delay)
+        }
+        // First fire: use the current frame's delay so it shows for its full duration
+        t.schedule(deadline: .now() + frames[currentFrame].delay)
+        t.resume()
+    }
+
+    private func cancelTimer() {
+        timer?.cancel()
+        timer = nil
+    }
+
+    func togglePause() {
+        if isPaused {
+            isPaused = false
+            startTimer()
+        } else {
+            isPaused = true
+            cancelTimer()
+        }
+    }
+
+    func stepForward() {
+        if !isPaused {
+            isPaused = true
+            cancelTimer()
+        }
+        guard !frames.isEmpty else { return }
+        currentFrame = (currentFrame + 1) % frames.count
+        imageView.image = frames[currentFrame].image
+    }
+
+    func stepBackward() {
+        if !isPaused {
+            isPaused = true
+            cancelTimer()
+        }
+        guard !frames.isEmpty else { return }
+        currentFrame = (currentFrame - 1 + frames.count) % frames.count
+        imageView.image = frames[currentFrame].image
+    }
+}
+
 // MARK: - Viewer Window
 
 class ViewerWindow: NSWindow {
     let contentType: ContentType
     var player: AVPlayer?
+    var gifView: GIFContentView?
 
     init(url: URL, contentType: ContentType) {
         self.contentType = contentType
@@ -182,7 +298,30 @@ class ViewerWindow: NSWindow {
             ])
 
         case .animatedGIF:
-            fatalError("animatedGIF not supported")
+            guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+                  let firstCGImage = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+                fatalError("Failed to load GIF: \(url.path)")
+            }
+            let mediaSize = CGSize(width: firstCGImage.width, height: firstCGImage.height)
+            frame = fitWindowToContent(mediaSize: mediaSize)
+            super.init(
+                contentRect: frame,
+                styleMask: [.borderless, .fullSizeContentView],
+                backing: .buffered,
+                defer: false
+            )
+            setupWindowStyle()
+            let gif = GIFContentView(url: url, frame: self.contentView!.bounds)
+            gif.autoresizingMask = [.width, .height]
+            self.contentView!.addSubview(gif)
+            self.gifView = gif
+            let frameCount = CGImageSourceGetCount(source)
+            vlog("viewer.load", data: [
+                "file": url.path,
+                "type": "gif",
+                "frames": frameCount,
+                "size": "\(Int(mediaSize.width))x\(Int(mediaSize.height))"
+            ])
         }
     }
 
@@ -208,19 +347,25 @@ class ViewerWindow: NSWindow {
             NSApp.terminate(nil)
         // Space: toggle play/pause
         case 49:
-            if let p = player {
+            if let gif = gifView {
+                gif.togglePause()
+            } else if let p = player {
                 if p.rate > 0 { p.pause() } else { p.play() }
             }
-        // Left arrow: seek backward 5s
+        // Left arrow: seek backward 5s (video) or step back one frame (GIF)
         case 123:
-            if let p = player {
+            if let gif = gifView {
+                gif.stepBackward()
+            } else if let p = player {
                 let current = p.currentTime()
                 let target = CMTimeSubtract(current, CMTimeMakeWithSeconds(5, preferredTimescale: 600))
                 p.seek(to: CMTimeMaximum(target, .zero))
             }
-        // Right arrow: seek forward 5s
+        // Right arrow: seek forward 5s (video) or step forward one frame (GIF)
         case 124:
-            if let p = player {
+            if let gif = gifView {
+                gif.stepForward()
+            } else if let p = player {
                 let current = p.currentTime()
                 let target = CMTimeAdd(current, CMTimeMakeWithSeconds(5, preferredTimescale: 600))
                 p.seek(to: target)
@@ -247,12 +392,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard let contentType = detectContentType(url: fileURL) else {
             fputs("error: unsupported file type: \(fileURL.pathExtension)\n", stderr)
-            NSApp.terminate(nil)
-            return
-        }
-
-        guard contentType != .animatedGIF else {
-            fputs("error: animated GIF not yet supported\n", stderr)
             NSApp.terminate(nil)
             return
         }
