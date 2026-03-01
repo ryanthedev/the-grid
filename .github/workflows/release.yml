@@ -193,6 +193,8 @@ jobs:
           echo "Verifying universal binaries:"
           file dist/thegrid-${NEW_VERSION}/bin/grid-server
           file dist/thegrid-${NEW_VERSION}/bin/thegrid
+          file dist/thegrid-${NEW_VERSION}/bin/grid-picker
+          file dist/thegrid-${NEW_VERSION}/bin/grid-viewer
 
       - name: Calculate SHA256
         id: sha256

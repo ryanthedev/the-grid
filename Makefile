@@ -1,4 +1,4 @@
-.PHONY: help build server cli picker terminal viewer test clean server-test cli-test server-clean cli-clean run-server install dist dev reset-accessibility setup-signing install-scripts server-universal cli-universal picker-universal terminal-universal dist-universal
+.PHONY: help build server cli picker terminal viewer test clean server-test cli-test server-clean cli-clean run-server install dist dev reset-accessibility setup-signing install-scripts server-universal cli-universal picker-universal terminal-universal viewer-universal dist-universal
 
 # Version from VERSION file
 VERSION := $(shell cat VERSION)
@@ -139,6 +139,17 @@ picker-universal:
 	@echo "Created universal binary: grid-server/.build/apple/Products/Release/grid-picker"
 	@file grid-server/.build/apple/Products/Release/grid-picker
 
+viewer-universal:
+	@echo "Building grid-viewer (universal binary)..."
+	@cd grid-server && swift build -c release --product grid-viewer --arch arm64 --arch x86_64
+	@echo "Verifying universal binary..."
+	@if ! file grid-server/.build/apple/Products/Release/grid-viewer | grep -q "universal binary"; then \
+		echo "Error: Failed to create universal binary for grid-viewer"; \
+		exit 1; \
+	fi
+	@echo "Created universal binary: grid-server/.build/apple/Products/Release/grid-viewer"
+	@file grid-server/.build/apple/Products/Release/grid-viewer
+
 # Create GridServer.app bundle
 app-bundle: server-universal
 	@echo "Creating GridServer.app bundle..."
@@ -158,13 +169,14 @@ app-bundle: server-universal
 	@echo "✓ GridServer.app created"
 
 # Distribution tarball with universal binaries (for Homebrew)
-dist-universal: app-bundle cli-universal picker-universal
+dist-universal: app-bundle cli-universal picker-universal viewer-universal
 	@echo "Creating universal distribution tarball v$(VERSION)..."
 	@rm -rf dist/thegrid-$(VERSION)
 	@mkdir -p dist/thegrid-$(VERSION)/bin
 	@cp -R dist/GridServer.app dist/thegrid-$(VERSION)/
 	@cp grid-cli/bin/thegrid dist/thegrid-$(VERSION)/bin/
 	@cp grid-server/.build/apple/Products/Release/grid-picker dist/thegrid-$(VERSION)/bin/
+	@cp grid-server/.build/apple/Products/Release/grid-viewer dist/thegrid-$(VERSION)/bin/
 	@cp VERSION dist/thegrid-$(VERSION)/
 	@cp LICENSE dist/thegrid-$(VERSION)/ 2>/dev/null || echo "No LICENSE file"
 	@cp README.md dist/thegrid-$(VERSION)/ 2>/dev/null || true
@@ -180,6 +192,7 @@ dist-universal: app-bundle cli-universal picker-universal
 	@file dist/thegrid-$(VERSION)/GridServer.app/Contents/MacOS/grid-server
 	@file dist/thegrid-$(VERSION)/bin/thegrid
 	@file dist/thegrid-$(VERSION)/bin/grid-picker
+	@file dist/thegrid-$(VERSION)/bin/grid-viewer
 # Show help
 help:
 	@echo "TheGrid Monorepo Build System"

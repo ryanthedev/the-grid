@@ -4627,7 +4627,8 @@ var viewCmd = &cobra.Command{
 	Long:  `Open an image, GIF, or video in the floating GridViewer window.`,
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		filePath, err := filepath.Abs(args[0])
+		// Expand ~ and resolve to absolute path
+		filePath, err := filepath.Abs(gridConfig.ExpandTilde(args[0]))
 		if err != nil {
 			return fmt.Errorf("invalid path: %w", err)
 		}
