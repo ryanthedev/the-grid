@@ -4,6 +4,10 @@ import mss
 import CoreGraphics
 import AppKit
 
+// Private API for getting window ID from AXUIElement
+@_silgen_name("_AXUIElementGetWindow")
+private func _AXUIElementGetWindow(_ element: AXUIElement, _ windowID: UnsafeMutablePointer<UInt32>) -> AXError
+
 /// Handles incoming requests and routes them to appropriate handlers
 class MessageHandler {
     typealias RequestHandler = (Request, @escaping (Response) -> Void) -> Void
@@ -816,6 +820,64 @@ class MessageHandler {
                 } else {
                     completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to get window minimized status")))
                 }
+            }
+        }
+
+        // Close window via AX close button
+        register(method: "window.close") { request, completion in
+            guard let params = request.params else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
+                return
+            }
+
+            guard let windowId = params["windowId"]?.value as? String,
+                  let windowID = UInt32(windowId) else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Missing windowId")))
+                return
+            }
+
+            Task {
+                guard let context = await ManipulationContext.from(windowID: windowID) else {
+                    completion(Response(id: request.id, error: ErrorInfo(code: -32001, message: "Window not found: \(windowID)")))
+                    return
+                }
+
+                let requestID = UUID().uuidString
+                await EventRouter.shared.route(
+                    .commandCloseWindow(windowID: windowID, requestID: requestID),
+                    from: .manual(reason: "cli")
+                )
+
+                // Get AXUIElement for the window and press close button
+                let appElement = AXUIElementCreateApplication(context.pid)
+                var windowsRef: CFTypeRef?
+                guard AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &windowsRef) == .success,
+                      let axWindows = windowsRef as? [AXUIElement] else {
+                    completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to get windows")))
+                    return
+                }
+
+                // Find the matching window by CGWindowID
+                for axWindow in axWindows {
+                    var cgID: UInt32 = 0
+                    if _AXUIElementGetWindow(axWindow, &cgID) == .success, cgID == windowID {
+                        var closeButtonRef: CFTypeRef?
+                        if AXUIElementCopyAttributeValue(axWindow, kAXCloseButtonAttribute as CFString, &closeButtonRef) == .success,
+                           let closeButton = closeButtonRef {
+                            let result = AXUIElementPerformAction(closeButton as! AXUIElement, kAXPressAction as CFString)
+                            if result == .success {
+                                completion(Response(id: request.id, result: AnyCodable(["success": true, "windowId": windowId])))
+                            } else {
+                                completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to press close button")))
+                            }
+                        } else {
+                            completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Window has no close button")))
+                        }
+                        return
+                    }
+                }
+
+                completion(Response(id: request.id, error: ErrorInfo(code: -32001, message: "AX window not found: \(windowID)")))
             }
         }
 

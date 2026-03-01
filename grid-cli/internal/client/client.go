@@ -143,6 +143,14 @@ func (c *Client) UpdateWindow(ctx context.Context, windowID int, updates map[str
 	return resp.Result, nil
 }
 
+// CloseWindow closes a window via the server's AX close button
+func (c *Client) CloseWindow(ctx context.Context, windowID uint32) error {
+	_, err := c.CallMethod(ctx, "window.close", map[string]interface{}{
+		"windowId": fmt.Sprintf("%d", windowID),
+	})
+	return err
+}
+
 // CallMethod sends a generic RPC request with the given method and parameters
 func (c *Client) CallMethod(ctx context.Context, method string, params map[string]interface{}) (map[string]interface{}, error) {
 	resp, err := c.request(ctx, method, params)
