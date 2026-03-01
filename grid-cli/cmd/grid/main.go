@@ -4642,7 +4642,11 @@ var viewCmd = &cobra.Command{
 		}
 
 		// grid-viewer handles single-instance internally (PID + socket)
-		c := exec.Command(viewerPath, filePath)
+		viewerArgs := []string{filePath}
+		if newWindow, _ := cmd.Flags().GetBool("new"); newWindow {
+			viewerArgs = []string{"--new", filePath}
+		}
+		c := exec.Command(viewerPath, viewerArgs...)
 		c.Start()
 		return nil
 	},
@@ -5010,6 +5014,7 @@ func init() {
 
 	// Add view command
 	rootCmd.AddCommand(viewCmd)
+	viewCmd.Flags().Bool("new", false, "Open in a new window instead of reusing existing")
 
 	// Add terminal command
 	rootCmd.AddCommand(terminalCmd)

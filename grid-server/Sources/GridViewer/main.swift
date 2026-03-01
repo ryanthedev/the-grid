@@ -618,9 +618,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var window: ViewerWindow?
     var viewerSocket: ViewerSocket?
     let fileURL: URL
+    let isPrimary: Bool
 
-    init(fileURL: URL) {
+    init(fileURL: URL, isPrimary: Bool) {
         self.fileURL = fileURL
+        self.isPrimary = isPrimary
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -636,22 +638,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         window = ViewerWindow(url: fileURL, contentType: contentType)
         window?.makeKeyAndOrderFront(nil)
 
-        // Start the viewer socket to accept file paths from future invocations
-        let sock = ViewerSocket(path: socketPath)
-        sock.onFileReceived = { [weak self] filePath in
-            guard let self = self, let win = self.window else { return }
-            let url = URL(fileURLWithPath: filePath)
-            guard FileManager.default.fileExists(atPath: filePath) else {
-                vlog("viewer.load.error", msg: "file not found", data: ["file": filePath])
-                return
+        // Only the primary instance listens for file paths from future invocations
+        if isPrimary {
+            let sock = ViewerSocket(path: socketPath)
+            sock.onFileReceived = { [weak self] filePath in
+                guard let self = self, let win = self.window else { return }
+                let url = URL(fileURLWithPath: filePath)
+                guard FileManager.default.fileExists(atPath: filePath) else {
+                    vlog("viewer.load.error", msg: "file not found", data: ["file": filePath])
+                    return
+                }
+                win.loadFile(url: url)
             }
-            win.loadFile(url: url)
-        }
-        do {
-            try sock.start()
-            viewerSocket = sock
-        } catch {
-            vlog("viewer.socket.error", msg: "failed to start socket", data: ["err": error.localizedDescription])
+            do {
+                try sock.start()
+                viewerSocket = sock
+            } catch {
+                vlog("viewer.socket.error", msg: "failed to start socket", data: ["err": error.localizedDescription])
+            }
         }
 
         vlog("viewer.ready")
@@ -659,18 +663,31 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         viewerSocket?.stop()
-        cleanupPidFile()
+        if isPrimary {
+            cleanupPidFile()
+        }
     }
 }
 
 // MARK: - Main
 
-guard CommandLine.arguments.count > 1 else {
-    fputs("Usage: grid-viewer <file>\n", stderr)
+// Parse arguments: [--new] <file>
+var newInstance = false
+var fileArg: String?
+
+for arg in CommandLine.arguments.dropFirst() {
+    if arg == "--new" {
+        newInstance = true
+    } else if fileArg == nil {
+        fileArg = arg
+    }
+}
+
+guard let filePath = fileArg else {
+    fputs("Usage: grid-viewer [--new] <file>\n", stderr)
     exit(1)
 }
 
-let filePath = CommandLine.arguments[1]
 let fileURL = URL(fileURLWithPath: filePath)
 
 guard FileManager.default.fileExists(atPath: filePath) else {
@@ -679,7 +696,7 @@ guard FileManager.default.fileExists(atPath: filePath) else {
 }
 
 // Check if an existing instance is already running via PID file
-let existingPid: pid_t? = {
+let existingPid: pid_t? = newInstance ? nil : {
     guard let pidStr = try? String(contentsOfFile: pidFilePath, encoding: .utf8),
           let pid = pid_t(pidStr.trimmingCharacters(in: .whitespacesAndNewlines)) else {
         return nil
@@ -698,12 +715,15 @@ if existingPid != nil {
     vlog("viewer.handoff.failed", msg: "could not send to existing instance, starting new")
 }
 
-writePidFile()
+// Only claim PID/socket ownership for the primary instance
+if !newInstance {
+    writePidFile()
+}
 
-vlog("viewer.init", data: ["file": filePath])
+vlog("viewer.init", data: ["file": filePath, "new": newInstance])
 
 let app = NSApplication.shared
-let delegate = AppDelegate(fileURL: fileURL)
+let delegate = AppDelegate(fileURL: fileURL, isPrimary: !newInstance)
 app.delegate = delegate
 
 // Ignore default signal disposition so DispatchSource handlers fire instead.
