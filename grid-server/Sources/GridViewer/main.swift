@@ -1,4 +1,6 @@
 import AppKit
+import AVFoundation
+import AVKit
 import UniformTypeIdentifiers
 
 // MARK: - Logging
@@ -83,27 +85,108 @@ func fitWindowToContent(mediaSize: CGSize) -> NSRect {
     return NSRect(origin: origin, size: winSize)
 }
 
+// MARK: - Video Helpers
+
+// Synchronous size lookup required before NSWindow super.init; async API not usable there.
+// swiftlint:disable:next deprecated_in_future
+func videoNaturalSize(asset: AVAsset) -> CGSize {
+    return asset.tracks(withMediaType: .video).first?.naturalSize
+        ?? CGSize(width: 1280, height: 720)
+}
+
+// MARK: - Video Content View
+
+class VideoContentView: NSView {
+    let playerLayer: AVPlayerLayer
+
+    init(player: AVPlayer, frame: NSRect) {
+        playerLayer = AVPlayerLayer(player: player)
+        playerLayer.videoGravity = .resizeAspect
+        playerLayer.backgroundColor = CGColor.black
+        super.init(frame: frame)
+        wantsLayer = true
+        layer!.addSublayer(playerLayer)
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    override func layout() {
+        super.layout()
+        playerLayer.frame = bounds
+    }
+}
+
 // MARK: - Viewer Window
 
 class ViewerWindow: NSWindow {
     let contentType: ContentType
+    var player: AVPlayer?
 
     init(url: URL, contentType: ContentType) {
         self.contentType = contentType
 
-        guard let image = NSImage(contentsOf: url) else {
-            fatalError("Failed to load image: \(url.path)")
+        let frame: NSRect
+        switch contentType {
+        case .staticImage:
+            guard let image = NSImage(contentsOf: url) else {
+                fatalError("Failed to load image: \(url.path)")
+            }
+            frame = fitWindowToContent(mediaSize: image.size)
+            super.init(
+                contentRect: frame,
+                styleMask: [.borderless, .fullSizeContentView],
+                backing: .buffered,
+                defer: false
+            )
+            setupWindowStyle()
+            let imageView = NSImageView(frame: self.contentView!.bounds)
+            imageView.image = image
+            imageView.imageScaling = .scaleProportionallyUpOrDown
+            imageView.autoresizingMask = [.width, .height]
+            self.contentView!.addSubview(imageView)
+            vlog("viewer.load", data: [
+                "file": url.path,
+                "type": "image",
+                "size": "\(Int(image.size.width))x\(Int(image.size.height))"
+            ])
+
+        case .video:
+            let asset = AVAsset(url: url)
+            let naturalSize = videoNaturalSize(asset: asset)
+            frame = fitWindowToContent(mediaSize: naturalSize)
+            super.init(
+                contentRect: frame,
+                styleMask: [.borderless, .fullSizeContentView],
+                backing: .buffered,
+                defer: false
+            )
+            setupWindowStyle()
+            let avPlayer = AVPlayer(url: url)
+            self.player = avPlayer
+            let videoView = VideoContentView(player: avPlayer, frame: self.contentView!.bounds)
+            videoView.autoresizingMask = [.width, .height]
+            self.contentView!.addSubview(videoView)
+            NotificationCenter.default.addObserver(
+                forName: .AVPlayerItemDidPlayToEndTime,
+                object: avPlayer.currentItem,
+                queue: .main
+            ) { [weak avPlayer] _ in
+                avPlayer?.seek(to: .zero)
+                avPlayer?.play()
+            }
+            avPlayer.play()
+            vlog("viewer.load", data: [
+                "file": url.path,
+                "type": "video",
+                "size": "\(Int(naturalSize.width))x\(Int(naturalSize.height))"
+            ])
+
+        case .animatedGIF:
+            fatalError("animatedGIF not supported")
         }
+    }
 
-        let frame = fitWindowToContent(mediaSize: image.size)
-
-        super.init(
-            contentRect: frame,
-            styleMask: [.borderless, .fullSizeContentView],
-            backing: .buffered,
-            defer: false
-        )
-
+    private func setupWindowStyle() {
         self.level = .floating
         self.collectionBehavior = [.canJoinAllSpaces, .transient]
         self.isOpaque = false
@@ -111,18 +194,6 @@ class ViewerWindow: NSWindow {
         self.hasShadow = true
         self.titleVisibility = .hidden
         self.titlebarAppearsTransparent = true
-
-        let imageView = NSImageView(frame: self.contentView!.bounds)
-        imageView.image = image
-        imageView.imageScaling = .scaleProportionallyUpOrDown
-        imageView.autoresizingMask = [.width, .height]
-        self.contentView!.addSubview(imageView)
-
-        vlog("viewer.load", data: [
-            "file": url.path,
-            "type": "image",
-            "size": "\(Int(image.size.width))x\(Int(image.size.height))"
-        ])
     }
 
     override func keyDown(with event: NSEvent) {
@@ -135,6 +206,25 @@ class ViewerWindow: NSWindow {
         case 12:
             close()
             NSApp.terminate(nil)
+        // Space: toggle play/pause
+        case 49:
+            if let p = player {
+                if p.rate > 0 { p.pause() } else { p.play() }
+            }
+        // Left arrow: seek backward 5s
+        case 123:
+            if let p = player {
+                let current = p.currentTime()
+                let target = CMTimeSubtract(current, CMTimeMakeWithSeconds(5, preferredTimescale: 600))
+                p.seek(to: CMTimeMaximum(target, .zero))
+            }
+        // Right arrow: seek forward 5s
+        case 124:
+            if let p = player {
+                let current = p.currentTime()
+                let target = CMTimeAdd(current, CMTimeMakeWithSeconds(5, preferredTimescale: 600))
+                p.seek(to: target)
+            }
         default:
             super.keyDown(with: event)
         }
@@ -161,9 +251,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        // Phase 1: only handle static images
-        guard contentType == .staticImage else {
-            fputs("error: only static images supported in this version\n", stderr)
+        guard contentType != .animatedGIF else {
+            fputs("error: animated GIF not yet supported\n", stderr)
             NSApp.terminate(nil)
             return
         }
