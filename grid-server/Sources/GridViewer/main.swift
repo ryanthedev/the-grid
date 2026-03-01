@@ -1,6 +1,7 @@
 import AppKit
 import AVFoundation
 import AVKit
+import Darwin
 import ImageIO
 import UniformTypeIdentifiers
 
@@ -53,6 +54,50 @@ func writePidFile() {
 
 func cleanupPidFile() {
     try? FileManager.default.removeItem(atPath: pidFilePath)
+}
+
+// MARK: - Socket Path
+
+let socketPath: String = {
+    let stateHome = ProcessInfo.processInfo.environment["XDG_STATE_HOME"]
+        ?? (NSHomeDirectory() + "/.local/state")
+    return stateHome + "/thegrid/grid-viewer.sock"
+}()
+
+// MARK: - Socket Address Helper (top-level for shared use)
+
+func makeSockAddr(_ path: String) -> sockaddr_un {
+    var addr = sockaddr_un()
+    addr.sun_family = sa_family_t(AF_UNIX)
+    // Copy path bytes into the fixed-size sun_path tuple
+    withUnsafeMutablePointer(to: &addr.sun_path) { ptr in
+        path.withCString { cstr in
+            UnsafeMutableRawPointer(ptr).copyMemory(from: cstr, byteCount: min(strlen(cstr) + 1, 104))
+        }
+    }
+    return addr
+}
+
+// MARK: - Send to Existing Viewer
+
+func sendToExistingViewer(filePath: String) -> Bool {
+    // Open a Unix domain socket and send the file path to the running instance
+    let sock = socket(AF_UNIX, SOCK_STREAM, 0)
+    guard sock >= 0 else { return false }
+    defer { close(sock) }
+
+    var addr = makeSockAddr(socketPath)
+    let result = withUnsafePointer(to: &addr) { ptr in
+        ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+            connect(sock, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+        }
+    }
+    guard result == 0 else { return false }
+
+    // Send the file path terminated by newline; no response expected
+    let data = (filePath + "\n").data(using: .utf8)!
+    _ = data.withUnsafeBytes { send(sock, $0.baseAddress, data.count, 0) }
+    return true
 }
 
 // MARK: - Content Type Detection
@@ -200,6 +245,10 @@ class GIFContentView: NSView {
         timer = nil
     }
 
+    func stopAnimation() {
+        cancelTimer()
+    }
+
     func togglePause() {
         if isPaused {
             isPaused = false
@@ -231,16 +280,116 @@ class GIFContentView: NSView {
     }
 }
 
+// MARK: - Viewer Socket
+
+class ViewerSocket {
+    private let socketPath: String
+    private var serverSocket: Int32?
+    var onFileReceived: ((String) -> Void)?
+
+    init(path: String) {
+        self.socketPath = path
+    }
+
+    func start() throws {
+        // Remove stale socket file from a previous run
+        try? FileManager.default.removeItem(atPath: socketPath)
+
+        // Create socket
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard fd >= 0 else {
+            throw NSError(domain: "ViewerSocket", code: Int(errno),
+                          userInfo: [NSLocalizedDescriptionKey: "socket() failed: \(errno)"])
+        }
+        serverSocket = fd
+
+        // Bind to path
+        var addr = makeSockAddr(socketPath)
+        let bindResult = withUnsafePointer(to: &addr) { ptr in
+            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                bind(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        }
+        guard bindResult == 0 else {
+            close(fd)
+            serverSocket = nil
+            throw NSError(domain: "ViewerSocket", code: Int(errno),
+                          userInfo: [NSLocalizedDescriptionKey: "bind() failed: \(errno)"])
+        }
+
+        // Listen for connections (backlog of 5 is sufficient for single-instance use)
+        guard listen(fd, 5) == 0 else {
+            close(fd)
+            serverSocket = nil
+            throw NSError(domain: "ViewerSocket", code: Int(errno),
+                          userInfo: [NSLocalizedDescriptionKey: "listen() failed: \(errno)"])
+        }
+
+        // Start accepting connections on a background queue
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            self?.acceptLoop()
+        }
+
+        vlog("viewer.socket.start", data: ["path": socketPath])
+    }
+
+    private func acceptLoop() {
+        guard let fd = serverSocket else { return }
+
+        while true {
+            // Block until a client connects
+            let clientFd = accept(fd, nil, nil)
+            guard clientFd >= 0 else {
+                // accept() fails when the server socket is closed during stop()
+                break
+            }
+
+            // Read newline-terminated file path (4KB buffer is sufficient for any path)
+            var buffer = [UInt8](repeating: 0, count: 4096)
+            var received = ""
+            var done = false
+
+            while !done {
+                let n = recv(clientFd, &buffer, buffer.count, 0)
+                guard n > 0 else { break }
+                let chunk = String(bytes: buffer[0..<n], encoding: .utf8) ?? ""
+                received += chunk
+                if received.contains("\n") { done = true }
+            }
+
+            close(clientFd)
+
+            // Extract the path before the newline
+            let filePath = received.components(separatedBy: "\n").first ?? ""
+            guard !filePath.isEmpty else { continue }
+
+            // Deliver to callback on main queue
+            let path = filePath
+            DispatchQueue.main.async { [weak self] in
+                self?.onFileReceived?(path)
+            }
+        }
+    }
+
+    func stop() {
+        // Close the server socket; this causes accept() to return -1 and exit the loop
+        if let fd = serverSocket {
+            close(fd)
+            serverSocket = nil
+        }
+        // Remove the socket file
+        try? FileManager.default.removeItem(atPath: socketPath)
+        vlog("viewer.socket.stop")
+    }
+}
+
 // MARK: - Viewer Window
 
 class ViewerWindow: NSWindow {
-    let contentType: ContentType
     var player: AVPlayer?
     var gifView: GIFContentView?
 
     init(url: URL, contentType: ContentType) {
-        self.contentType = contentType
-
         let frame: NSRect
         switch contentType {
         case .staticImage:
@@ -325,6 +474,100 @@ class ViewerWindow: NSWindow {
         }
     }
 
+    // Load a new file into the existing window, replacing current content
+    func loadFile(url: URL) {
+        guard let contentType = detectContentType(url: url) else {
+            vlog("viewer.load.error", msg: "unsupported file type", data: ["file": url.path])
+            return
+        }
+
+        // Stop existing media before replacing content
+        if let p = player {
+            p.pause()
+            // Remove loop observer for the old item
+            NotificationCenter.default.removeObserver(self, name: .AVPlayerItemDidPlayToEndTime, object: p.currentItem)
+            player = nil
+        }
+        if let gif = gifView {
+            gif.stopAnimation()
+            gifView = nil
+        }
+
+        // Remove all existing subviews from the content view
+        contentView?.subviews.forEach { $0.removeFromSuperview() }
+
+        // Build new content view and resize window based on content type
+        switch contentType {
+        case .staticImage:
+            guard let image = NSImage(contentsOf: url) else {
+                vlog("viewer.load.error", msg: "failed to load image", data: ["file": url.path])
+                return
+            }
+            let newFrame = fitWindowToContent(mediaSize: image.size)
+            setFrame(newFrame, display: true)
+            let imageView = NSImageView(frame: contentView!.bounds)
+            imageView.image = image
+            imageView.imageScaling = .scaleProportionallyUpOrDown
+            imageView.autoresizingMask = [.width, .height]
+            contentView!.addSubview(imageView)
+            vlog("viewer.load", data: [
+                "file": url.path,
+                "type": "image",
+                "size": "\(Int(image.size.width))x\(Int(image.size.height))"
+            ])
+
+        case .video:
+            let asset = AVAsset(url: url)
+            let naturalSize = videoNaturalSize(asset: asset)
+            let newFrame = fitWindowToContent(mediaSize: naturalSize)
+            setFrame(newFrame, display: true)
+            let avPlayer = AVPlayer(url: url)
+            self.player = avPlayer
+            let videoView = VideoContentView(player: avPlayer, frame: contentView!.bounds)
+            videoView.autoresizingMask = [.width, .height]
+            contentView!.addSubview(videoView)
+            NotificationCenter.default.addObserver(
+                forName: .AVPlayerItemDidPlayToEndTime,
+                object: avPlayer.currentItem,
+                queue: .main
+            ) { [weak avPlayer] _ in
+                avPlayer?.seek(to: .zero)
+                avPlayer?.play()
+            }
+            avPlayer.play()
+            vlog("viewer.load", data: [
+                "file": url.path,
+                "type": "video",
+                "size": "\(Int(naturalSize.width))x\(Int(naturalSize.height))"
+            ])
+
+        case .animatedGIF:
+            guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+                  let firstCGImage = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+                vlog("viewer.load.error", msg: "failed to load GIF", data: ["file": url.path])
+                return
+            }
+            let mediaSize = CGSize(width: firstCGImage.width, height: firstCGImage.height)
+            let newFrame = fitWindowToContent(mediaSize: mediaSize)
+            setFrame(newFrame, display: true)
+            let gif = GIFContentView(url: url, frame: contentView!.bounds)
+            gif.autoresizingMask = [.width, .height]
+            contentView!.addSubview(gif)
+            self.gifView = gif
+            let frameCount = CGImageSourceGetCount(source)
+            vlog("viewer.load", data: [
+                "file": url.path,
+                "type": "gif",
+                "frames": frameCount,
+                "size": "\(Int(mediaSize.width))x\(Int(mediaSize.height))"
+            ])
+        }
+
+        // Bring the window to front
+        makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
     private func setupWindowStyle() {
         self.level = .floating
         self.collectionBehavior = [.canJoinAllSpaces, .transient]
@@ -383,6 +626,7 @@ class ViewerWindow: NSWindow {
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     var window: ViewerWindow?
+    var viewerSocket: ViewerSocket?
     let fileURL: URL
 
     init(fileURL: URL) {
@@ -402,10 +646,29 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         window = ViewerWindow(url: fileURL, contentType: contentType)
         window?.makeKeyAndOrderFront(nil)
 
+        // Start the viewer socket to accept file paths from future invocations
+        let sock = ViewerSocket(path: socketPath)
+        sock.onFileReceived = { [weak self] filePath in
+            guard let self = self, let win = self.window else { return }
+            let url = URL(fileURLWithPath: filePath)
+            guard FileManager.default.fileExists(atPath: filePath) else {
+                vlog("viewer.load.error", msg: "file not found", data: ["file": filePath])
+                return
+            }
+            win.loadFile(url: url)
+        }
+        do {
+            try sock.start()
+            viewerSocket = sock
+        } catch {
+            vlog("viewer.socket.error", msg: "failed to start socket", data: ["err": error.localizedDescription])
+        }
+
         vlog("viewer.ready")
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        viewerSocket?.stop()
         cleanupPidFile()
     }
 }
@@ -425,6 +688,26 @@ guard FileManager.default.fileExists(atPath: filePath) else {
     exit(1)
 }
 
+// Check if an existing instance is already running via PID file
+let existingPid: pid_t? = {
+    guard let pidStr = try? String(contentsOfFile: pidFilePath, encoding: .utf8),
+          let pid = pid_t(pidStr.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+        return nil
+    }
+    // kill(pid, 0) returns 0 if the process is alive, -1 otherwise
+    return kill(pid, 0) == 0 ? pid : nil
+}()
+
+if existingPid != nil {
+    // Existing instance is alive — try to send the file path to it
+    if sendToExistingViewer(filePath: filePath) {
+        // Successfully handed off to existing instance; this process can exit
+        exit(0)
+    }
+    // Socket send failed (e.g., socket not yet ready or stale); fall through to normal startup
+    vlog("viewer.handoff.failed", msg: "could not send to existing instance, starting new")
+}
+
 writePidFile()
 
 vlog("viewer.init", data: ["file": filePath])
@@ -432,4 +715,27 @@ vlog("viewer.init", data: ["file": filePath])
 let app = NSApplication.shared
 let delegate = AppDelegate(fileURL: fileURL)
 app.delegate = delegate
+
+// Ignore default signal disposition so DispatchSource handlers fire instead.
+// Must be installed after delegate is created so handlers can reference it.
+signal(SIGTERM, SIG_IGN)
+signal(SIGINT, SIG_IGN)
+
+// Hold references so sources are not deallocated before app exits
+let termSource: DispatchSourceSignal = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+termSource.setEventHandler {
+    cleanupPidFile()
+    delegate.viewerSocket?.stop()
+    NSApp.terminate(nil)
+}
+termSource.resume()
+
+let intSource: DispatchSourceSignal = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
+intSource.setEventHandler {
+    cleanupPidFile()
+    delegate.viewerSocket?.stop()
+    NSApp.terminate(nil)
+}
+intSource.resume()
+
 app.run()
