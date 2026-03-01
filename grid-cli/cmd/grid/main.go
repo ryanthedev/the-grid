@@ -1581,6 +1581,12 @@ Save and quit to apply changes. Quit without saving to abort.`,
 			return fmt.Errorf("failed to reconcile state: %w", err)
 		}
 
+		// Initialize enrichers for window title enrichment
+		registry := enrichers.NewRegistry()
+		registry.RefreshCaches()
+		process.RefreshProcessTree()
+		defer registry.Cleanup()
+
 		spaceState := runtimeState.GetSpaceReadOnly(snap.SpaceID)
 		if spaceState == nil || spaceState.CurrentLayoutID == "" {
 			editMutex.Unlock()
@@ -1609,6 +1615,14 @@ Save and quit to apply changes. Quit without saving to abort.`,
 						if w := snap.GetWindowByID(wid); w != nil {
 							entry.AppName = w.AppName
 							entry.Title = w.Title
+							if enrichResult := registry.Enrich(w.BundleID, w.PID, w.Title); enrichResult != nil {
+								if enrichResult.Title != "" {
+									entry.Title = enrichResult.Title
+								}
+								if enrichResult.Subtitle != "" {
+									entry.Subtitle = enrichResult.Subtitle
+								}
+							}
 						}
 						cell.Windows = append(cell.Windows, entry)
 					}
@@ -1629,6 +1643,14 @@ Save and quit to apply changes. Quit without saving to abort.`,
 					if w := snap.GetWindowByID(wid); w != nil {
 						entry.AppName = w.AppName
 						entry.Title = w.Title
+						if enrichResult := registry.Enrich(w.BundleID, w.PID, w.Title); enrichResult != nil {
+							if enrichResult.Title != "" {
+								entry.Title = enrichResult.Title
+							}
+							if enrichResult.Subtitle != "" {
+								entry.Subtitle = enrichResult.Subtitle
+							}
+						}
 					}
 					cell.Windows = append(cell.Windows, entry)
 				}
