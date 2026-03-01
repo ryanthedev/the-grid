@@ -4574,11 +4574,75 @@ Examples:
 
 		successColor.Printf("✓ Saved: %s (%s, %s)\n", result.FilePath, result.Format, humanSize(result.Size))
 
-		// Open file if requested
+		// Open file if requested — prefer GridViewer, fall back to system open
 		if openAfter {
-			exec.Command("open", result.FilePath).Start()
+			if viewerPath, err := findViewerExecutable(); err == nil {
+				exec.Command(viewerPath, result.FilePath).Start()
+			} else {
+				exec.Command("open", result.FilePath).Start()
+			}
 		}
 
+		return nil
+	},
+}
+
+// MARK: - View Command
+
+// findViewerExecutable locates the grid-viewer binary by checking standard locations.
+func findViewerExecutable() (string, error) {
+	var searchPaths []string
+
+	// 1. XDG state home: ~/.local/state/thegrid/grid-viewer
+	stateDir := filepath.Join(xdg.StateHome(), "thegrid")
+	searchPaths = append(searchPaths, filepath.Join(stateDir, "grid-viewer"))
+
+	// 2. Same directory as current executable
+	if execPath, err := os.Executable(); err == nil {
+		searchPaths = append(searchPaths, filepath.Join(filepath.Dir(execPath), "grid-viewer"))
+	}
+
+	// 3. System PATH lookup
+	if pathExec, err := exec.LookPath("grid-viewer"); err == nil {
+		searchPaths = append(searchPaths, pathExec)
+	}
+
+	for _, path := range searchPaths {
+		info, err := os.Stat(path)
+		if err != nil {
+			continue
+		}
+		if info.Mode()&0111 != 0 {
+			return path, nil
+		}
+	}
+
+	return "", fmt.Errorf("grid-viewer not found; build with: make viewer")
+}
+
+// viewCmd opens a file in the GridViewer
+var viewCmd = &cobra.Command{
+	Use:   "view <file>",
+	Short: "Open a file in the GridViewer",
+	Long:  `Open an image, GIF, or video in the floating GridViewer window.`,
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		filePath, err := filepath.Abs(args[0])
+		if err != nil {
+			return fmt.Errorf("invalid path: %w", err)
+		}
+		if _, err := os.Stat(filePath); err != nil {
+			return fmt.Errorf("file not found: %s", filePath)
+		}
+
+		viewerPath, err := findViewerExecutable()
+		if err != nil {
+			return err
+		}
+
+		// grid-viewer handles single-instance internally (PID + socket)
+		c := exec.Command(viewerPath, filePath)
+		c.Start()
 		return nil
 	},
 }
@@ -4943,6 +5007,9 @@ func init() {
 	rootCmd.AddCommand(spaceCmd)
 	rootCmd.AddCommand(renderCmd)
 
+	// Add view command
+	rootCmd.AddCommand(viewCmd)
+
 	// Add terminal command
 	rootCmd.AddCommand(terminalCmd)
 
@@ -5168,6 +5235,7 @@ func shouldSkipMutex(cmd *cobra.Command) bool {
 		"thegrid terminal":    true,
 		"thegrid pick":        true,
 		"thegrid pick window": true,
+		"thegrid view":        true,
 		"thegrid layout edit": true, // manages its own mutex (release during editor)
 	}
 

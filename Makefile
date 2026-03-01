@@ -253,12 +253,14 @@ run: dev install-dev
 	@echo "✓ Service restarted"
 
 # Install dev build to ~/.local/bin
-install-dev: cli picker
+install-dev: cli picker viewer
 	@mkdir -p ~/.local/bin
 	@cp grid-cli/bin/thegrid ~/.local/bin/thegrid
 	@cp grid-server/.build/debug/grid-picker ~/.local/bin/grid-picker
+	@cp grid-server/.build/debug/grid-viewer ~/.local/bin/grid-viewer
 	@echo "✓ Installed dev CLI to ~/.local/bin/thegrid"
 	@echo "✓ Installed grid-picker to ~/.local/bin/grid-picker"
+	@echo "✓ Installed grid-viewer to ~/.local/bin/grid-viewer"
 
 # Install utility scripts to ~/.local/bin
 install-scripts:
