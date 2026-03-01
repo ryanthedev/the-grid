@@ -20,6 +20,10 @@ let package = Package(
         .executable(
             name: "grid-terminal",
             targets: ["GridTerminal"]
+        ),
+        .executable(
+            name: "grid-viewer",
+            targets: ["GridViewer"]
         )
     ],
     dependencies: [
@@ -62,6 +66,11 @@ let package = Package(
             name: "GridTerminal",
             dependencies: [.product(name: "SwiftTerm", package: "SwiftTerm")],
             path: "Sources/GridTerminal"
+        ),
+        .executableTarget(
+            name: "GridViewer",
+            dependencies: [],
+            path: "Sources/GridViewer"
         ),
         .testTarget(
             name: "GridServerTests",

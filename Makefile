@@ -1,4 +1,4 @@
-.PHONY: help build server cli picker terminal test clean server-test cli-test server-clean cli-clean run-server install dist dev reset-accessibility setup-signing install-scripts server-universal cli-universal picker-universal terminal-universal dist-universal
+.PHONY: help build server cli picker terminal viewer test clean server-test cli-test server-clean cli-clean run-server install dist dev reset-accessibility setup-signing install-scripts server-universal cli-universal picker-universal terminal-universal dist-universal
 
 # Version from VERSION file
 VERSION := $(shell cat VERSION)
@@ -39,6 +39,11 @@ server: generate-version
 picker:
 	@echo "Building grid-picker..."
 	@cd grid-server && swift build --product grid-picker
+
+# Viewer target (standalone image/media viewer)
+viewer:
+	@echo "Building grid-viewer..."
+	@cd grid-server && swift build --product grid-viewer
 
 server-release: generate-version
 	@echo "Building grid-server (release)..."
@@ -219,7 +224,7 @@ APP_BUNDLE := grid-server/.build/debug/GridServer.app
 DEPLOY_LOCATION := $(HOME)/.local/state/thegrid/GridServer.app
 
 # Build debug app bundle
-dev: server cli picker terminal
+dev: server cli picker terminal viewer
 	@echo "Creating debug GridServer.app bundle..."
 	@mkdir -p $(APP_BUNDLE)/Contents/MacOS
 	@mkdir -p $(APP_BUNDLE)/Contents/Resources
