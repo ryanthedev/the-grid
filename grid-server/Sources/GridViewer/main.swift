@@ -563,6 +563,11 @@ class ViewerWindow: NSWindow {
         self.isMovableByWindowBackground = true
     }
 
+    // Borderless windows need explicit drag handling
+    override func mouseDown(with event: NSEvent) {
+        performDrag(with: event)
+    }
+
     override func keyDown(with event: NSEvent) {
         switch event.keyCode {
         // ESC
