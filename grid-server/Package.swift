@@ -20,6 +20,10 @@ let package = Package(
         .executable(
             name: "grid-viewer",
             targets: ["GridViewer"]
+        ),
+        .executable(
+            name: "grid-cli",
+            targets: ["GridCLI"]
         )
     ],
     dependencies: [
@@ -62,6 +66,13 @@ let package = Package(
             name: "GridViewer",
             dependencies: [],
             path: "Sources/GridViewer"
+        ),
+        .executableTarget(
+            name: "GridCLI",
+            dependencies: [
+                .product(name: "ArgumentParser", package: "swift-argument-parser")
+            ],
+            path: "Sources/GridCLI"
         ),
         .testTarget(
             name: "GridServerTests",
