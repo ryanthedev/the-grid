@@ -107,6 +107,10 @@ actor StateManager: StateEventHandler {
             windowBlacklist = Set(config.windowBlacklist)
             cliPath = config.cliPath
             ResizeManager.shared.cliPath = config.cliPath
+            // Pass config to PickerManager for source configuration
+            await MainActor.run {
+                PickerManager.shared.configure(with: config)
+            }
             JSONLogger.shared.log("srv.cfg.loaded", data: [
                 "blacklist_count": windowBlacklist.count,
                 "cli_path": cliPath

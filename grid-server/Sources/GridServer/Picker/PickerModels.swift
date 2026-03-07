@@ -136,6 +136,9 @@ struct MatchResult {
 enum PickerAction {
     case focusWindow(pid: pid_t, windowID: UInt32)
     case openApp(bundleID: String)
+    case openChromeProfile(profileDir: String)
+    case exec(command: String)
+    case openDir(dirPath: String)
 
     /// Parse from PickerItem.metadata dictionary
     /// Convention: metadata["action"] = "focusWindow", metadata["pid"] = "123", metadata["windowID"] = "456"
@@ -149,6 +152,15 @@ enum PickerAction {
         case "openApp":
             guard let bundleID = meta["bundleID"] else { return nil }
             return .openApp(bundleID: bundleID)
+        case "openChromeProfile":
+            guard let profileDir = meta["profileDir"] else { return nil }
+            return .openChromeProfile(profileDir: profileDir)
+        case "exec":
+            guard let command = meta["command"] else { return nil }
+            return .exec(command: command)
+        case "openDir":
+            guard let dirPath = meta["dirPath"] else { return nil }
+            return .openDir(dirPath: dirPath)
         default:
             return nil
         }

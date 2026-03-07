@@ -27,6 +27,9 @@ class PickerManager {
     // All items accumulated during current session (for global frecency re-sort)
     private var allItems: [PickerItem] = []
 
+    // Server config for picker sources (actions, zoxide path)
+    private var config: ServerConfig?
+
     private init() {
         // Load history from disk on server start
         history = PickerHistory.load()
@@ -34,6 +37,12 @@ class PickerManager {
             "entries": "\(history.frequency.count)",
             "previous": history.previous
         ])
+    }
+
+    /// Configure with server config (called after server startup)
+    func configure(with config: ServerConfig) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        self.config = config
     }
 
     // MARK: - Show / Hide
@@ -146,30 +155,7 @@ class PickerManager {
             jlog("pick.err.noaction", data: ["id": item.id])
             return
         }
-
-        switch action {
-        case .focusWindow(let pid, let windowID):
-            let connectionID = SLSMainConnectionID()
-            let manipulator = WindowManipulator(connectionID: connectionID)
-            let success = manipulator.focusWindow(pid: pid, windowID: windowID)
-            jlog("pick.focus", data: [
-                "pid": "\(pid)",
-                "wid": "\(windowID)",
-                "ok": "\(success)"
-            ])
-
-        case .openApp(let bundleID):
-            if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
-                NSWorkspace.shared.openApplication(
-                    at: url,
-                    configuration: NSWorkspace.OpenConfiguration()
-                ) { _, error in
-                    if let error = error {
-                        jlog("pick.err.open", data: ["bundle": bundleID, "err": "\(error)"])
-                    }
-                }
-            }
-        }
+        ActionExecutor.execute(action)
     }
 
     // MARK: - Async Discovery
@@ -180,10 +166,17 @@ class PickerManager {
         // Create shared enricher for this discovery session
         let enricher = WindowEnricher()
 
-        let sources: [PickerSource] = [
-            WindowSource(enricher: enricher)
-            // Future phases: AppSource(), ZoxideSource(), etc.
+        var sources: [PickerSource] = [
+            WindowSource(enricher: enricher),
+            AppSource(),
+            ChromeProfileSource(),
+            ZoxideSource(configuredPath: config?.picker.zoxidePath),
         ]
+
+        // Add action source if config has actions defined
+        if let actions = config?.picker.actions, !actions.isEmpty {
+            sources.append(ActionSource(actions: actions))
+        }
 
         await withTaskGroup(of: [PickerItem].self) { group in
             for source in sources {

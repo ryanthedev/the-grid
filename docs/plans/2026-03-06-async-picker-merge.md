@@ -1,7 +1,7 @@
 # Plan: Async-First Picker — Merge into Server
 
 **Created:** 2026-03-06
-**Status:** ready
+**Status:** in-progress
 
 ## Context
 

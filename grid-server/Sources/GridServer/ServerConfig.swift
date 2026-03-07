@@ -1,6 +1,29 @@
 import Foundation
 import Yams
 
+/// Custom action defined by user in picker config
+struct ActionDef: Codable {
+    var name: String = ""
+    var command: String = ""
+    var category: String?
+    var icon: String?
+}
+
+/// Picker source configuration
+struct PickerSourceConfig: Codable {
+    /// Custom actions defined by user
+    var actions: [ActionDef] = []
+    /// Optional override for zoxide binary path
+    var zoxidePath: String?
+
+    enum CodingKeys: String, CodingKey {
+        case actions
+        case zoxidePath = "zoxide_path"
+    }
+
+    init() {}
+}
+
 /// Server configuration for window management behavior
 struct ServerConfig: Codable {
     /// Apps whose windows should not be tracked (by bundle ID or app name)
@@ -10,9 +33,13 @@ struct ServerConfig: Codable {
     /// Defaults to "thegrid" (assumes in PATH)
     var cliPath: String = "thegrid"
 
+    /// Picker source configuration (actions, zoxide path override)
+    var picker: PickerSourceConfig = PickerSourceConfig()
+
     enum CodingKeys: String, CodingKey {
         case windowBlacklist = "window_blacklist"
         case cliPath = "cli_path"
+        case picker
     }
 
     init() {}
@@ -20,7 +47,10 @@ struct ServerConfig: Codable {
     private static func builtinDefaults() -> [String: Any] {
         return [
             "window_blacklist": [],
-            "cli_path": "thegrid"
+            "cli_path": "thegrid",
+            "picker": [
+                "actions": [] as [[String: Any]]
+            ] as [String: Any]
         ]
     }
 
