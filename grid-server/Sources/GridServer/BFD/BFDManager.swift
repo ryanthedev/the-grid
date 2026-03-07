@@ -3,12 +3,16 @@ import AppKit
 
 /// Main orchestrator for the BFD hotkey daemon
 class BFDManager: NSObject {
+    /// Shared instance set during server startup
+    static var shared: BFDManager?
+
     private let keyHandler: BFDKeyHandler
     private var executor: BFDExecutor?
     private var configWatcher: DispatchSourceFileSystemObject?
     private var config: BFDConfig?
     private let configPath: String
     private var pendingReload: DispatchWorkItem?
+    private var commandRouter: GridCommandRouter?
 
     init(configPath: String = BFDConfig.defaultPath) {
         self.configPath = configPath
@@ -77,6 +81,16 @@ class BFDManager: NSObject {
         }
     }
 
+    /// Temporarily suspend the event tap (e.g., while picker is visible)
+    func suspendEventTap() {
+        keyHandler.suspend()
+    }
+
+    /// Resume the event tap after suspension
+    func resumeEventTap() {
+        keyHandler.resume()
+    }
+
     /// Stop the hotkey daemon
     func stop() {
         stopConfigWatcher()
@@ -105,22 +119,40 @@ class BFDManager: NSObject {
         }
     }
 
+    // MARK: - Command Router
+
+    /// Set the command router (called from main.swift after router is created)
+    func setCommandRouter(_ router: GridCommandRouter) {
+        self.commandRouter = router
+    }
+
     // MARK: - Internal Commands
 
     /// Handle @ commands — internal server actions that bypass BFDExecutor
     private func handleInternalCommand(_ command: String, hotkey: String) {
-        switch command {
-        case "@pick":
+        jlog("bfd.internal", data: ["cmd": command, "hotkey": hotkey])
+
+        // If router is set, dispatch through it
+        if let router = commandRouter {
+            Task {
+                let result = await router.dispatch(command)
+                if !result.success {
+                    jlog("cmd.err", data: ["cmd": command, "msg": result.message])
+                }
+            }
+            return
+        }
+
+        // Fallback: legacy handling for @pick (in case router not yet ready)
+        if command == "@pick" {
             DispatchQueue.main.async {
                 PickerManager.shared.show()
             }
-            JSONLogger.shared.log("bfd.internal", data: ["cmd": command, "hotkey": hotkey])
-
-        default:
-            JSONLogger.shared.log("bfd.err.internal", data: [
+        } else {
+            jlog("bfd.err.internal", data: [
                 "cmd": command,
                 "hotkey": hotkey,
-                "msg": "unknown @ command"
+                "msg": "unknown @ command (router not ready)"
             ])
         }
     }

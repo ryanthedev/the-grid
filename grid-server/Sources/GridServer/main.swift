@@ -141,10 +141,33 @@ struct GridServerCommand: ParsableCommand {
                 )
             }
 
+            // Initialize Grid feature modules + command router
+            let gridFocus = GridFocus()
+            let gridCellOps = GridCellOps()
+            let gridWindowMove = GridWindowMove()
+            let gridApply = GridApply()
+            let gridResize = GridResize()
+            let windowManipulator = WindowManipulator(connectionID: connectionID)
+
+            let commandRouter = GridCommandRouter(
+                gridFocus: gridFocus,
+                gridCellOps: gridCellOps,
+                gridWindowMove: gridWindowMove,
+                gridApply: gridApply,
+                gridResize: gridResize,
+                gridState: gridState,
+                gridConfig: gridConfig,
+                stateManager: StateManager.shared,
+                windowManipulator: windowManipulator,
+                gridReconciler: gridReconciler,
+                simpleBorderManager: simpleBorderManager
+            )
+
             // Initialize BFD hotkey daemon
             // Note: bfdManager captured by shutdown closure - will be stopped on exit
             let bfdManager = BFDManager()
             BFDManager.shared = bfdManager
+            bfdManager.setCommandRouter(commandRouter)
             Task {
                 if await bfdManager.start() {
                     jlog("bfd.ready")
