@@ -280,7 +280,7 @@ class GridFocus {
     }
 
     // focusWindowByID: focus a window via WindowManipulator
-    private func focusWindowByID(_ windowID: UInt32) async throws {
+    func focusWindowByID(_ windowID: UInt32) async throws {
         guard let stateManager = stateManager,
               let windowManipulator = windowManipulator else {
             throw GridFocusError.windowNotFound(windowID)
@@ -374,7 +374,7 @@ class GridFocus {
     // ============================================================
 
     // findAdjacentDisplay: find display adjacent in direction
-    private func findAdjacentDisplay(
+    func findAdjacentDisplay(
         currentDisplayUUID: String,
         direction: GridDirection,
         displays: [DisplayState]
@@ -436,7 +436,7 @@ class GridFocus {
     }
 
     // findOppositeDisplay: find display on opposite edge for wrap-around
-    private func findOppositeDisplay(
+    func findOppositeDisplay(
         currentDisplayUUID: String,
         direction: GridDirection,
         displays: [DisplayState]
@@ -500,7 +500,7 @@ class GridFocus {
     // ============================================================
 
     // findWrapTarget: find cells on opposite edge for wrap within display
-    private func findWrapTarget(
+    func findWrapTarget(
         direction: GridDirection,
         currentCell: String,
         cellBounds: [String: CGRect]
@@ -548,7 +548,7 @@ class GridFocus {
     }
 
     // pickClosestCell: pick cell closest to current cell's center
-    private func pickClosestCell(
+    func pickClosestCell(
         currentCell: String,
         candidates: [String],
         cellBounds: [String: CGRect]
@@ -577,7 +577,7 @@ class GridFocus {
     }
 
     // matchVisualPosition: map position from source to target display
-    private func matchVisualPosition(
+    func matchVisualPosition(
         sourceCell: CGRect,
         sourceDisplay: CGRect,
         targetDisplay: CGRect
@@ -595,7 +595,7 @@ class GridFocus {
     }
 
     // findClosestCellToPoint: find cell whose center is closest to point
-    private func findClosestCellToPoint(
+    func findClosestCellToPoint(
         point: CGPoint,
         cellBounds: [String: CGRect]
     ) -> String {
@@ -665,7 +665,7 @@ class GridFocus {
     // ============================================================
 
     // getDisplayCells: calculate cell bounds for a display's active space
-    private func getDisplayCells(
+    func getDisplayCells(
         _ display: DisplayState
     ) async throws -> (cellBounds: [String: CGRect], spaceID: UInt64) {
         guard let gridState = gridState,
@@ -703,7 +703,7 @@ class GridFocus {
     }
 
     // findCurrentDisplayUUID: determine current display from space state
-    private func findCurrentDisplayUUID(
+    func findCurrentDisplayUUID(
         _ wmState: WindowManagerState,
         _ spaceID: String
     ) -> String {
@@ -730,7 +730,7 @@ class GridFocus {
     }
 
     // getDisplayBoundsForSpace: get display bounds for a space ID
-    private func getDisplayBoundsForSpace(
+    func getDisplayBoundsForSpace(
         _ spaceID: String,
         wmState: WindowManagerState
     ) -> CGRect {
@@ -753,7 +753,7 @@ class GridFocus {
     }
 
     // findActiveSpaceID: find the active space from WindowManagerState
-    private func findActiveSpaceID(
+    func findActiveSpaceID(
         _ wmState: WindowManagerState
     ) -> String? {
         for (spaceKey, space) in wmState.spaces {

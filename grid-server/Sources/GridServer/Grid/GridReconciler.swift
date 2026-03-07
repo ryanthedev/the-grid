@@ -284,7 +284,7 @@ class GridReconciler: StateEventHandler {
         await syncBordersForSpace(spaceID, displayUUID: displayUUID)
     }
 
-    private func syncBordersForSpace(_ spaceID: String, displayUUID: String) async {
+    func syncBordersForSpace(_ spaceID: String, displayUUID: String) async {
         guard let gridState, let gridConfig else { return }
 
         // Get layout for this space
