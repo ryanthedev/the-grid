@@ -37,6 +37,19 @@ extension CGRect {
     func overlapsHorizontally(with other: CGRect) -> Bool {
         minX < other.maxX && maxX > other.minX
     }
+
+    func overlapArea(with other: CGRect) -> Double {
+        let left = Swift.max(self.minX, other.minX)
+        let right = Swift.min(self.maxX, other.maxX)
+        let top = Swift.max(self.minY, other.minY)
+        let bottom = Swift.min(self.maxY, other.maxY)
+
+        if left >= right || top >= bottom {
+            return 0
+        }
+
+        return Double((right - left) * (bottom - top))
+    }
 }
 
 // MARK: - Layout Computation
