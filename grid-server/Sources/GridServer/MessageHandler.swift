@@ -1726,12 +1726,65 @@ completion(Response(id: request.id, result: AnyCodable(["success": true])))
             }
         }
 
-        // grid.record.start -- stub until Phase 11
+        // grid.record.start -- record screen capture via command router
         register(method: "grid.record.start") { request, completion in
-            completion(Response(
-                id: request.id,
-                error: ErrorInfo(code: -32000, message: "recording not yet implemented")
-            ))
+            Task {
+                do {
+                    // Parse target from params
+                    let targetStr = request.params?["target"]?.value as? String ?? "cell"
+                    let idStr = request.params?["id"]?.value as? String
+
+                    // Build @ command string for the router
+                    var parts = ["@record", "start", targetStr]
+                    if let id = idStr {
+                        parts.append(id)
+                    }
+
+                    // Map RPC params to --flags
+                    let intFlags = ["duration", "fps", "width", "countdown"]
+                    for flag in intFlags {
+                        if let val = request.params?[flag]?.value as? Int, val != 0 || flag == "countdown" {
+                            parts.append("--\(flag)")
+                            parts.append(String(val))
+                        }
+                    }
+                    let strFlags = ["format", "quality", "output"]
+                    for flag in strFlags {
+                        if let val = request.params?[flag]?.value as? String, !val.isEmpty {
+                            parts.append("--\(flag)")
+                            parts.append(val)
+                        }
+                    }
+                    let boolFlags = ["cursor", "open", "follow"]
+                    for flag in boolFlags {
+                        if let val = request.params?[flag]?.value as? Bool, val {
+                            parts.append("--\(flag)")
+                        }
+                    }
+
+                    let cmd = parts.joined(separator: " ")
+                    jlog("grid.rpc.record", data: ["cmd": cmd])
+                    let cmdResult = await router.dispatch(cmd)
+
+                    if cmdResult.success {
+                        // The message is JSON from the recorder, parse it back
+                        if let data = cmdResult.message.data(using: .utf8),
+                           let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                            completion(Response(id: request.id, result: AnyCodable(dict)))
+                        } else {
+                            completion(Response(
+                                id: request.id,
+                                result: AnyCodable(["ok": true, "message": cmdResult.message])
+                            ))
+                        }
+                    } else {
+                        completion(Response(
+                            id: request.id,
+                            error: ErrorInfo(code: -32000, message: cmdResult.message)
+                        ))
+                    }
+                }
+            }
         }
 
         jlog("grid.rpc.registered")

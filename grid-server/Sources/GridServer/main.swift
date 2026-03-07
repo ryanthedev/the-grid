@@ -149,6 +149,12 @@ struct GridServerCommand: ParsableCommand {
             let gridResize = GridResize()
             let windowManipulator = WindowManipulator(connectionID: connectionID)
 
+            let gridRecorder = GridRecorder(
+                gridState: gridState,
+                gridConfig: gridConfig,
+                stateManager: StateManager.shared
+            )
+
             let commandRouter = GridCommandRouter(
                 gridFocus: gridFocus,
                 gridCellOps: gridCellOps,
@@ -160,7 +166,8 @@ struct GridServerCommand: ParsableCommand {
                 stateManager: StateManager.shared,
                 windowManipulator: windowManipulator,
                 gridReconciler: gridReconciler,
-                simpleBorderManager: simpleBorderManager
+                simpleBorderManager: simpleBorderManager,
+                gridRecorder: gridRecorder
             )
 
             // Register Grid RPC handlers (thin CLI bridge)

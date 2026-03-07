@@ -41,6 +41,7 @@ class GridCommandRouter {
     private let windowManipulator: WindowManipulator
     private let gridReconciler: GridReconciler
     private let simpleBorderManager: SimpleBorderManager
+    private let gridRecorder: GridRecorder
 
     init(
         gridFocus: GridFocus,
@@ -53,7 +54,8 @@ class GridCommandRouter {
         stateManager: StateManager,
         windowManipulator: WindowManipulator,
         gridReconciler: GridReconciler,
-        simpleBorderManager: SimpleBorderManager
+        simpleBorderManager: SimpleBorderManager,
+        gridRecorder: GridRecorder
     ) {
         self.gridFocus = gridFocus
         self.gridCellOps = gridCellOps
@@ -66,6 +68,7 @@ class GridCommandRouter {
         self.windowManipulator = windowManipulator
         self.gridReconciler = gridReconciler
         self.simpleBorderManager = simpleBorderManager
+        self.gridRecorder = gridRecorder
 
         // Wire feature modules via their setup() methods
         gridFocus.setup(
@@ -149,7 +152,7 @@ class GridCommandRouter {
             case "state":
                 return try await handleState(parsed)
             case "record":
-                return .error("record not yet implemented")
+                return try await handleRecord(parsed)
             default:
                 return .error("unknown domain: \(parsed.domain)")
             }
@@ -516,6 +519,79 @@ class GridCommandRouter {
 
         default:
             return .error("unknown state action: \(cmd.action)")
+        }
+    }
+
+    // ============================================================
+    // PRIVATE: handleRecord
+    // ============================================================
+
+    private func handleRecord(_ cmd: ParsedCommand) async throws -> CommandResult {
+        if cmd.action == "cancel" {
+            await gridRecorder.cancel()
+            return .ok("recording cancelled")
+        }
+
+        if cmd.action == "status" {
+            let active = await gridRecorder.recording
+            return .ok(active ? "recording" : "idle")
+        }
+
+        let target = parseRecordingTarget(action: cmd.action, args: cmd.args)
+
+        var options = RecordingOptions()
+        if let d = cmd.flagValues["duration"], let v = Int(d) {
+            options.duration = v
+        }
+        if let f = cmd.flagValues["format"] {
+            options.format = f
+        }
+        if let q = cmd.flagValues["quality"], let v = RecordingQuality(rawValue: q) {
+            options.quality = v
+        }
+        if let f = cmd.flagValues["fps"], let v = Int(f) {
+            options.fps = v
+        }
+        if let w = cmd.flagValues["width"], let v = Int(w) {
+            options.width = v
+        }
+        if let c = cmd.flagValues["countdown"], let v = Int(c) {
+            options.countdown = v
+        }
+        if let o = cmd.flagValues["output"] {
+            options.output = o
+        }
+        if cmd.flags.contains("cursor") {
+            options.cursor = true
+        }
+        if cmd.flags.contains("follow") {
+            options.follow = true
+        }
+        if cmd.flags.contains("open") {
+            options.open = true
+        }
+
+        let result = try await gridRecorder.record(target: target, options: options)
+        let encoder = JSONEncoder()
+        let data = try encoder.encode(result)
+        let json = String(data: data, encoding: .utf8) ?? "{}"
+        return .ok(json)
+    }
+
+    private func parseRecordingTarget(action: String, args: [String]) -> RecordingTarget {
+        let targetStr = args.first ?? "cell"
+        let id = args.count > 1 ? args[1] : nil
+        switch targetStr {
+        case "cell":
+            return .cell(id: id)
+        case "window":
+            return .window(id: id.flatMap { UInt32($0) })
+        case "screen", "display":
+            return .screen(index: id.flatMap { Int($0) })
+        case "all":
+            return .all
+        default:
+            return .cell(id: nil)
         }
     }
 
