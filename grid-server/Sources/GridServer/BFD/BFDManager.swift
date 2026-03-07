@@ -16,6 +16,14 @@ class BFDManager: NSObject {
         super.init()
 
         keyHandler.onHotkeyTriggered = { [weak self] spec, def in
+            let command = def.run.trimmingCharacters(in: .whitespaces)
+
+            // Check for @ commands (internal server actions, skip BFDExecutor)
+            if command.hasPrefix("@") {
+                self?.handleInternalCommand(command, hotkey: spec)
+                return
+            }
+
             self?.executor?.executeAsync(hotkey: spec, command: def.run)
         }
     }
@@ -94,6 +102,26 @@ class BFDManager: NSObject {
             JSONLogger.shared.log("bfd.reload", data: ["path": configPath])
         } catch {
             JSONLogger.shared.log("bfd.err.reload", data: ["err": "\(error)"])
+        }
+    }
+
+    // MARK: - Internal Commands
+
+    /// Handle @ commands — internal server actions that bypass BFDExecutor
+    private func handleInternalCommand(_ command: String, hotkey: String) {
+        switch command {
+        case "@pick":
+            DispatchQueue.main.async {
+                PickerManager.shared.show()
+            }
+            JSONLogger.shared.log("bfd.internal", data: ["cmd": command, "hotkey": hotkey])
+
+        default:
+            JSONLogger.shared.log("bfd.err.internal", data: [
+                "cmd": command,
+                "hotkey": hotkey,
+                "msg": "unknown @ command"
+            ])
         }
     }
 
