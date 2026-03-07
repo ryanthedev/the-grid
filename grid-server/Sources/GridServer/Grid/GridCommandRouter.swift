@@ -43,6 +43,13 @@ class GridCommandRouter {
     private let simpleBorderManager: SimpleBorderManager
     private let gridRecorder: GridRecorder
 
+    // Short flag -> long flag mapping for BFD commands
+    private static let shortFlagMap: [Character: String] = [
+        "m": "mouse",
+        "w": "wrap",
+        "e": "extend",
+    ]
+
     init(
         gridFocus: GridFocus,
         gridCellOps: GridCellOps,
@@ -136,7 +143,16 @@ class GridCommandRouter {
         do {
             switch parsed.domain {
             case "focus":
-                return try await handleFocus(parsed)
+                // Clear move cooldown so the reconciler doesn't suppress
+                // the border update triggered by this explicit focus change
+                gridReconciler.clearMoveCooldown()
+                // Suppress reconciler during focus to prevent intermediate OS
+                // events (e.g. appActivated for same-app windows) from
+                // contaminating cell lastFocusedWid tracking
+                gridReconciler.setSuppressed(true, syncOnResume: false)
+                let focusResult = try await handleFocus(parsed)
+                gridReconciler.setSuppressed(false, syncOnResume: true)
+                return focusResult
             case "layout":
                 return try await handleLayout(parsed)
             case "cell":
@@ -195,14 +211,22 @@ class GridCommandRouter {
         while i < tokens.count {
             if tokens[i].hasPrefix("--") {
                 let flagName = String(tokens[i].dropFirst(2))
-                // Check if next token is a value (not a flag)
-                if i + 1 < tokens.count && !tokens[i + 1].hasPrefix("--") {
+                // Check if next token is a value (not another flag)
+                if i + 1 < tokens.count && !tokens[i + 1].hasPrefix("--") && !tokens[i + 1].hasPrefix("-") {
                     flagValues[flagName] = tokens[i + 1]
                     i += 2
                 } else {
                     flags.insert(flagName)
                     i += 1
                 }
+            } else if tokens[i].hasPrefix("-") && tokens[i].count > 1 && !tokens[i].hasPrefix("--") {
+                // Short flags: -m -> mouse, -w -> wrap, -e -> extend
+                let shortFlags = tokens[i].dropFirst()
+                for ch in shortFlags {
+                    let longName = Self.shortFlagMap[ch] ?? String(ch)
+                    flags.insert(longName)
+                }
+                i += 1
             } else {
                 args.append(tokens[i])
                 i += 1
@@ -225,6 +249,16 @@ class GridCommandRouter {
     private func resolveActiveSpaceID() async -> String? {
         let wmState = await stateManager.getState()
         return gridFocus.findActiveSpaceID(wmState)
+    }
+
+    private func warpMouseToFocusedWindow() async {
+        let wmState = await stateManager.getState()
+        guard let spaceID = gridFocus.findActiveSpaceID(wmState) else { return }
+        let focusedWid = await gridState.getFocusedWindow(spaceID: spaceID)
+        guard focusedWid != 0,
+              let windowState = wmState.windows[String(focusedWid)] else { return }
+        let frame = windowState.frame
+        CGWarpMouseCursorPosition(CGPoint(x: frame.midX, y: frame.midY))
     }
 
     // ============================================================
@@ -380,17 +414,30 @@ class GridCommandRouter {
     private func handleWindow(_ cmd: ParsedCommand) async throws -> CommandResult {
         switch cmd.action {
         case "move":
-            // @window move <direction> [--extend] [--wrap]
+            // @window move <direction> [--extend] [--wrap] [-m/--mouse]
             guard let dirStr = cmd.args.first,
                   let direction = GridDirection(from: dirStr) else {
                 return .error("missing or invalid direction")
             }
             let opts = GridMoveOpts(
                 wrapAround: cmd.flags.contains("wrap"),
-                extend: cmd.flags.contains("extend")
+                extend: cmd.flags.contains("extend"),
+                warpMouse: cmd.flags.contains("mouse")
             )
             let result = try await gridWindowMove.moveWindow(direction: direction, opts: opts)
             return .ok("moved window \(result.windowID) to \(result.targetCell)")
+
+        case "swap":
+            // @window swap <direction> [-m/--mouse]
+            guard let dirStr = cmd.args.first,
+                  let direction = GridDirection(from: dirStr) else {
+                return .error("missing or invalid direction")
+            }
+            try await gridCellOps.swapWindow(direction: direction)
+            if cmd.flags.contains("mouse") {
+                await warpMouseToFocusedWindow()
+            }
+            return .ok("swapped \(dirStr)")
 
         default:
             return .error("unknown window action: \(cmd.action)")
@@ -500,6 +547,35 @@ class GridCommandRouter {
 
     private func handlePick(_ cmd: ParsedCommand) async -> CommandResult {
         // @pick [show] -- show the picker
+        // 1. Capture focus state BEFORE showing picker (picker steals focus)
+        let spaceID = await resolveActiveSpaceID()
+        var cellID: String? = nil
+        if let spaceID {
+            cellID = await gridState.getFocusedCell(spaceID: spaceID)
+        }
+
+        // 2. Set onLaunch callback if we have valid capture
+        if let spaceID, let cellID, !cellID.isEmpty {
+            await MainActor.run { [weak self] in
+                PickerManager.shared.onLaunch = { [weak self] action in
+                    guard let self else { return }
+                    switch action {
+                    case .openApp, .openDir, .openChromeProfile:
+                        self.gridReconciler.setPendingLaunchTarget(
+                            PendingLaunchTarget(
+                                spaceID: spaceID,
+                                cellID: cellID,
+                                createdAt: CFAbsoluteTimeGetCurrent()
+                            )
+                        )
+                    default:
+                        break
+                    }
+                }
+            }
+        }
+
+        // 3. Show the picker
         await MainActor.run {
             PickerManager.shared.show()
         }
