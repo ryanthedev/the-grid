@@ -29,6 +29,10 @@ class PickerManager {
     // Grid config for picker sources (actions, zoxide path)
     private var gridConfig: GridConfig?
 
+    // Optional callback invoked when a launch-type action is selected
+    // Set by GridCommandRouter before show(), cleared in hide()
+    var onLaunch: ((PickerAction) -> Void)?
+
     private init() {
         // Load history from disk on server start
         history = PickerHistory.load()
@@ -134,6 +138,9 @@ class PickerManager {
             continuation.resume(returning: .cancelled)
         }
 
+        // Clear launch callback (safety net -- handleResult captures before hide)
+        onLaunch = nil
+
         jlog("pick.hide")
     }
 
@@ -141,9 +148,10 @@ class PickerManager {
 
     /// Called by PickerWindow.onResult callback
     private func handleResult(_ result: PickerResult) {
-        // Capture pending continuation before hide() clears it
+        // Capture callbacks before hide() clears them
         let continuation = pendingRPCContinuation
         pendingRPCContinuation = nil
+        let capturedOnLaunch = onLaunch
 
         // Hide first (clears UI before action executes)
         hide()
@@ -155,7 +163,26 @@ class PickerManager {
             history.save()
             jlog("pick.selected", data: ["id": item.id])
 
-            executeAction(for: item)
+            // Parse action from metadata
+            guard let action = PickerAction.from(metadata: item.metadata) else {
+                jlog("pick.err.noaction", data: ["id": item.id])
+                break
+            }
+
+            // Notify launch callback for launch-type actions only
+            if let capturedOnLaunch = capturedOnLaunch {
+                switch action {
+                case .openApp, .openDir, .openChromeProfile:
+                    capturedOnLaunch(action)
+                case .focusWindow, .exec:
+                    // Not launch actions -- skip callback
+                    break
+                }
+            }
+
+            // Execute the action
+            ActionExecutor.execute(action)
+
         case .cancelled:
             break
         }
@@ -164,15 +191,6 @@ class PickerManager {
         if let continuation = continuation {
             continuation.resume(returning: result)
         }
-    }
-
-    /// Execute the PickerAction encoded in the item's metadata
-    private func executeAction(for item: PickerItem) {
-        guard let action = PickerAction.from(metadata: item.metadata) else {
-            jlog("pick.err.noaction", data: ["id": item.id])
-            return
-        }
-        ActionExecutor.execute(action)
     }
 
     // MARK: - Async Discovery
