@@ -100,24 +100,25 @@ actor StateManager: StateEventHandler {
 
     // MARK: - Public Interface
 
-    func start() async {
-        // Load server config for window blacklist and CLI path FIRST (before state refresh)
-        do {
-            let config = try await ServerConfig.load()
-            windowBlacklist = Set(config.windowBlacklist)
-            cliPath = config.cliPath
-            ResizeManager.shared.cliPath = config.cliPath
-            // Pass config to PickerManager for source configuration
+    func start(gridConfig: GridConfig? = nil) async {
+        // Load config from GridConfig (replaces ServerConfig)
+        if let cfg = gridConfig {
+            // Read values from MainActor-isolated config
+            let blacklist = await MainActor.run { cfg.windowBlacklist }
+            windowBlacklist = Set(blacklist)
+            // Pass config to PickerManager on main thread
             await MainActor.run {
-                PickerManager.shared.configure(with: config)
+                PickerManager.shared.configure(with: cfg)
             }
             JSONLogger.shared.log("srv.cfg.loaded", data: [
-                "blacklist_count": windowBlacklist.count,
-                "cli_path": cliPath
+                "blacklist_count": windowBlacklist.count
             ])
-        } catch {
-            JSONLogger.shared.log("srv.cfg.error", msg: "failed to load server config", data: ["error": "\(error)"])
         }
+
+        // Resolve CLI path (transitional: removed when border sync moves in-process)
+        let resolvedCliPath = StateManager.resolveCliPath("thegrid")
+        cliPath = resolvedCliPath
+        ResizeManager.shared.cliPath = resolvedCliPath
 
         // Build initial state (now uses blacklist filtering)
         await refreshCompleteState()
@@ -2146,6 +2147,25 @@ return
     func getDisplayAtMousePosition() -> String? {
         let mousePos = getCurrentMousePosition()
         return getDisplayUUIDAtPoint(mousePos)
+    }
+
+    // MARK: - CLI Path Resolution (transitional, removed when CLI invocation moves in-process)
+
+    private static func resolveCliPath(_ name: String) -> String {
+        if name.hasPrefix("/") { return name }
+        let searchPaths = [
+            "/opt/homebrew/bin/\(name)",
+            "/usr/local/bin/\(name)",
+            NSHomeDirectory() + "/.local/bin/\(name)",
+            "/usr/bin/\(name)",
+        ]
+        let fm = FileManager.default
+        for candidate in searchPaths {
+            if fm.isExecutableFile(atPath: candidate) {
+                return candidate
+            }
+        }
+        return name
     }
 }
 

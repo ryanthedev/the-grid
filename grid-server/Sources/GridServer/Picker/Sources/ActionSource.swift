@@ -12,7 +12,7 @@ import Foundation
 struct ActionSource: PickerSource {
     let id = "actions"
 
-    /// Action definitions from ServerConfig.picker.actions
+    /// Action definitions from GridConfig.pickerActions
     let actions: [ActionDef]
 
     func discover() async throws -> [PickerItem] {

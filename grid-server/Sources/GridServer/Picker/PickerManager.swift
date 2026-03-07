@@ -20,18 +20,14 @@ class PickerManager {
     // Stored continuation for RPC callers awaiting a picker result
     private var pendingRPCContinuation: CheckedContinuation<PickerResult, Never>?
 
-    // Grace period flag to ignore windowDidResignKey during activation policy switch
-    private var isActivating = false
-    private var activationGraceTimer: DispatchWorkItem?
-
     // History: loaded once on init, saved on each selection
     private var history: PickerHistory
 
     // All items accumulated during current session (for global frecency re-sort)
     private var allItems: [PickerItem] = []
 
-    // Server config for picker sources (actions, zoxide path)
-    private var config: ServerConfig?
+    // Grid config for picker sources (actions, zoxide path)
+    private var gridConfig: GridConfig?
 
     private init() {
         // Load history from disk on server start
@@ -42,10 +38,10 @@ class PickerManager {
         ])
     }
 
-    /// Configure with server config (called after server startup)
-    func configure(with config: ServerConfig) {
+    /// Configure with grid config (called after server startup)
+    func configure(with config: GridConfig) {
         dispatchPrecondition(condition: .onQueue(.main))
-        self.config = config
+        self.gridConfig = config
     }
 
     // MARK: - Show / Hide
@@ -63,9 +59,11 @@ class PickerManager {
 
         isVisible = true
         allItems = []  // Reset accumulated items for fresh show
+        jlog("pick.show.begin")
 
         // Create window lazily — reuse across show/hide cycles
         if window == nil {
+            jlog("pick.window.create")
             window = PickerWindow()
             window!.onResult = { [weak self] result in
                 self?.handleResult(result)
@@ -83,31 +81,16 @@ class PickerManager {
         window!.resetForNewShow()
         window!.setLoading(true)
 
-        // Switch to .regular so we can receive key events
-        // Set grace period flag before the switch to ignore the transient resign-key
-        isActivating = true
-        activationGraceTimer?.cancel()
-
-        NSApp.setActivationPolicy(.regular)
-
-        // Show and focus
-        window!.makeKeyAndOrderFront(nil)
+        // Activate and show
         NSApp.activate(ignoringOtherApps: true)
+        window!.makeKeyAndOrderFront(nil)
         window!.focusInput()
-
-        // End grace period after 200ms (policy switch may cause transient resign)
-        let graceWork = DispatchWorkItem { [weak self] in
-            self?.isActivating = false
-        }
-        activationGraceTimer = graceWork
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: graceWork)
+        jlog("pick.show")
 
         // Start async discovery
         discoveryTask = Task { [weak self] in
             await self?.discoverAndStream()
         }
-
-        jlog("pick.show")
     }
 
     /// Show the picker for an RPC caller and wait for a result.
@@ -144,9 +127,6 @@ class PickerManager {
         // Hide window and stop spinner
         window?.orderOut(nil)
         window?.setLoading(false)
-
-        // Switch back to prohibited (no Dock icon)
-        NSApp.setActivationPolicy(.prohibited)
 
         // Resume any pending RPC continuation with cancelled
         if let continuation = pendingRPCContinuation {
@@ -200,6 +180,12 @@ class PickerManager {
     /// Run all PickerSources concurrently and stream items to the window as each completes.
     /// After each batch, all accumulated items are re-sorted by frecency.
     private func discoverAndStream() async {
+        jlog("pick.discover.start")
+
+        // Capture config values on main thread before entering async context
+        let capturedZoxidePath = await MainActor.run { gridConfig?.zoxidePath }
+        let capturedActions = await MainActor.run { gridConfig?.pickerActions ?? [] }
+
         // Create shared enricher for this discovery session
         let enricher = WindowEnricher()
 
@@ -207,21 +193,25 @@ class PickerManager {
             WindowSource(enricher: enricher),
             AppSource(),
             ChromeProfileSource(),
-            ZoxideSource(configuredPath: config?.picker.zoxidePath),
+            ZoxideSource(configuredPath: capturedZoxidePath),
         ]
 
         // Add action source if config has actions defined
-        if let actions = config?.picker.actions, !actions.isEmpty {
-            sources.append(ActionSource(actions: actions))
+        if !capturedActions.isEmpty {
+            sources.append(ActionSource(actions: capturedActions))
         }
 
         await withTaskGroup(of: [PickerItem].self) { group in
             for source in sources {
                 group.addTask {
+                    let sid = source.id
+                    jlog("pick.source.start", data: ["source": sid])
                     do {
-                        return try await source.discover()
+                        let items = try await source.discover()
+                        jlog("pick.source.done", data: ["source": sid, "count": "\(items.count)"])
+                        return items
                     } catch {
-                        jlog("pick.err.source", data: ["source": source.id, "err": "\(error)"])
+                        jlog("pick.err.source", data: ["source": sid, "err": "\(error)"])
                         return []
                     }
                 }
@@ -256,8 +246,6 @@ class PickerManager {
     // MARK: - Window Notifications
 
     @objc private func windowDidResignKey(_ notification: Notification) {
-        // Skip during activation grace period — policy switch causes a transient resign
-        guard !isActivating else { return }
         handleResult(.cancelled)
     }
 }

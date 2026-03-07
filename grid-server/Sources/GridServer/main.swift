@@ -96,7 +96,7 @@ struct GridServerCommand: ParsableCommand {
 
             // Initialize NSApplication for NSWorkspace notifications
             _ = NSApplication.shared
-            NSApplication.shared.setActivationPolicy(.prohibited)
+            NSApplication.shared.setActivationPolicy(.accessory)
 
             // Initialize border system
             let connectionID = SLSMainConnectionID()
@@ -106,9 +106,20 @@ struct GridServerCommand: ParsableCommand {
             messageHandler.simpleBorderManager = simpleBorderManager
             jlog("bdr.init")
 
+            // Initialize GridConfig (replaces ServerConfig)
+            let gridConfig = GridConfig()
+            Task {
+                do {
+                    try await gridConfig.load()
+                    jlog("grid.cfg.ready")
+                } catch {
+                    jlog("err.grid.cfg", data: ["err": "\(error)"])
+                }
+            }
+
             // Initialize StateManager (async) and connect border events
             Task {
-                await StateManager.shared.start()
+                await StateManager.shared.start(gridConfig: gridConfig)
                 await StateManager.shared.setBorderEvents(borderEvents)
                 jlog("state.init")
             }
@@ -116,6 +127,7 @@ struct GridServerCommand: ParsableCommand {
             // Initialize BFD hotkey daemon
             // Note: bfdManager captured by shutdown closure - will be stopped on exit
             let bfdManager = BFDManager()
+            BFDManager.shared = bfdManager
             Task {
                 if await bfdManager.start() {
                     jlog("bfd.ready")
@@ -156,10 +168,10 @@ struct GridServerCommand: ParsableCommand {
 
             jlog("srv.ready")
 
-            // Keep the server running
-            while !shouldShutdown {
-                RunLoop.current.run(mode: .default, before: Date.distantFuture)
-            }
+            // Run the NSApplication event loop.
+            // Required when launched via `open -a` so macOS treats us as a
+            // responsive GUI app and delivers keyboard/mouse events properly.
+            NSApp.run()
 
         } catch {
             jlog("err.srv.start", data: ["err": "\(error)"])
