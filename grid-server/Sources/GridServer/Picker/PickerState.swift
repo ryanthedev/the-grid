@@ -189,6 +189,37 @@ class PickerState {
 
     // MARK: - Async Streaming
 
+    /// Replace all items with a new sorted list.
+    /// Preserves current query filter and selection identity.
+    /// Must be called on main thread.
+    func replaceItems(_ newItems: [PickerItem]) {
+        let previouslySelectedID = selectedItem?.id
+
+        // Replace all items
+        allItems = newItems
+
+        // Re-apply current filter
+        filteredResults = FuzzyMatcher.match(query: query, items: allItems)
+
+        // Restore selection by ID if it still exists in filtered results
+        if let prevID = previouslySelectedID,
+           let restoredIndex = filteredResults.firstIndex(where: { $0.item.id == prevID }) {
+            selectedIndex = restoredIndex
+            if selectedIndex < scrollOffset {
+                scrollOffset = selectedIndex
+            }
+            let visibleCount = countVisibleItemsFrom(scrollOffset)
+            if selectedIndex >= scrollOffset + visibleCount {
+                scrollOffset = findScrollOffsetToShow(selectedIndex)
+            }
+        } else {
+            selectedIndex = min(selectedIndex, max(0, filteredResults.count - 1))
+            scrollOffset = 0
+        }
+
+        onStateChange?()
+    }
+
     /// Append new items from an async source, deduplicating by ID
     /// Must be called on main thread
     func appendItems(_ newItems: [PickerItem]) {

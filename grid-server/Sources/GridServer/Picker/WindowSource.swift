@@ -2,16 +2,25 @@
 // WindowSource.swift
 // GridServer
 //
-// PickerSource that reads windows from StateManager
+// PickerSource that reads windows from StateManager.
+// Phase 2: Uses WindowEnricher for enriched titles and stable window IDs.
 //
 
 import Foundation
+import CryptoKit
 
 /// Reads windows from StateManager and builds PickerItems for the picker
 struct WindowSource: PickerSource {
     let id = "windows"
 
+    // Injected by PickerManager (shared per discovery session)
+    let enricher: WindowEnricher
+
     func discover() async throws -> [PickerItem] {
+        // 1. Refresh enricher caches (subprocess calls for process tree, tmux, ssh)
+        await enricher.refreshCaches()
+
+        // 2. Get windows from StateManager
         let state = await StateManager.shared.getState()
 
         var items: [PickerItem] = []
@@ -24,7 +33,7 @@ struct WindowSource: PickerSource {
             guard window.alpha > 0.01 else { continue }
 
             // Skip non-standard windows (popups, menus, sheets, etc.)
-            // Only include AXStandardWindow subrole, or nil subrole (some apps don't set it)
+            // Only include AXStandardWindow subrole, or nil subrole
             if let subrole = window.subrole, subrole != "AXStandardWindow" {
                 continue
             }
@@ -33,26 +42,60 @@ struct WindowSource: PickerSource {
             let pidStr = "\(window.pid)"
             let app = state.applications[pidStr]
             let appName = window.appName ?? app?.localizedName ?? "Unknown"
-            let bundleID = app?.bundleIdentifier
+            let bundleID = app?.bundleIdentifier ?? ""
+            let windowTitle = window.title ?? ""
 
-            // Build title: "AppName — Window Title" or just "AppName" if no distinct title
+            // Enrichment: tmux session, SSH connection, or Chrome profile
+            let enrichment = await enricher.enrich(
+                bundleID: bundleID,
+                pid: pid_t(window.pid),
+                title: windowTitle
+            )
+
+            // Build title and subtitle from enrichment result
             let title: String
-            if let windowTitle = window.title, !windowTitle.isEmpty, windowTitle != appName {
-                title = "\(appName) — \(windowTitle)"
+            let subtitle: String?
+
+            if let e = enrichment {
+                // Enriched: use enricher's title (e.g., "user@host" or session name)
+                title = "\(appName) — \(e.title)"
+                subtitle = e.subtitle.isEmpty ? nil : e.subtitle
             } else {
-                title = appName
+                // Non-enriched: existing logic
+                if !windowTitle.isEmpty && windowTitle != appName {
+                    title = "\(appName) — \(windowTitle)"
+                } else {
+                    title = appName
+                }
+                subtitle = bundleID.isEmpty ? nil : bundleID
             }
 
-            // Icon from bundle ID (IconRenderer handles "bundle:" prefix)
-            let icon: String? = bundleID.map { "bundle:\($0)" }
+            // Stable window ID for history tracking across restarts
+            let wid = Int(windowIDStr) ?? 0
+            let stableID = generateStableID(
+                wid: wid,
+                enrichment: enrichment,
+                bundleID: bundleID,
+                title: windowTitle,
+                pid: window.pid
+            )
 
-            // Searchable: app name + window title + bundle ID
+            // Icon from bundle ID
+            let icon: String? = bundleID.isEmpty ? nil : "bundle:\(bundleID)"
+
+            // Searchable: app name + window title + bundle ID + enriched text
             var searchable = [appName]
-            if let windowTitle = window.title, !windowTitle.isEmpty {
+            if !windowTitle.isEmpty {
                 searchable.append(windowTitle)
             }
-            if let bid = bundleID {
-                searchable.append(bid)
+            if !bundleID.isEmpty {
+                searchable.append(bundleID)
+            }
+            if let e = enrichment {
+                searchable.append(e.title)
+                if !e.subtitle.isEmpty {
+                    searchable.append(e.subtitle)
+                }
             }
 
             // Metadata for PickerAction.focusWindow
@@ -61,14 +104,14 @@ struct WindowSource: PickerSource {
                 "pid": "\(window.pid)",
                 "windowID": windowIDStr
             ]
-            if let bid = bundleID {
-                metadata["bundleID"] = bid
+            if !bundleID.isEmpty {
+                metadata["bundleID"] = bundleID
             }
 
             let item = PickerItem(
-                id: "win-\(windowIDStr)",
+                id: stableID,
                 title: title,
-                subtitle: bundleID,
+                subtitle: subtitle,
                 icon: icon,
                 searchable: searchable,
                 metadata: metadata,
@@ -79,9 +122,92 @@ struct WindowSource: PickerSource {
             items.append(item)
         }
 
-        // Sort by title for consistent ordering
+        // Persist tmux cache after processing all windows
+        enricher.cleanup()
+
+        // Sort by title for consistent initial ordering
         items.sort { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
 
         return items
     }
+}
+
+// MARK: - Stable Window ID Generation
+
+/// Generate a stable ID for a window that persists across restarts.
+/// Port of Go stableWindowID().
+func generateStableID(
+    wid: Int,
+    enrichment: EnrichmentResult?,
+    bundleID: String,
+    title: String,
+    pid: Int32
+) -> String {
+    // Enriched windows use stableIDSuffix from enrichment
+    if let e = enrichment, !e.stableIDSuffix.isEmpty {
+        let suffix = e.stableIDSuffix
+        switch e.kind {
+        case .tmux:
+            return "tmux:\(suffix)"
+        case .ssh:
+            return "ssh:\(suffix)"
+        case .sshAndTmux:
+            // suffix is already "user@host/session:window"
+            return "ssh:\(suffix)"
+        case .chrome:
+            // Already has "chrome:" prefix
+            return suffix
+        }
+    }
+
+    // Non-enriched with bundle ID: use normalized title + hash for stability
+    if !bundleID.isEmpty {
+        if !title.isEmpty && title != "Untitled" {
+            let normalized = normalizeTitle(title)
+            if !normalized.isEmpty {
+                return "\(bundleID):\(normalized):\(hash4(title))"
+            }
+        }
+        return "\(bundleID):untitled:\(wid)"
+    }
+
+    // Fallback: unknown window
+    return "unknown:\(wid)"
+}
+
+/// Normalize a window title for use in a stable ID.
+/// Port of Go normalizeTitle().
+/// lowercase -> replace [^a-z0-9]+ with "-" -> trim hyphens -> truncate 30 -> trim trailing hyphen
+func normalizeTitle(_ title: String) -> String {
+    var result = title.lowercased()
+
+    // Replace runs of non-alphanumeric characters with hyphens
+    let regex = try! NSRegularExpression(pattern: "[^a-z0-9]+")
+    result = regex.stringByReplacingMatches(
+        in: result,
+        range: NSRange(result.startIndex..., in: result),
+        withTemplate: "-"
+    )
+
+    // Trim leading/trailing hyphens
+    result = result.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+
+    // Truncate to 30 characters
+    if result.count > 30 {
+        result = String(result.prefix(30))
+    }
+
+    // Trim trailing hyphen after truncation
+    if result.hasSuffix("-") {
+        result = String(result.dropLast())
+    }
+
+    return result
+}
+
+/// First 4 hex characters of SHA256 hash.
+/// Port of Go hash4().
+func hash4(_ s: String) -> String {
+    let digest = SHA256.hash(data: Data(s.utf8))
+    return String(digest.map { String(format: "%02x", $0) }.joined().prefix(4))
 }

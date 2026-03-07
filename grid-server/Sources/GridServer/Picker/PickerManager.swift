@@ -21,7 +21,20 @@ class PickerManager {
     private var isActivating = false
     private var activationGraceTimer: DispatchWorkItem?
 
-    private init() {}
+    // History: loaded once on init, saved on each selection
+    private var history: PickerHistory
+
+    // All items accumulated during current session (for global frecency re-sort)
+    private var allItems: [PickerItem] = []
+
+    private init() {
+        // Load history from disk on server start
+        history = PickerHistory.load()
+        jlog("pick.hist.loaded", data: [
+            "entries": "\(history.frequency.count)",
+            "previous": history.previous
+        ])
+    }
 
     // MARK: - Show / Hide
 
@@ -37,6 +50,7 @@ class PickerManager {
         }
 
         isVisible = true
+        allItems = []  // Reset accumulated items for fresh show
 
         // Create window lazily — reuse across show/hide cycles
         if window == nil {
@@ -115,6 +129,11 @@ class PickerManager {
 
         switch result {
         case .selected(let item):
+            // Record selection in history and persist immediately
+            history.recordSelection(item.id)
+            history.save()
+            jlog("pick.selected", data: ["id": item.id])
+
             executeAction(for: item)
         case .cancelled:
             break
@@ -155,10 +174,14 @@ class PickerManager {
 
     // MARK: - Async Discovery
 
-    /// Run all PickerSources concurrently and stream items to the window as each completes
+    /// Run all PickerSources concurrently and stream items to the window as each completes.
+    /// After each batch, all accumulated items are re-sorted by frecency.
     private func discoverAndStream() async {
+        // Create shared enricher for this discovery session
+        let enricher = WindowEnricher()
+
         let sources: [PickerSource] = [
-            WindowSource()
+            WindowSource(enricher: enricher)
             // Future phases: AppSource(), ZoxideSource(), etc.
         ]
 
@@ -178,10 +201,18 @@ class PickerManager {
                 // Check cancellation before dispatching to main
                 guard !Task.isCancelled else { break }
 
-                // Append items on main thread
+                // Accumulate and sort on main thread
                 await MainActor.run {
                     guard isVisible, let window = window else { return }
-                    window.getState().appendItems(items)
+
+                    // Accumulate items from this batch
+                    allItems.append(contentsOf: items)
+
+                    // Sort all accumulated items by frecency (stable — preserves order for ties)
+                    history.sortByFrecency(&allItems)
+
+                    // Replace all items in state (preserves query filter + selection)
+                    window.getState().replaceItems(allItems)
                 }
             }
         }
