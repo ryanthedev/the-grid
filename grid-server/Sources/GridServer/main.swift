@@ -117,11 +117,28 @@ struct GridServerCommand: ParsableCommand {
                 }
             }
 
-            // Initialize StateManager (async) and connect border events
+            // Initialize GridState (load persisted state)
+            let gridState = GridState()
+            Task {
+                await gridState.load()
+            }
+
+            // Initialize GridReconciler (wired after StateManager starts)
+            let gridReconciler = GridReconciler()
+
+            // Initialize StateManager (async) and connect border events + reconciler
             Task {
                 await StateManager.shared.start(gridConfig: gridConfig)
                 await StateManager.shared.setBorderEvents(borderEvents)
                 jlog("state.init")
+
+                // Wire reconciler after StateManager is ready
+                gridReconciler.setup(
+                    gridState: gridState,
+                    gridConfig: gridConfig,
+                    stateManager: StateManager.shared,
+                    simpleBorderManager: simpleBorderManager
+                )
             }
 
             // Initialize BFD hotkey daemon
