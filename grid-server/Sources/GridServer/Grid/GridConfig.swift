@@ -417,6 +417,43 @@ final class GridConfig {
         settings.windowExclusion.mergedWithDefaults()
     }
 
+    // MARK: - Export
+
+    func exportSummary() -> [String: Any] {
+        var layoutSummaries: [[String: Any]] = []
+        for l in layouts {
+            layoutSummaries.append([
+                "id": l.id,
+                "name": l.name ?? l.id,
+            ])
+        }
+
+        var settingsDict: [String: Any] = [
+            "defaultStackMode": settings.defaultStackMode.rawValue,
+            "baseSpacing": settings.baseSpacing,
+            "focusFollowsMouse": settings.focusFollowsMouse,
+            "animationDuration": settings.animationDuration,
+        ]
+        if let padding = settings.padding {
+            settingsDict["padding"] = [
+                "top": padding.top.resolve(baseSpacing: settings.baseSpacing),
+                "right": padding.right.resolve(baseSpacing: settings.baseSpacing),
+                "bottom": padding.bottom.resolve(baseSpacing: settings.baseSpacing),
+                "left": padding.left.resolve(baseSpacing: settings.baseSpacing),
+            ]
+        }
+        if let ws = settings.windowSpacing {
+            settingsDict["windowSpacing"] = ws.resolve(baseSpacing: settings.baseSpacing)
+        }
+
+        return [
+            "layouts": layoutSummaries,
+            "spaces": Array(spaces.keys),
+            "appRuleCount": appRules.count,
+            "settings": settingsDict,
+        ]
+    }
+
     // MARK: - Validation
 
     private func validate() throws {

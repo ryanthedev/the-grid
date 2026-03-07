@@ -163,6 +163,14 @@ struct GridServerCommand: ParsableCommand {
                 simpleBorderManager: simpleBorderManager
             )
 
+            // Register Grid RPC handlers (thin CLI bridge)
+            messageHandler.registerGridHandlers(
+                router: commandRouter,
+                gridState: gridState,
+                gridConfig: gridConfig,
+                stateManager: StateManager.shared
+            )
+
             // Initialize BFD hotkey daemon
             // Note: bfdManager captured by shutdown closure - will be stopped on exit
             let bfdManager = BFDManager()

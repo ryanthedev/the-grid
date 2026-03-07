@@ -722,6 +722,17 @@ actor GridState {
         ] as [String: Any]
     }
 
+    // MARK: - Export
+
+    func exportState() -> GridRuntimeStateData {
+        return GridRuntimeStateData(
+            version: GridState.stateVersion,
+            spaces: spaces,
+            displaySpaces: displaySpaces,
+            lastUpdated: lastUpdated
+        )
+    }
+
     // MARK: - Ratio Utilities (private)
 
     private func equalRatios(_ n: Int) -> [Double] {

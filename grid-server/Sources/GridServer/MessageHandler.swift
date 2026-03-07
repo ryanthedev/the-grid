@@ -1343,4 +1343,474 @@ completion(Response(id: request.id, result: AnyCodable(["success": true])))
         }
 
     }
+
+    // MARK: - Grid RPC Handlers
+
+    func registerGridHandlers(
+        router: GridCommandRouter,
+        gridState: GridState,
+        gridConfig: GridConfig,
+        stateManager: StateManager
+    ) {
+        // Helper: dispatch a command string through GridCommandRouter and respond
+        func dispatchAndRespond(
+            _ request: Request,
+            commandString: String,
+            completion: @escaping (Response) -> Void
+        ) {
+            Task {
+                jlog("grid.rpc.dispatch", data: ["method": request.method, "cmd": commandString])
+                let result = await router.dispatch(commandString)
+                if result.success {
+                    completion(Response(
+                        id: request.id,
+                        result: AnyCodable(["ok": true, "message": result.message])
+                    ))
+                } else {
+                    completion(Response(
+                        id: request.id,
+                        error: ErrorInfo(code: -32000, message: result.message)
+                    ))
+                }
+            }
+        }
+
+        // Helper: build command string from RPC params
+        func buildCommand(domain: String, action: String = "", params: [String: AnyCodable]?) -> String {
+            var parts = ["@\(domain)"]
+            if !action.isEmpty {
+                parts.append(action)
+            }
+
+            guard let params = params else {
+                return parts.joined(separator: " ")
+            }
+
+            // Positional args
+            if let direction = params["direction"]?.value as? String {
+                parts.append(direction)
+            }
+            if let layout = params["layout"]?.value as? String {
+                parts.append(layout)
+            }
+            if let cell = params["cell"]?.value as? String {
+                parts.append(cell)
+            }
+            if let mode = params["mode"]?.value as? String {
+                parts.append(mode)
+            }
+
+            // Amount (for resize)
+            if let amount = params["amount"]?.value as? Double {
+                parts.append(String(amount))
+            } else if let amount = params["amount"]?.value as? Int {
+                parts.append(String(amount))
+            }
+
+            // Boolean flags
+            let boolFlags = ["wrap", "extend", "mouse", "cell", "all"]
+            for flag in boolFlags {
+                if let val = params[flag]?.value as? Bool, val {
+                    parts.append("--\(flag)")
+                }
+            }
+
+            // Value flags
+            let valueFlags = ["strategy", "space", "display", "direction"]
+            for flag in valueFlags {
+                // Skip "direction" if already used as positional
+                if flag == "direction" { continue }
+                if let val = params[flag]?.value as? String {
+                    parts.append("--\(flag)")
+                    parts.append(val)
+                }
+            }
+
+            // Strategy and space as value flags
+            if let strategy = params["strategy"]?.value as? String {
+                parts.append("--strategy")
+                parts.append(strategy)
+            }
+            if let space = params["space"]?.value as? String {
+                parts.append("--space")
+                parts.append(space)
+            }
+            if let display = params["display"]?.value as? String {
+                parts.append("--display")
+                parts.append(display)
+            }
+
+            return parts.joined(separator: " ")
+        }
+
+        // ============================================================
+        // ACTION RPCs -- delegate to router.dispatch()
+        // ============================================================
+
+        // grid.focus -- { direction: "left"|"right"|"up"|"down", wrap?: bool, extend?: bool, mouse?: bool }
+        register(method: "grid.focus") { request, completion in
+            guard let direction = request.params?["direction"]?.value as? String, !direction.isEmpty else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "missing required param: direction")))
+                return
+            }
+            let cmd = buildCommand(domain: "focus", action: direction, params: request.params)
+            dispatchAndRespond(request, commandString: cmd, completion: completion)
+        }
+
+        // grid.focus.cycle -- { forward?: bool }
+        register(method: "grid.focus.cycle") { request, completion in
+            let forward = request.params?["forward"]?.value as? Bool ?? true
+            let action = forward ? "next" : "prev"
+            let cmd = buildCommand(domain: "focus", action: action, params: nil)
+            dispatchAndRespond(request, commandString: cmd, completion: completion)
+        }
+
+        // grid.focus.cell -- { cell: string, space?: string }
+        register(method: "grid.focus.cell") { request, completion in
+            guard let cellID = request.params?["cell"]?.value as? String, !cellID.isEmpty else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "missing required param: cell")))
+                return
+            }
+            var cmd = "@focus cell \(cellID)"
+            if let space = request.params?["space"]?.value as? String, !space.isEmpty {
+                cmd += " --space \(space)"
+            }
+            dispatchAndRespond(request, commandString: cmd, completion: completion)
+        }
+
+        // grid.layout.apply -- { layout: string, strategy?: string }
+        register(method: "grid.layout.apply") { request, completion in
+            guard let layoutID = request.params?["layout"]?.value as? String, !layoutID.isEmpty else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "missing required param: layout")))
+                return
+            }
+            var cmd = "@layout apply \(layoutID)"
+            if let strategy = request.params?["strategy"]?.value as? String, !strategy.isEmpty {
+                cmd += " --strategy \(strategy)"
+            }
+            dispatchAndRespond(request, commandString: cmd, completion: completion)
+        }
+
+        // grid.layout.refresh -- { display?: string }
+        register(method: "grid.layout.refresh") { request, completion in
+            var cmd = "@layout refresh"
+            if let display = request.params?["display"]?.value as? String, !display.isEmpty {
+                cmd += " --display \(display)"
+            }
+            dispatchAndRespond(request, commandString: cmd, completion: completion)
+        }
+
+        // grid.layout.cycle -- {}
+        register(method: "grid.layout.cycle") { request, completion in
+            let cmd = "@layout cycle"
+            dispatchAndRespond(request, commandString: cmd, completion: completion)
+        }
+
+        // grid.cell.send -- { direction: string }
+        register(method: "grid.cell.send") { request, completion in
+            guard let direction = request.params?["direction"]?.value as? String, !direction.isEmpty else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "missing required param: direction")))
+                return
+            }
+            let cmd = "@cell send \(direction)"
+            dispatchAndRespond(request, commandString: cmd, completion: completion)
+        }
+
+        // grid.cell.mode -- { mode?: string }
+        register(method: "grid.cell.mode") { request, completion in
+            var cmd = "@cell mode"
+            if let mode = request.params?["mode"]?.value as? String, !mode.isEmpty {
+                cmd += " \(mode)"
+            }
+            dispatchAndRespond(request, commandString: cmd, completion: completion)
+        }
+
+        // grid.window.move -- { direction: string, wrap?: bool, extend?: bool }
+        register(method: "grid.window.move") { request, completion in
+            guard let direction = request.params?["direction"]?.value as? String, !direction.isEmpty else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "missing required param: direction")))
+                return
+            }
+            var cmd = "@window move \(direction)"
+            if let wrap = request.params?["wrap"]?.value as? Bool, wrap {
+                cmd += " --wrap"
+            }
+            if let extend = request.params?["extend"]?.value as? Bool, extend {
+                cmd += " --extend"
+            }
+            dispatchAndRespond(request, commandString: cmd, completion: completion)
+        }
+
+        // grid.window.swap -- { direction: string }
+        register(method: "grid.window.swap") { request, completion in
+            guard let direction = request.params?["direction"]?.value as? String, !direction.isEmpty else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "missing required param: direction")))
+                return
+            }
+            let cmd = "@cell swap \(direction)"
+            dispatchAndRespond(request, commandString: cmd, completion: completion)
+        }
+
+        // grid.resize.adjust -- { delta: double, cell?: bool, direction?: string }
+        register(method: "grid.resize.adjust") { request, completion in
+            var delta: Double = 0
+            if let d = request.params?["delta"]?.value as? Double {
+                delta = d
+            } else if let d = request.params?["delta"]?.value as? Int {
+                delta = Double(d)
+            } else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "missing required param: delta")))
+                return
+            }
+            let action = delta >= 0 ? "grow" : "shrink"
+            let amount = abs(delta)
+            var cmd = "@resize \(action) \(amount)"
+            if let cell = request.params?["cell"]?.value as? Bool, cell {
+                cmd += " --cell"
+            }
+            if let dir = request.params?["direction"]?.value as? String, !dir.isEmpty {
+                cmd += " --direction \(dir)"
+            }
+            dispatchAndRespond(request, commandString: cmd, completion: completion)
+        }
+
+        // grid.resize.cell -- { direction: string, delta: double }
+        register(method: "grid.resize.cell") { request, completion in
+            guard let direction = request.params?["direction"]?.value as? String, !direction.isEmpty else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "missing required param: direction")))
+                return
+            }
+            var delta: Double = 0
+            if let d = request.params?["delta"]?.value as? Double {
+                delta = d
+            } else if let d = request.params?["delta"]?.value as? Int {
+                delta = Double(d)
+            } else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "missing required param: delta")))
+                return
+            }
+            let action = delta >= 0 ? "grow" : "shrink"
+            let amount = abs(delta)
+            let cmd = "@resize \(action) \(amount) --cell --direction \(direction)"
+            dispatchAndRespond(request, commandString: cmd, completion: completion)
+        }
+
+        // grid.resize.reset -- { cell?: bool, all?: bool }
+        register(method: "grid.resize.reset") { request, completion in
+            var cmd = "@resize reset"
+            if let cell = request.params?["cell"]?.value as? Bool, cell {
+                cmd += " --cell"
+            }
+            if let all = request.params?["all"]?.value as? Bool, all {
+                cmd += " --all"
+            }
+            dispatchAndRespond(request, commandString: cmd, completion: completion)
+        }
+
+        // grid.state.reset -- {}
+        register(method: "grid.state.reset") { request, completion in
+            let cmd = "@state reset"
+            dispatchAndRespond(request, commandString: cmd, completion: completion)
+        }
+
+        // ============================================================
+        // QUERY RPCs -- call modules directly for structured responses
+        // ============================================================
+
+        // grid.layout.current -- {} -> { layout: string, space: string }
+        register(method: "grid.layout.current") { request, completion in
+            Task {
+                let wmState = await stateManager.getState()
+                // Find active space ID from the first display
+                var spaceID = ""
+                for display in wmState.displays {
+                    if display.currentSpaceID != 0 {
+                        spaceID = String(display.currentSpaceID)
+                        break
+                    }
+                }
+                let currentLayoutID = await gridState.getCurrentLayout(spaceID: spaceID)
+                completion(Response(
+                    id: request.id,
+                    result: AnyCodable(["layout": currentLayoutID, "space": spaceID])
+                ))
+            }
+        }
+
+        // grid.layout.list -- {} -> { layouts: [string] }
+        register(method: "grid.layout.list") { request, completion in
+            Task { @MainActor in
+                let layoutIDs = gridConfig.getLayoutIDs()
+                completion(Response(
+                    id: request.id,
+                    result: AnyCodable(["layouts": layoutIDs])
+                ))
+            }
+        }
+
+        // grid.layout.get -- { layout: string } -> { layout: <layout def as JSON> }
+        register(method: "grid.layout.get") { request, completion in
+            guard let layoutID = request.params?["layout"]?.value as? String, !layoutID.isEmpty else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "missing required param: layout")))
+                return
+            }
+            Task { @MainActor in
+                do {
+                    let layoutDef = try gridConfig.getLayout(id: layoutID)
+                    let dict = layoutDefToDict(layoutDef)
+                    completion(Response(
+                        id: request.id,
+                        result: AnyCodable(["layout": dict])
+                    ))
+                } catch {
+                    completion(Response(
+                        id: request.id,
+                        error: ErrorInfo(code: -32000, message: "layout not found: \(layoutID)")
+                    ))
+                }
+            }
+        }
+
+        // grid.layout.update -- stub
+        register(method: "grid.layout.update") { request, completion in
+            completion(Response(
+                id: request.id,
+                error: ErrorInfo(code: -32000, message: "not yet implemented")
+            ))
+        }
+
+        // grid.layout.save -- stub
+        register(method: "grid.layout.save") { request, completion in
+            completion(Response(
+                id: request.id,
+                error: ErrorInfo(code: -32000, message: "not yet implemented")
+            ))
+        }
+
+        // grid.state.show -- {} -> { state: <full grid state JSON> }
+        register(method: "grid.state.show") { request, completion in
+            Task {
+                let stateData = await gridState.exportState()
+                do {
+                    let encoder = JSONEncoder()
+                    encoder.outputFormatting = [.sortedKeys]
+                    let jsonData = try encoder.encode(stateData)
+                    if let dict = try JSONSerialization.jsonObject(with: jsonData) as? [String: Any] {
+                        completion(Response(
+                            id: request.id,
+                            result: AnyCodable(["state": dict])
+                        ))
+                    } else {
+                        completion(Response(
+                            id: request.id,
+                            error: ErrorInfo(code: -32000, message: "failed to serialize state")
+                        ))
+                    }
+                } catch {
+                    completion(Response(
+                        id: request.id,
+                        error: ErrorInfo(code: -32000, message: "failed to encode state: \(error)")
+                    ))
+                }
+            }
+        }
+
+        // grid.config.show -- {} -> { config: <summary> }
+        register(method: "grid.config.show") { request, completion in
+            Task { @MainActor in
+                let summary = gridConfig.exportSummary()
+                completion(Response(
+                    id: request.id,
+                    result: AnyCodable(["config": summary])
+                ))
+            }
+        }
+
+        // grid.record.start -- stub until Phase 11
+        register(method: "grid.record.start") { request, completion in
+            completion(Response(
+                id: request.id,
+                error: ErrorInfo(code: -32000, message: "recording not yet implemented")
+            ))
+        }
+
+        jlog("grid.rpc.registered")
+    }
+}
+
+// MARK: - Layout Def Serialization Helper
+
+private func layoutDefToDict(_ layout: GridLayoutDef) -> [String: Any] {
+    var columns: [[String: Any]] = []
+    for col in layout.columns {
+        columns.append(trackSizeToDict(col))
+    }
+    var rows: [[String: Any]] = []
+    for row in layout.rows {
+        rows.append(trackSizeToDict(row))
+    }
+
+    var cells: [[String: Any]] = []
+    for cell in layout.cells {
+        var cellDict: [String: Any] = [
+            "id": cell.id,
+            "columnStart": cell.columnStart,
+            "columnEnd": cell.columnEnd,
+            "rowStart": cell.rowStart,
+            "rowEnd": cell.rowEnd,
+        ]
+        if let mode = cell.stackMode {
+            cellDict["stackMode"] = mode.rawValue
+        }
+        cells.append(cellDict)
+    }
+
+    var cellModes: [String: String] = [:]
+    for (k, v) in layout.cellModes {
+        cellModes[k] = v.rawValue
+    }
+
+    var dict: [String: Any] = [
+        "id": layout.id,
+        "name": layout.name,
+        "description": layout.description,
+        "grid": ["columns": columns, "rows": rows],
+        "cells": cells,
+        "cellModes": cellModes,
+    ]
+
+    if let padding = layout.padding {
+        dict["padding"] = [
+            "top": paddingValueToDict(padding.top),
+            "right": paddingValueToDict(padding.right),
+            "bottom": paddingValueToDict(padding.bottom),
+            "left": paddingValueToDict(padding.left),
+        ]
+    }
+
+    if let ws = layout.windowSpacing {
+        dict["windowSpacing"] = paddingValueToDict(ws)
+    }
+
+    return dict
+}
+
+private func trackSizeToDict(_ ts: GridTrackSize) -> [String: Any] {
+    switch ts.type {
+    case .fr:
+        return ["type": "fr", "value": ts.value]
+    case .px:
+        return ["type": "px", "value": ts.value]
+    case .auto:
+        return ["type": "auto"]
+    case .minmax:
+        return ["type": "minmax", "min": ts.min, "max": ts.max]
+    }
+}
+
+private func paddingValueToDict(_ pv: GridPaddingValue) -> [String: Any] {
+    if pv.isRelative {
+        return ["baseMultiple": pv.baseMultiple, "isRelative": true]
+    }
+    return ["pixels": pv.pixels]
 }
