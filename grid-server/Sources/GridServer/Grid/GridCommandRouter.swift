@@ -122,6 +122,8 @@ class GridCommandRouter {
         // Circular dependency resolution
         gridCellOps.setApply(gridApply)
         gridWindowMove.setApply(gridApply)
+        gridReconciler.setApply(gridApply)
+        gridReconciler.setFocus(gridFocus)
 
         jlog("router.init")
     }
