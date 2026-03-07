@@ -9,6 +9,12 @@
 import Foundation
 import CoreGraphics
 
+struct PendingLaunchTarget {
+    let spaceID: String
+    let cellID: String
+    let createdAt: CFAbsoluteTime
+}
+
 class GridReconciler: StateEventHandler {
 
     // Dependencies (set via setup)
@@ -17,22 +23,77 @@ class GridReconciler: StateEventHandler {
     private weak var stateManager: StateManager?
     private weak var simpleBorderManager: SimpleBorderManager?
 
+    // Weak references to GridApply and GridFocus for picker-launched window handling
+    private weak var gridApply: GridApply?
+    private weak var gridFocus: GridFocus?
+
+    // One-shot target: next tileable window created on target space claims this cell
+    private var pendingLaunchTarget: PendingLaunchTarget?
+
+    // Timeout for pending launch target (app may take time to launch)
+    private let pendingLaunchTimeout: CFAbsoluteTime = 15.0
+
     // Suppression flag for bulk operations (layout apply)
     private var suppressReconciliation: Bool = false
+
+    // Move cooldown: after a cross-display move, ignore OS focus events
+    // for non-target windows to prevent delayed appActivated from
+    // bouncing borders to wrong windows.
+    private var moveTargetWindowID: UInt32 = 0
+    private var moveEndTime: CFAbsoluteTime = 0
+    private let moveCooldownSeconds: CFAbsoluteTime = 1.0
 
     init() {}
 
     // MARK: - Public API
 
-    // Set suppression (called by GridApply in Phase 6)
-    func setSuppressed(_ suppressed: Bool) {
+    // Set suppression (called by GridApply and GridWindowMove)
+    // syncOnResume: if true, triggers syncBordersForCurrentSpace when unsuppressing
+    func setSuppressed(_ suppressed: Bool, syncOnResume: Bool = true) {
         suppressReconciliation = suppressed
-        if !suppressed {
-            // Unsuppressed: trigger a full border sync for current space
+        if !suppressed && syncOnResume {
             Task {
                 await syncBordersForCurrentSpace()
             }
         }
+    }
+
+    // Track cross-display move target so we can ignore spurious OS focus events.
+    // Call beginMove before the move, endMove after explicit border syncs.
+    func beginMove(targetWindowID: UInt32) {
+        moveTargetWindowID = targetWindowID
+        suppressReconciliation = true
+    }
+
+    func endMove() {
+        suppressReconciliation = false
+        moveEndTime = CFAbsoluteTimeGetCurrent()
+    }
+
+    // Clear move cooldown so explicit user actions (focus commands)
+    // aren't suppressed by stale move tracking
+    func clearMoveCooldown() {
+        moveTargetWindowID = 0
+    }
+
+    func setPendingLaunchTarget(_ target: PendingLaunchTarget?) {
+        pendingLaunchTarget = target
+        if let target {
+            jlog("reconcile.pending.set", data: ["spaceID": target.spaceID, "cellID": target.cellID])
+        }
+    }
+
+    func setApply(_ apply: GridApply) {
+        self.gridApply = apply
+    }
+
+    func setFocus(_ focus: GridFocus) {
+        self.gridFocus = focus
+    }
+
+    private var isInMoveCooldown: Bool {
+        moveTargetWindowID != 0
+            && (CFAbsoluteTimeGetCurrent() - moveEndTime) < moveCooldownSeconds
     }
 
     // Store references, register with EventRouter
@@ -57,10 +118,19 @@ class GridReconciler: StateEventHandler {
     // MARK: - StateEventHandler
 
     func handle(_ event: StateEvent, context: EventContext) async throws {
-        // Always track focus even when suppressed
+        // Focus events handle suppression/cooldown internally
         if case .focusChanged(let focusState) = event {
             await handleFocusChanged(focusState)
             return
+        }
+
+        // Check pending launch target for windowCreated BEFORE suppression guard.
+        // Picker-launched windows must be claimed even during move suppression.
+        if case .windowCreated(let windowID, let pid) = event {
+            if pendingLaunchTarget != nil {
+                await handlePendingLaunchWindow(windowID, pid)
+                return
+            }
         }
 
         // Skip other events when suppressed
@@ -149,47 +219,154 @@ class GridReconciler: StateEventHandler {
         jlog("reconcile.win.create", data: ["wid": windowID, "cell": leastPopulatedCell])
     }
 
+    private func handlePendingLaunchWindow(_ windowID: UInt32, _ pid: pid_t) async {
+        guard let target = pendingLaunchTarget else {
+            // No target (race condition safety) -- fall through
+            await handleWindowCreated(windowID, pid)
+            return
+        }
+
+        // Always clear target first (one-shot: prevents retry on failure)
+        pendingLaunchTarget = nil
+
+        // Check timeout
+        let elapsed = CFAbsoluteTimeGetCurrent() - target.createdAt
+        if elapsed > pendingLaunchTimeout {
+            jlog("reconcile.pending.expired", data: ["elapsed": elapsed])
+            await handleWindowCreated(windowID, pid)
+            return
+        }
+
+        // Get window state from StateManager
+        guard let stateManager else { return }
+        let wmState = await stateManager.getState()
+        guard let windowState = wmState.windows[String(windowID)] else {
+            await handleWindowCreated(windowID, pid)
+            return
+        }
+
+        // Validate: must be tileable
+        if !isTileable(window: windowState) {
+            await handleWindowCreated(windowID, pid)
+            return
+        }
+
+        // Validate: must be standard category
+        let appName = windowState.appName ?? ""
+        let category = classifyWindow(window: windowState, appName: appName)
+        if category != .standard {
+            await handleWindowCreated(windowID, pid)
+            return
+        }
+
+        // Validate: window appeared on the target space
+        let actualSpaceID = findCurrentSpaceID(from: wmState)
+        if actualSpaceID == nil || actualSpaceID != target.spaceID {
+            jlog("reconcile.pending.space.mismatch", data: [
+                "expected": target.spaceID,
+                "actual": actualSpaceID ?? "nil",
+            ])
+            await handleWindowCreated(windowID, pid)
+            return
+        }
+
+        // Validate: target space has an active layout
+        guard let gridState else { return }
+        let layoutID = await gridState.getCurrentLayout(spaceID: target.spaceID)
+        if layoutID.isEmpty {
+            await handleWindowCreated(windowID, pid)
+            return
+        }
+
+        // All checks passed: assign to target cell
+        await gridState.prependWindow(windowID, toCellID: target.cellID, inSpace: target.spaceID)
+        await gridState.setFocus(spaceID: target.spaceID, cellID: target.cellID, windowIndex: 0)
+
+        // Apply layout to position all windows in the cell
+        try? await gridApply?.applyCellLayout(spaceID: target.spaceID, cellID: target.cellID)
+
+        // Focus the new window via accessibility
+        try? await gridFocus?.focusWindowByID(windowID)
+
+        // Sync borders to reflect new assignment
+        await syncBordersForCurrentSpace()
+
+        jlog("reconcile.win.create.picker", data: ["wid": windowID, "cell": target.cellID])
+    }
+
     private func handleFocusChanged(_ focusState: FocusState) async {
-        // Always track focus, even when suppressed
-        let spaceID = String(focusState.spaceID)
-        guard let gridState, let windowID = focusState.windowID else { return }
+        guard let gridState, let stateManager, let windowID = focusState.windowID else { return }
+
+        // During suppression (active move), skip entirely — our move code
+        // sets GridState focus explicitly, and OS events would overwrite it.
+        if suppressReconciliation {
+            jlog("reconcile.focus.suppressed", data: ["wid": windowID])
+            return
+        }
+
+        // During cooldown after a cross-display move, skip ALL focus events.
+        // The explicit border syncs already set correct state. OS fires delayed
+        // appActivated events for 1-3 seconds that would undo our work.
+        if isInMoveCooldown {
+            jlog("reconcile.focus.cooldown", data: [
+                "ignored": windowID,
+                "expected": moveTargetWindowID,
+                "age_ms": Int((CFAbsoluteTimeGetCurrent() - moveEndTime) * 1000),
+            ])
+            return
+        }
+
+        // Resolve spaceID and displayUUID.
+        // Primary: look up the window's actual space from GridState (authoritative
+        // after moves, since we update GridState synchronously).
+        // Fallback: metadata.activeSpaceID (for windows not yet in GridState).
+        var spaceID: String
+        var displayUUID: String
+
+        if let gridSpaceID = await gridState.findSpaceContaining(windowID: windowID) {
+            // Window is tracked in GridState — use its actual space
+            spaceID = gridSpaceID
+            let wmState = await stateManager.getState()
+            displayUUID = findDisplayUUIDForSpace(gridSpaceID, from: wmState) ?? ""
+        } else if focusState.spaceID != 0 {
+            // Event carries space info (rare but handle it)
+            spaceID = String(focusState.spaceID)
+            displayUUID = focusState.displayUUID
+        } else {
+            // Window not in GridState — fall back to metadata
+            let wmState = await stateManager.getState()
+            guard let resolved = findCurrentSpaceID(from: wmState) else { return }
+            spaceID = resolved
+            displayUUID = findCurrentDisplayUUID(from: wmState) ?? ""
+        }
 
         // Detect space change
         let spaceChanged = focusState.previousSpaceID != nil
             && focusState.previousSpaceID != focusState.spaceID
+            && focusState.spaceID != 0
 
         if spaceChanged {
             await handleSpaceChanged(
                 newSpaceID: spaceID,
-                displayUUID: focusState.displayUUID
+                displayUUID: displayUUID
             )
         }
 
         // Update GridState focus to match OS focus
         let cellID = await gridState.getWindowCell(windowID: windowID, inSpace: spaceID)
         if let cellID {
-            // Find window index in cell
             let cellWindows = await gridState.getCellWindows(spaceID: spaceID, cellID: cellID)
             let windowIndex = cellWindows.firstIndex(of: windowID) ?? 0
             await gridState.setFocus(spaceID: spaceID, cellID: cellID, windowIndex: windowIndex)
         }
 
-        // Update border focus (always, even when suppressed for focus tracking,
-        // but skip border sync when suppressed)
-        if !suppressReconciliation {
+        // Update border focus and sync
+        if !displayUUID.isEmpty {
             simpleBorderManager?.updateFocus(
                 newFocusedWindow: windowID,
-                displayUUID: focusState.displayUUID
+                displayUUID: displayUUID
             )
-        }
-
-        // If display changed, sync borders for new display
-        if focusState.previousDisplayUUID != nil
-            && focusState.previousDisplayUUID != focusState.displayUUID {
-            // Cross-display focus change: sync borders for new display
-            if !suppressReconciliation {
-                await syncBordersForSpace(spaceID, displayUUID: focusState.displayUUID)
-            }
+            await syncBordersForSpace(spaceID, displayUUID: displayUUID)
         }
     }
 
@@ -357,6 +534,11 @@ class GridReconciler: StateEventHandler {
     // MARK: - Helpers
 
     private func findCurrentSpaceID(from wmState: WindowManagerState) -> String? {
+        // Use metadata.activeSpaceID which tracks the focused display's space
+        // (with multiple monitors, each display has its own active space)
+        if let activeSpaceID = wmState.metadata.activeSpaceID {
+            return String(activeSpaceID)
+        }
         for (spaceKey, space) in wmState.spaces {
             if space.isActive {
                 return spaceKey
@@ -366,9 +548,22 @@ class GridReconciler: StateEventHandler {
     }
 
     private func findCurrentDisplayUUID(from wmState: WindowManagerState) -> String? {
+        // Use metadata.activeDisplayUUID which tracks the focused display
+        if let activeDisplayUUID = wmState.metadata.activeDisplayUUID {
+            return activeDisplayUUID
+        }
         for (_, space) in wmState.spaces {
             if space.isActive {
                 return space.displayUUID
+            }
+        }
+        return nil
+    }
+
+    private func findDisplayUUIDForSpace(_ spaceID: String, from wmState: WindowManagerState) -> String? {
+        for display in wmState.displays {
+            if String(display.currentSpaceID) == spaceID {
+                return display.uuid
             }
         }
         return nil
