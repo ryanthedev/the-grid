@@ -1,4 +1,4 @@
-.PHONY: help build server cli terminal viewer test clean server-test cli-test server-clean cli-clean run-server install dist dev reset-accessibility setup-signing install-scripts server-universal cli-universal terminal-universal viewer-universal dist-universal
+.PHONY: help build server cli terminal viewer test clean server-test server-clean run-server install dist dev reset-accessibility setup-signing server-universal cli-universal terminal-universal viewer-universal dist-universal
 
 # Version from VERSION file
 VERSION := $(shell cat VERSION)
@@ -52,28 +52,16 @@ server-clean:
 	@echo "Cleaning grid-server..."
 	@cd grid-server && swift package clean
 
-# CLI targets
+# CLI target (Swift)
 cli:
-	@echo "Building grid-cli..."
-	@cd grid-cli && $(MAKE) build VERSION=$(VERSION) COMMIT=$(COMMIT)
-
-cli-test:
-	@echo "Running grid-cli tests..."
-	@cd grid-cli && $(MAKE) test
-
-cli-clean:
-	@echo "Cleaning grid-cli..."
-	@cd grid-cli && $(MAKE) clean
-
-cli-install:
-	@echo "Installing grid-cli..."
-	@cd grid-cli && $(MAKE) install
+	@echo "Building grid-cli (Swift)..."
+	@cd grid-server && swift build --product grid-cli
 
 # Combined targets
-test: server-test cli-test
+test: server-test
 	@echo "✓ All tests passed"
 
-clean: server-clean cli-clean
+clean: server-clean
 	@echo "✓ Cleaned all components"
 
 # Quick verification
@@ -86,7 +74,7 @@ dist: server-release cli
 	@rm -rf dist
 	@mkdir -p dist/thegrid-$(VERSION)/bin
 	@cp grid-server/.build/release/grid-server dist/thegrid-$(VERSION)/bin/
-	@cp grid-cli/bin/thegrid dist/thegrid-$(VERSION)/bin/
+	@cp grid-server/.build/release/grid-cli dist/thegrid-$(VERSION)/bin/thegrid
 	@cp VERSION dist/thegrid-$(VERSION)/
 	@cp LICENSE dist/thegrid-$(VERSION)/ 2>/dev/null || echo "No LICENSE file"
 	@cp README.md dist/thegrid-$(VERSION)/ 2>/dev/null || true
@@ -109,19 +97,15 @@ server-universal: generate-version
 	fi
 
 cli-universal:
-	@echo "Building thegrid CLI (universal binary) v$(VERSION)..."
-	@mkdir -p grid-cli/bin
-	@cd grid-cli && GOOS=darwin GOARCH=arm64 go build -ldflags "-X main.Version=$(VERSION) -X main.Commit=$(COMMIT)" -o bin/thegrid-arm64 ./cmd/grid
-	@cd grid-cli && GOOS=darwin GOARCH=amd64 go build -ldflags "-X main.Version=$(VERSION) -X main.Commit=$(COMMIT)" -o bin/thegrid-amd64 ./cmd/grid
-	@lipo -create -output grid-cli/bin/thegrid grid-cli/bin/thegrid-arm64 grid-cli/bin/thegrid-amd64
-	@rm grid-cli/bin/thegrid-arm64 grid-cli/bin/thegrid-amd64
+	@echo "Building grid-cli universal binary..."
+	@cd grid-server && swift build -c release --product grid-cli --arch arm64 --arch x86_64
 	@echo "Verifying universal binary..."
-	@if ! file grid-cli/bin/thegrid | grep -q "universal binary"; then \
-		echo "Error: Failed to create universal binary for thegrid CLI"; \
+	@if ! file grid-server/.build/apple/Products/Release/grid-cli | grep -q "universal binary"; then \
+		echo "Error: Failed to create universal binary for grid-cli"; \
 		exit 1; \
 	fi
-	@echo "Created universal binary: grid-cli/bin/thegrid"
-	@file grid-cli/bin/thegrid
+	@echo "Created universal binary: grid-server/.build/apple/Products/Release/grid-cli"
+	@file grid-server/.build/apple/Products/Release/grid-cli
 
 viewer-universal:
 	@echo "Building grid-viewer (universal binary)..."
@@ -158,7 +142,7 @@ dist-universal: app-bundle cli-universal viewer-universal
 	@rm -rf dist/thegrid-$(VERSION)
 	@mkdir -p dist/thegrid-$(VERSION)/bin
 	@cp -R dist/GridServer.app dist/thegrid-$(VERSION)/
-	@cp grid-cli/bin/thegrid dist/thegrid-$(VERSION)/bin/
+	@cp grid-server/.build/apple/Products/Release/grid-cli dist/thegrid-$(VERSION)/bin/thegrid
 	@cp grid-server/.build/apple/Products/Release/grid-viewer dist/thegrid-$(VERSION)/bin/
 	@cp VERSION dist/thegrid-$(VERSION)/
 	@cp LICENSE dist/thegrid-$(VERSION)/ 2>/dev/null || echo "No LICENSE file"
@@ -201,10 +185,7 @@ help:
 	@echo "  server-clean     - Clean grid-server build"
 	@echo ""
 	@echo "CLI targets:"
-	@echo "  cli              - Build thegrid CLI"
-	@echo "  cli-test         - Run grid-cli tests"
-	@echo "  cli-clean        - Clean grid-cli build"
-	@echo "  cli-install      - Install thegrid to \$$GOPATH/bin"
+	@echo "  cli              - Build Swift CLI"
 	@echo ""
 	@echo "Usage examples:"
 	@echo "  make dev          # Build debug app bundle"
@@ -219,7 +200,7 @@ APP_BUNDLE := grid-server/.build/debug/GridServer.app
 DEPLOY_LOCATION := $(HOME)/.local/state/thegrid/GridServer.app
 
 # Build debug app bundle
-dev: server cli terminal viewer
+dev: server terminal viewer
 	@echo "Creating debug GridServer.app bundle..."
 	@mkdir -p $(APP_BUNDLE)/Contents/MacOS
 	@mkdir -p $(APP_BUNDLE)/Contents/Resources
@@ -250,25 +231,14 @@ run: dev install-dev
 # Install dev build to ~/.local/bin
 install-dev: cli viewer
 	@mkdir -p ~/.local/bin
-	@cp grid-cli/bin/thegrid ~/.local/bin/thegrid
+	@cp grid-server/.build/debug/grid-cli ~/.local/bin/thegrid
 	@cp grid-server/.build/debug/grid-viewer ~/.local/bin/grid-viewer
 	@echo "✓ Installed dev CLI to ~/.local/bin/thegrid"
 	@echo "✓ Installed grid-viewer to ~/.local/bin/grid-viewer"
 
-# Install utility scripts to ~/.local/bin
-install-scripts:
-	@mkdir -p ~/.local/bin
-	@ln -sf $(CURDIR)/scripts/reapply-layouts.sh ~/.local/bin/thegrid-reapply-layouts
-	@ln -sf $(CURDIR)/scripts/reset-accessibility.sh ~/.local/bin/thegrid-reset-accessibility
-	@echo "✓ Installed scripts to ~/.local/bin"
-
 # Tail server logs (real-time streaming)
 tail-server:
 	@tail -f ~/.local/state/thegrid/thegrid-server.json | jq --unbuffered -c '{ev: .ev, data: .data}'
-
-# Tail CLI logs (real-time streaming)
-tail-cli:
-	@tail -f ~/.local/state/thegrid/thegrid-cli.json | jq --unbuffered -c '{ev: .ev, data: .data}'
 
 # Tail both logs
 tail:

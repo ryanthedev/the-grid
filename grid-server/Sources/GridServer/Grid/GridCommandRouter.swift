@@ -153,6 +153,9 @@ class GridCommandRouter {
                 return try await handleState(parsed)
             case "record":
                 return try await handleRecord(parsed)
+            case "terminal":
+                DistributedNotificationCenter.default().post(name: NSNotification.Name("com.thegrid.terminal.toggle"), object: nil)
+                return .ok("terminal toggled")
             default:
                 return .error("unknown domain: \(parsed.domain)")
             }

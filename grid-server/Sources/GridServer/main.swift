@@ -56,6 +56,15 @@ struct GridServerCommand: ParsableCommand {
         try? killPicker.run()
         killPicker.waitUntilExit()
 
+        // Remove stale Go CLI mutex file
+        let stateDir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".local/state/thegrid")
+        let lockPath = stateDir.appendingPathComponent("cli.lock")
+        if FileManager.default.fileExists(atPath: lockPath.path) {
+            try? FileManager.default.removeItem(at: lockPath)
+            jlog("srv.cleanup", data: ["file": lockPath.path])
+        }
+
         // Log server start
         jlog("srv.start", data: ["ver": GridServerVersion, "commit": GridServerCommit, "socket": socketPath])
 
