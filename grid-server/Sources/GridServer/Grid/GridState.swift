@@ -684,6 +684,15 @@ actor GridState {
         markDirty()
     }
 
+    // Clear column and row ratios to nil (layout defaults)
+    func clearTrackRatios(spaceID: String) {
+        guard var space = spaces[spaceID] else { return }
+        space.columnRatios = nil
+        space.rowRatios = nil
+        spaces[spaceID] = space
+        markDirty()
+    }
+
     // MARK: - Query Helpers
 
     func hasState(spaceID: String) -> Bool {

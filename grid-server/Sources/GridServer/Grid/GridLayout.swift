@@ -620,6 +620,68 @@ enum GridLayout {
         )
     }
 
+    // MARK: - Track Ratio Helpers
+
+    // Count how many tracks are flexible (fr or minmax type)
+    static func countFlexibleTracks(_ tracks: [GridTrackSize]) -> Int {
+        var count = 0
+        for track in tracks {
+            if track.type == .fr || track.type == .minmax {
+                count += 1
+            }
+        }
+        return count
+    }
+
+    // Create initial ratios from track fr values (proportional to their fr weights)
+    static func initializeTrackRatios(_ tracks: [GridTrackSize]) -> [Double] {
+        let flexCount = countFlexibleTracks(tracks)
+        if flexCount == 0 { return [] }
+
+        var totalFr: Double = 0
+        for track in tracks {
+            if track.type == .fr {
+                totalFr += track.value
+            } else if track.type == .minmax {
+                totalFr += track.max
+            }
+        }
+
+        if totalFr == 0 {
+            return equalRatios(flexCount)
+        }
+
+        var ratios: [Double] = []
+        ratios.reserveCapacity(flexCount)
+        for track in tracks {
+            if track.type == .fr {
+                ratios.append(track.value / totalFr)
+            } else if track.type == .minmax {
+                ratios.append(track.max / totalFr)
+            }
+        }
+
+        return normalizeRatios(ratios)
+    }
+
+    // Map an overall track index to its position in the flex-only ratios array.
+    // Returns -1 if the track at that index is not flexible.
+    static func getFlexBoundaryIndex(_ tracks: [GridTrackSize], _ trackIndex: Int) -> Int {
+        var flexIndex = 0
+        for (i, track) in tracks.enumerated() {
+            if i == trackIndex {
+                if track.type == .fr || track.type == .minmax {
+                    return flexIndex
+                }
+                return -1
+            }
+            if track.type == .fr || track.type == .minmax {
+                flexIndex += 1
+            }
+        }
+        return -1
+    }
+
     // MARK: - Split Ratio Adjustment
 
     static func adjustSplitRatio(
