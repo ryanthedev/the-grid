@@ -1303,5 +1303,44 @@ completion(Response(id: request.id, result: AnyCodable(["success": true])))
             }
         }
 
+        // MARK: - Picker
+
+        // pick.show - trigger the picker UI and wait for user selection
+        register(method: "pick.show") { request, completion in
+            Task { @MainActor in
+                let result = await PickerManager.shared.showForRPC()
+
+                let response: Response
+                switch result {
+                case .selected(let item):
+                    var selected: [String: Any] = [
+                        "id": item.id,
+                        "title": item.title
+                    ]
+                    if let subtitle = item.subtitle {
+                        selected["subtitle"] = subtitle
+                    }
+                    if let metadata = item.metadata {
+                        selected["metadata"] = metadata
+                    }
+                    response = Response(
+                        id: request.id,
+                        result: AnyCodable([
+                            "cancelled": false,
+                            "selected": selected
+                        ])
+                    )
+                case .cancelled:
+                    response = Response(
+                        id: request.id,
+                        result: AnyCodable([
+                            "cancelled": true
+                        ])
+                    )
+                }
+                completion(response)
+            }
+        }
+
     }
 }

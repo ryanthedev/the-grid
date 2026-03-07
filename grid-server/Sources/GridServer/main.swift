@@ -49,6 +49,13 @@ struct GridServerCommand: ParsableCommand {
         try? killTask.run()
         killTask.waitUntilExit()
 
+        // Kill any stale grid-picker from previous sessions
+        let killPicker = Process()
+        killPicker.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
+        killPicker.arguments = ["-9", "-f", "grid-picker"]
+        try? killPicker.run()
+        killPicker.waitUntilExit()
+
         // Log server start
         jlog("srv.start", data: ["ver": GridServerVersion, "commit": GridServerCommit, "socket": socketPath])
 

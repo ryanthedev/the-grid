@@ -1,18 +1,12 @@
 package main
 
 import (
-	"bufio"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -32,7 +26,6 @@ import (
 	"github.com/ryanthedev/grid-cli/internal/output"
 	gridReconcile "github.com/ryanthedev/grid-cli/internal/reconcile"
 	gridServer "github.com/ryanthedev/grid-cli/internal/server"
-	"github.com/ryanthedev/grid-cli/internal/sources"
 	gridState "github.com/ryanthedev/grid-cli/internal/state"
 	"github.com/ryanthedev/grid-cli/internal/tracing"
 	gridTypes "github.com/ryanthedev/grid-cli/internal/types"
@@ -2107,1079 +2100,46 @@ Syncs border focus if the window is tileable.`,
 
 // MARK: - the-grid Pick Commands
 
-// pickCmd is the unified launcher entry point
+// pickCmd triggers the picker via RPC to the server
 var pickCmd = &cobra.Command{
 	Use:   "pick",
-	Short: "Unified launcher - search windows, apps, actions",
-	Long:  `Launches a unified picker to search and select windows, applications, Chrome profiles, and custom actions.`,
-	RunE:  runUnifiedPick,
+	Short: "Open the unified picker",
+	Long: `Triggers the picker UI via the server.
+The server shows the picker window, user selects,
+server executes the action.`,
+	RunE: runPick,
 }
 
-// pickWindowCmd launches an interactive window picker
-var pickWindowCmd = &cobra.Command{
-	Use:   "window",
-	Short: "Pick a window interactively",
-	Long:  `Launches an interactive picker to select a window from a list.`,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return runPickWindow()
-	},
-}
-
-// PickerItem represents an item for the grid-picker UI
-type PickerItem struct {
-	ID         string            `json:"id"`
-	Title      string            `json:"title"`
-	Subtitle   string            `json:"subtitle,omitempty"`
-	Preview    string            `json:"preview,omitempty"`
-	Icon       string            `json:"icon,omitempty"`
-	Searchable []string          `json:"searchable"`
-	Metadata   map[string]string `json:"metadata,omitempty"`
-	Priority   int               `json:"priority"`
-}
-
-// PickerResult represents the outcome of a picker interaction
-type PickerResult struct {
-	Cancelled bool        `json:"cancelled"`
-	Selected  *PickerItem `json:"selected,omitempty"`
-}
-
-// PickerContext holds additional data needed for stable ID generation
-type PickerContext struct {
-	TmuxInfo  map[int]*enrichers.Result
-	BundleIDs map[int]string
-	Titles    map[int]string
-	PIDs      map[int]int
-}
-
-// findPickerExecutable locates the grid-picker binary by checking standard locations.
-// If overridePath is set, it takes precedence and errors if invalid (no silent fallback).
-func findPickerExecutable(overridePath string) (string, error) {
-	// If override path is provided, use it exclusively (no fallback)
-	if overridePath != "" {
-		info, err := os.Stat(overridePath)
-		if err != nil {
-			return "", fmt.Errorf("configured pickerPath %q not found: %w", overridePath, err)
-		}
-		// Check if file is executable (has any execute bit set)
-		if info.Mode()&0111 == 0 {
-			return "", fmt.Errorf("configured pickerPath %q is not executable", overridePath)
-		}
-		return overridePath, nil
-	}
-
-	// Build list of paths to check in order of preference
-	var searchPaths []string
-	var searchedLocations []string
-
-	// 1. XDG state home: ~/.local/state/thegrid/grid-picker
-	stateDir := filepath.Join(xdg.StateHome(), "thegrid")
-	statePath := filepath.Join(stateDir, "grid-picker")
-	searchPaths = append(searchPaths, statePath)
-	searchedLocations = append(searchedLocations, statePath)
-
-	// 2. Same directory as current executable
-	if execPath, err := os.Executable(); err == nil {
-		execDir := filepath.Dir(execPath)
-		execDirPath := filepath.Join(execDir, "grid-picker")
-		searchPaths = append(searchPaths, execDirPath)
-		searchedLocations = append(searchedLocations, execDirPath)
-	}
-
-	// 3. System PATH lookup
-	if pathExec, err := exec.LookPath("grid-picker"); err == nil {
-		searchPaths = append(searchPaths, pathExec)
-	}
-	searchedLocations = append(searchedLocations, "system PATH")
-
-	// Check each path for existence and executability
-	for _, path := range searchPaths {
-		info, err := os.Stat(path)
-		if err != nil {
-			continue
-		}
-		// Check if file is executable (has any execute bit set)
-		if info.Mode()&0111 != 0 {
-			return path, nil
-		}
-	}
-
-	// Build error message listing all searched locations
-	return "", fmt.Errorf("grid-picker not found in:\n  - %s", strings.Join(searchedLocations, "\n  - "))
-}
-
-// pickerSocketPath returns the path to the picker daemon Unix socket.
-func pickerSocketPath() string {
-	return filepath.Join(xdg.StateHome(), "thegrid", "grid-picker.sock")
-}
-
-// tryPickerSocket attempts to connect to an existing picker daemon and send items.
-// Returns the picker result or an error if the daemon is not available.
-func tryPickerSocket(items []PickerItem) (*PickerResult, error) {
-	conn, err := net.Dial("unix", pickerSocketPath())
-	if err != nil {
-		return nil, err
-	}
-	defer conn.Close()
-
-	// 5 minute deadline for interactive use (user may take time to select)
-	conn.SetDeadline(time.Now().Add(5 * time.Minute))
-
-	// Send items as newline-delimited JSON
-	encoder := json.NewEncoder(conn)
-	if err := encoder.Encode(items); err != nil {
-		return nil, fmt.Errorf("failed to write items to picker socket: %w", err)
-	}
-
-	// Read response line
-	reader := bufio.NewReader(conn)
-	line, err := reader.ReadBytes('\n')
-	if err != nil {
-		return nil, fmt.Errorf("failed to read picker response: %w", err)
-	}
-
-	var result PickerResult
-	if err := json.Unmarshal(line, &result); err != nil {
-		return nil, fmt.Errorf("failed to parse picker response: %w", err)
-	}
-
-	return &result, nil
-}
-
-// spawnPickerDaemon launches the picker as a background daemon process.
-func spawnPickerDaemon(pickerPathOverride string) error {
-	pickerPath, err := findPickerExecutable(pickerPathOverride)
-	if err != nil {
-		return err
-	}
-
-	cmd := exec.Command(pickerPath)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Stdout = nil
-	cmd.Stderr = os.Stderr
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("failed to launch picker daemon: %w", err)
-	}
-
-	// Don't wait for the daemon process
-	go cmd.Wait()
-	return nil
-}
-
-// waitForPickerSocket polls until the picker daemon socket is ready to accept connections.
-func waitForPickerSocket(timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	sockPath := pickerSocketPath()
-
-	for time.Now().Before(deadline) {
-		// Check if socket file exists
-		if _, err := os.Stat(sockPath); err == nil {
-			// File exists — try connecting to verify daemon is listening
-			conn, err := net.Dial("unix", sockPath)
-			if err == nil {
-				conn.Close()
-				return nil
-			}
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-
-	return fmt.Errorf("picker daemon did not start within %s", timeout)
-}
-
-// launchPicker connects to the picker daemon (spawning it if needed) and returns the selection result.
-// pickerPathOverride, if set, takes precedence over default search paths.
-func launchPicker(items []PickerItem, pickerPathOverride string) (*PickerResult, error) {
-	// Try existing daemon first
-	if result, err := tryPickerSocket(items); err == nil {
-		jsonlog.Log("pick.socket.reuse")
-		return result, nil
-	}
-
-	// Spawn daemon
-	jsonlog.Log("pick.socket.spawn")
-	if err := spawnPickerDaemon(pickerPathOverride); err != nil {
-		return nil, err
-	}
-
-	// Wait for daemon to be ready
-	if err := waitForPickerSocket(2 * time.Second); err != nil {
-		jsonlog.Log("pick.socket.timeout", jsonlog.WithMsg(err.Error()))
-		return nil, err
-	}
-	jsonlog.Log("pick.socket.ready")
-
-	// Try again
-	return tryPickerSocket(items)
-}
-
-// getAllWindows fetches all windows from the server via dump RPC
-func getAllWindows(ctx context.Context, c *client.Client) ([]*models.Window, *models.State, error) {
-	result, err := c.Dump(ctx)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to dump state: %w", err)
-	}
-
-	state, err := models.ParseState(result)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to parse state: %w", err)
-	}
-
-	windows := filterWindows(state.GetWindows())
-	return windows, state, nil
-}
-
-// windowsToPickerItems transforms windows into PickerItem format for grid-picker
-// Also returns PickerContext with data needed for stable ID generation
-func windowsToPickerItems(windows []*models.Window, state *models.State) ([]PickerItem, *PickerContext) {
-	items := make([]PickerItem, 0, len(windows))
-	pctx := &PickerContext{
-		TmuxInfo:  make(map[int]*enrichers.Result),
-		BundleIDs: make(map[int]string),
-		Titles:    make(map[int]string),
-		PIDs:      make(map[int]int),
-	}
-
-	// Initialize enricher registry and refresh caches
-	registry := enrichers.NewRegistry()
-	registry.RefreshCaches()
-
-	// Refresh process tree once (single ps call instead of many pgrep calls)
-	process.RefreshProcessTree()
-
-	for _, w := range windows {
-		// Store PID for stable ID generation
-		pctx.PIDs[w.ID] = w.PID
-
-		// Get title with fallback
-		title := "Untitled"
-		if w.Title != nil && *w.Title != "" {
-			title = *w.Title
-		}
-		// Store original title for stable ID
-		pctx.Titles[w.ID] = title
-
-		// Get app name with fallback
-		appName := "Unknown"
-		if w.AppName != nil && *w.AppName != "" {
-			appName = *w.AppName
-		}
-
-		// Get bundle identifier from application
-		bundleID := ""
-		if app := state.FindApplicationByPID(w.PID); app != nil {
-			bundleID = app.BundleIdentifier
-		}
-		pctx.BundleIDs[w.ID] = bundleID
-
-		// Try to enrich terminal windows
-		// Enrichers use cached data, so calling for each window is efficient
-		if enrichResult := registry.Enrich(bundleID, w.PID, title); enrichResult != nil {
-			if enrichResult.Title != "" {
-				title = enrichResult.Title
-			}
-			pctx.TmuxInfo[w.ID] = enrichResult
-		}
-
-		// Build searchable strings
-		searchable := []string{title, appName}
-		if bundleID != "" {
-			searchable = append(searchable, bundleID)
-		}
-
-		// Build icon string (bundle: prefix for app icons)
-		icon := ""
-		if bundleID != "" {
-			icon = "bundle:" + bundleID
-		}
-
-		// Build subtitle and preview
-		subtitle := appName
-		preview := ""
-		if enrichResult, ok := pctx.TmuxInfo[w.ID]; ok {
-			if enrichResult.Subtitle != "" {
-				subtitle = enrichResult.Subtitle
-			}
-			// Add enriched info to searchable
-			if enrichResult.Title != "" {
-				searchable = append(searchable, enrichResult.Title)
-			}
-			if enrichResult.Subtitle != "" {
-				searchable = append(searchable, enrichResult.Subtitle)
-			}
-		}
-
-		item := PickerItem{
-			ID:         strconv.Itoa(w.ID),
-			Title:      title,
-			Subtitle:   subtitle,
-			Preview:    preview,
-			Icon:       icon,
-			Searchable: searchable,
-			Metadata:   map[string]string{"wid": strconv.Itoa(w.ID)},
-		}
-		items = append(items, item)
-	}
-
-	// Cleanup enricher caches
-	registry.Cleanup()
-
-	return items, pctx
-}
-
-// normalizeTitle converts a title to a stable, URL-safe form
-// lowercase, keep alphanumeric + hyphens, truncate to 30 chars
-func normalizeTitle(title string) string {
-	// Convert to lowercase
-	title = strings.ToLower(title)
-	// Replace non-alphanumeric with hyphens, collapse multiple hyphens
-	re := regexp.MustCompile(`[^a-z0-9]+`)
-	title = re.ReplaceAllString(title, "-")
-	// Trim leading/trailing hyphens
-	title = strings.Trim(title, "-")
-	// Truncate to 30 chars
-	if len(title) > 30 {
-		title = title[:30]
-	}
-	// Trim trailing hyphen after truncation
-	title = strings.TrimSuffix(title, "-")
-	return title
-}
-
-// hash4 returns the first 4 hex chars of SHA256(s) for collision resistance
-func hash4(s string) string {
-	h := sha256.Sum256([]byte(s))
-	return hex.EncodeToString(h[:])[:4]
-}
-
-// stableWindowID generates a stable identifier for a window that persists across restarts.
-// Enriched windows use StableIDSuffix from enricher
-// Non-enriched: {bundleID}:{normalized_title}:{hash4}
-func stableWindowID(wid int, enrichResult *enrichers.Result, bundleID, title string, pid int) string {
-	// Enriched windows with stable ID suffix
-	if enrichResult != nil && enrichResult.StableIDSuffix != "" {
-		suffix := enrichResult.StableIDSuffix
-		// Add "tmux:" prefix for tmux-style IDs (session:window format)
-		// SSH IDs contain "@" so they get different handling
-		if !strings.Contains(suffix, "@") && strings.Contains(suffix, ":") {
-			return "tmux:" + suffix
-		}
-		// SSH or SSH+tmux IDs (contain @)
-		return "ssh:" + suffix
-	}
-
-	// Non-tmux with bundleID
-	if bundleID != "" {
-		if title != "" && title != "Untitled" {
-			normalized := normalizeTitle(title)
-			if normalized != "" {
-				return fmt.Sprintf("%s:%s:%s", bundleID, normalized, hash4(title))
-			}
-		}
-		// Empty title fallback
-		return fmt.Sprintf("%s:untitled:%d", bundleID, wid)
-	}
-
-	// Ultimate fallback
-	return fmt.Sprintf("unknown:%d", wid)
-}
-
-// sortItemsByHistory sorts picker items with previous window first,
-// then by frequency descending, then alphabetically by title
-func sortItemsByHistory(items []PickerItem, stableIDs map[int]string, history *gridState.PickerHistory) {
-	sort.SliceStable(items, func(i, j int) bool {
-		widI, _ := strconv.Atoi(items[i].Metadata["wid"])
-		widJ, _ := strconv.Atoi(items[j].Metadata["wid"])
-		idI := stableIDs[widI]
-		idJ := stableIDs[widJ]
-
-		// Previous window first
-		prevI := history.IsPrevious(idI)
-		prevJ := history.IsPrevious(idJ)
-		if prevI != prevJ {
-			return prevI
-		}
-
-		// Then by frequency descending
-		freqI := history.GetFrequency(idI)
-		freqJ := history.GetFrequency(idJ)
-		if freqI != freqJ {
-			return freqI > freqJ
-		}
-
-		// Finally alphabetically by title
-		return items[i].Title < items[j].Title
-	})
-}
-
-// runPickWindow launches the interactive window picker
-func runPickWindow() error {
+// runPick sends pick.show RPC to the server and prints the result
+func runPick(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 	c := client.NewClient(socketPath, timeout)
 	defer c.Close()
 
-	span := jsonlog.StartSpan("pick.window")
-	defer span.End()
-
-	// Get windows from server
-	fetchSpan := span.StartChild("fetch")
-	windows, serverState, err := getAllWindows(ctx, c)
-	fetchSpan.End()
+	result, err := c.CallMethod(ctx, "pick.show", nil)
 	if err != nil {
-		return err
+		return fmt.Errorf("pick failed: %w", err)
 	}
 
-	if len(windows) == 0 {
-		return fmt.Errorf("no windows found")
+	// Check if cancelled
+	if cancelled, ok := result["cancelled"].(bool); ok && cancelled {
+		return nil
 	}
 
-	// Load runtime state to get cell assignments
-	stateSpan := span.StartChild("state")
-	runtimeState, err := gridState.LoadState()
-	if err != nil {
-		return fmt.Errorf("failed to load state: %w", err)
-	}
-
-	// Load config for border sync
-	cfg, err := gridConfig.LoadConfig("")
-	if err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
-	}
-	stateSpan.End()
-
-	// Collect all window IDs assigned to cells across ALL current spaces (one per display)
-	// Also track which display each window is on for border sync
-	assignedWindowIDs := make(map[uint32]bool)
-	windowToDisplay := make(map[uint32]string)
-	for _, display := range serverState.Displays {
-		spaceID := display.GetCurrentSpaceIDString()
-		if spaceID == "" {
-			continue
-		}
-		spaceState := runtimeState.GetSpaceReadOnly(spaceID)
-		if spaceState == nil {
-			continue
-		}
-		for _, cell := range spaceState.Cells {
-			for _, wid := range cell.Windows {
-				assignedWindowIDs[wid] = true
-				windowToDisplay[wid] = display.UUID
+	// Print selected item info for scripting
+	if selected, ok := result["selected"].(map[string]interface{}); ok {
+		if id, ok := selected["id"].(string); ok {
+			fmt.Printf("%s", id)
+			if title, ok := selected["title"].(string); ok {
+				fmt.Printf("\t%s", title)
 			}
+			fmt.Println()
 		}
-	}
-
-	if len(assignedWindowIDs) == 0 {
-		return fmt.Errorf("no windows assigned to cells (run a layout first)")
-	}
-
-	// Filter windows to only those assigned to cells
-	filteredWindows := make([]*models.Window, 0, len(windows))
-	for _, w := range windows {
-		if assignedWindowIDs[uint32(w.ID)] {
-			filteredWindows = append(filteredWindows, w)
-		}
-	}
-
-	if len(filteredWindows) == 0 {
-		return fmt.Errorf("no windows assigned to cells (run a layout first)")
-	}
-
-	// Transform to picker items and get context for stable ID generation
-	enrichSpan := span.StartChild("enrich")
-	items, pctx := windowsToPickerItems(filteredWindows, serverState)
-	enrichSpan.End()
-
-	// Generate stable IDs for each window
-	stableIDs := make(map[int]string)
-	for _, item := range items {
-		wid, _ := strconv.Atoi(item.Metadata["wid"])
-		stableIDs[wid] = stableWindowID(
-			wid,
-			pctx.TmuxInfo[wid],
-			pctx.BundleIDs[wid],
-			pctx.Titles[wid],
-			pctx.PIDs[wid],
-		)
-	}
-
-	// Load picker history for sorting
-	historySpan := span.StartChild("history")
-	history, err := gridState.LoadPickerHistory()
-	if err != nil {
-		jsonlog.Log("pick.history.load_err", jsonlog.WithMsg(err.Error()))
-		history = gridState.NewPickerHistory()
-	}
-
-	// Sort items by history (previous first, then by frequency)
-	sortItemsByHistory(items, stableIDs, history)
-	historySpan.End()
-
-	// Launch picker with items (use config override if set)
-	launchSpan := span.StartChild("launch")
-	result, err := launchPicker(items, cfg.Settings.PickerPath)
-	launchSpan.End()
-	if err != nil {
-		return err
-	}
-
-	// Handle cancellation (silent exit)
-	if result.Cancelled {
-		jsonlog.Log("pick.cancel")
-		return nil
-	}
-
-	// Extract window ID from metadata
-	if result.Selected == nil {
-		return nil
-	}
-
-	widStr, ok := result.Selected.Metadata["wid"]
-	if !ok || widStr == "" {
-		return fmt.Errorf("selected item missing window ID")
-	}
-
-	widInt, err := strconv.ParseUint(widStr, 10, 32)
-	if err != nil {
-		return fmt.Errorf("invalid window ID %q: %w", widStr, err)
-	}
-	windowID := uint32(widInt)
-
-	// Record selection in history
-	if sid, ok := stableIDs[int(windowID)]; ok {
-		history.RecordSelection(sid)
-		if err := history.Save(); err != nil {
-			jsonlog.Log("pick.history.save_err", jsonlog.WithMsg(err.Error()))
-		}
-	}
-
-	jsonlog.Log("pick.select", jsonlog.WithData(map[string]any{"wid": windowID}))
-
-	// Focus the selected window
-	if err := gridFocus.FocusWindow(ctx, c, windowID); err != nil {
-		// Check if window no longer exists
-		if strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "not found") {
-			return fmt.Errorf("window no longer exists")
-		}
-		return fmt.Errorf("focus failed: %w", err)
-	}
-
-	// Sync border focus so the active border updates to the newly focused window
-	if displayUUID := windowToDisplay[windowID]; displayUUID != "" {
-		gridReconcile.SyncBorderFocus(ctx, c, displayUUID, windowID, cfg)
-	}
-
-	// Warp mouse to window (non-fatal if it fails since focus succeeded)
-	if err := gridMouse.WarpToWindow(ctx, c, windowID); err != nil {
-		jsonlog.Log("pick.warp_warn", jsonlog.WithMsg("mouse warp failed after focus"), jsonlog.WithData(map[string]any{
-			"wid": windowID,
-			"err": err.Error(),
-		}))
 	}
 
 	return nil
 }
 
-// runUnifiedPick launches the unified picker with all sources
-func runUnifiedPick(cmd *cobra.Command, args []string) error {
-	ctx := context.Background()
-
-	span := jsonlog.StartSpan("pick.unified")
-	defer span.End()
-
-	// Load config
-	configSpan := span.StartChild("config")
-	cfg, err := gridConfig.LoadConfig("")
-	if err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
-	}
-
-	// Resolve enabled sources
-	onlyFlag, _ := cmd.Flags().GetStringSlice("only")
-	excludeFlag, _ := cmd.Flags().GetStringSlice("exclude")
-	enabled := resolveEnabledSources(cfg.Picker, onlyFlag, excludeFlag)
-	configSpan.End()
-
-	jsonlog.Log("pick.sources", jsonlog.WithData(map[string]any{
-		"windows": enabled.Windows,
-		"apps":    enabled.Apps,
-		"chrome":  enabled.Chrome,
-		"actions": enabled.Actions,
-		"zoxide":  enabled.Zoxide,
-	}))
-
-	// Build source config
-	sourceCfg := sources.Config{}
-	if cfg.Picker != nil {
-		sourceCfg.Actions = cfg.Picker.Actions
-		sourceCfg.ZoxidePath = cfg.Picker.Sources.ZoxidePath
-	}
-
-	var allItems []sources.SourceItem
-
-	// Discover apps/chrome/actions/zoxide (no RPC needed)
-	sourcesSpan := span.StartChild("sources")
-	nonWindowEnabled := sources.EnabledSources{
-		Windows: false,
-		Apps:    enabled.Apps,
-		Chrome:  enabled.Chrome,
-		Actions: enabled.Actions,
-		Zoxide:  enabled.Zoxide,
-	}
-	allItems = sources.DiscoverAll(nonWindowEnabled, sourceCfg)
-	sourcesSpan.End()
-
-	// Discover windows if enabled (needs RPC client)
-	if enabled.Windows {
-		windowsSpan := span.StartChild("windows")
-		windowItems, err := discoverWindowsAsSourceItems(ctx, cfg)
-		windowsSpan.End()
-		if err != nil {
-			jsonlog.Log("pick.windows.err", jsonlog.WithMsg(err.Error()))
-			// Continue with other sources
-		} else {
-			allItems = append(allItems, windowItems...)
-		}
-	}
-
-	if len(allItems) == 0 {
-		return fmt.Errorf("no items found from any source")
-	}
-
-	// Convert to PickerItems (the type expected by launchPicker)
-	convertSpan := span.StartChild("convert")
-	pickerItems := convertSourceItemsToPickerItems(allItems)
-	convertSpan.End()
-
-	// Load history and sort by frecency
-	historySpan := span.StartChild("history")
-	history, _ := gridState.LoadPickerHistory()
-	gridState.SortByFrecency(pickerItems, func(item PickerItem) string {
-		return item.ID
-	}, history)
-	historySpan.End()
-
-	// Launch picker
-	launchSpan := span.StartChild("launch")
-	result, err := launchPicker(pickerItems, cfg.Settings.PickerPath)
-	launchSpan.End()
-	if err != nil {
-		return err
-	}
-
-	if result.Cancelled {
-		jsonlog.Log("pick.cancel")
-		return nil
-	}
-
-	if result.Selected == nil {
-		return nil
-	}
-
-	// Record selection in history
-	history.RecordSelection(result.Selected.ID)
-	if err := history.Save(); err != nil {
-		jsonlog.Log("pick.history.save_err", jsonlog.WithMsg(err.Error()))
-	}
-
-	jsonlog.Log("pick.select", jsonlog.WithData(map[string]any{
-		"id":   result.Selected.ID,
-		"type": result.Selected.Metadata["actionType"],
-	}))
-
-	// Execute action based on type
-	actionType := result.Selected.Metadata["actionType"]
-	switch actionType {
-	case "focus-window":
-		return handleWindowFocus(ctx, result.Selected, cfg)
-	case "open-dir":
-		return handleOpenDir(ctx, result.Selected, cfg)
-	default:
-		action := parseActionFromMetadata(result.Selected.Metadata)
-		return sources.ExecuteAction(ctx, action)
-	}
-}
-
-// resolveEnabledSources combines config defaults with command-line flags
-func resolveEnabledSources(picker *gridConfig.PickerConfig, only, exclude []string) sources.EnabledSources {
-	// Start with defaults (all enabled)
-	enabled := sources.EnabledSources{
-		Windows: true,
-		Apps:    true,
-		Chrome:  true,
-		Actions: true,
-		Zoxide:  true,
-	}
-
-	// Apply config settings if present
-	if picker != nil {
-		enabled.Windows = picker.Sources.Windows
-		enabled.Apps = picker.Sources.Apps
-		enabled.Chrome = picker.Sources.Chrome.Enabled
-		enabled.Actions = picker.Sources.Actions
-		enabled.Zoxide = picker.Sources.Zoxide
-	}
-
-	// If --only is specified, start with all false and enable only those
-	if len(only) > 0 {
-		enabled = sources.EnabledSources{}
-		for _, src := range only {
-			switch strings.ToLower(src) {
-			case "windows":
-				enabled.Windows = true
-			case "apps":
-				enabled.Apps = true
-			case "chrome":
-				enabled.Chrome = true
-			case "actions":
-				enabled.Actions = true
-			case "zoxide", "dirs":
-				enabled.Zoxide = true
-			}
-		}
-	}
-
-	// Apply --exclude to disable specific sources
-	for _, src := range exclude {
-		switch strings.ToLower(src) {
-		case "windows":
-			enabled.Windows = false
-		case "apps":
-			enabled.Apps = false
-		case "chrome":
-			enabled.Chrome = false
-		case "actions":
-			enabled.Actions = false
-		case "zoxide", "dirs":
-			enabled.Zoxide = false
-		}
-	}
-
-	return enabled
-}
-
-// discoverWindowsAsSourceItems discovers windows and returns them as SourceItems
-func discoverWindowsAsSourceItems(ctx context.Context, cfg *gridConfig.Config) ([]sources.SourceItem, error) {
-	c := client.NewClient(socketPath, timeout)
-	defer c.Close()
-
-	windows, serverState, err := getAllWindows(ctx, c)
-	if err != nil {
-		return nil, err
-	}
-
-	// Load runtime state for cell assignments
-	runtimeState, err := gridState.LoadState()
-	if err != nil {
-		return nil, err
-	}
-
-	// Filter to windows assigned to cells
-	assignedWindowIDs := make(map[uint32]bool)
-	windowToDisplay := make(map[uint32]string)
-	for _, display := range serverState.Displays {
-		spaceID := display.GetCurrentSpaceIDString()
-		if spaceID == "" {
-			continue
-		}
-		spaceState := runtimeState.GetSpaceReadOnly(spaceID)
-		if spaceState == nil {
-			continue
-		}
-		for _, cell := range spaceState.Cells {
-			for _, wid := range cell.Windows {
-				assignedWindowIDs[wid] = true
-				windowToDisplay[wid] = display.UUID
-			}
-		}
-	}
-
-	filteredWindows := make([]*models.Window, 0, len(windows))
-	for _, w := range windows {
-		if assignedWindowIDs[uint32(w.ID)] {
-			filteredWindows = append(filteredWindows, w)
-		}
-	}
-
-	if len(filteredWindows) == 0 {
-		return nil, nil
-	}
-
-	// Convert to PickerItems first (reuse existing function), then to SourceItems
-	pickerItems, pctx := windowsToPickerItems(filteredWindows, serverState)
-
-	sourceItems := make([]sources.SourceItem, len(pickerItems))
-	for i, pi := range pickerItems {
-		wid, _ := strconv.Atoi(pi.Metadata["wid"])
-		stableID := stableWindowID(wid, pctx.TmuxInfo[wid], pctx.BundleIDs[wid], pctx.Titles[wid], pctx.PIDs[wid])
-
-		// Copy metadata and add display UUID for border sync
-		metadata := make(map[string]string)
-		for k, v := range pi.Metadata {
-			metadata[k] = v
-		}
-		if displayUUID, ok := windowToDisplay[uint32(wid)]; ok {
-			metadata["displayUUID"] = displayUUID
-		}
-
-		sourceItems[i] = sources.SourceItem{
-			ID:         stableID,
-			Title:      pi.Title,
-			Subtitle:   pi.Subtitle,
-			Preview:    pi.Preview,
-			Icon:       pi.Icon,
-			Searchable: pi.Searchable,
-			Action: sources.Action{
-				Type:     "focus-window",
-				WindowID: wid,
-			},
-			Metadata: metadata,
-		}
-	}
-
-	return sourceItems, nil
-}
-
-// convertSourceItemsToPickerItems converts SourceItems to PickerItems for the picker
-func convertSourceItemsToPickerItems(items []sources.SourceItem) []PickerItem {
-	pickerItems := make([]PickerItem, len(items))
-	boosts := gridState.DefaultSourceBoosts()
-	for i, si := range items {
-		metadata := si.Metadata
-		if metadata == nil {
-			metadata = make(map[string]string)
-		}
-		// Store action info in metadata for later execution
-		metadata["actionType"] = si.Action.Type
-		if si.Action.WindowID != 0 {
-			metadata["wid"] = strconv.Itoa(si.Action.WindowID)
-		}
-		if si.Action.AppPath != "" {
-			metadata["appPath"] = si.Action.AppPath
-		}
-		if si.Action.Command != "" {
-			metadata["command"] = si.Action.Command
-		}
-		if si.Action.ProfileDir != "" {
-			metadata["profileDir"] = si.Action.ProfileDir
-		}
-		if si.Action.DirPath != "" {
-			metadata["dirPath"] = si.Action.DirPath
-		}
-
-		// Convert boost to integer priority (multiply by 100 for precision)
-		priority := int(boosts.GetSourceBoost(si.ID) * 100)
-
-		pickerItems[i] = PickerItem{
-			ID:         si.ID,
-			Title:      si.Title,
-			Subtitle:   si.Subtitle,
-			Preview:    si.Preview,
-			Icon:       si.Icon,
-			Searchable: si.Searchable,
-			Metadata:   metadata,
-			Priority:   priority,
-		}
-	}
-	return pickerItems
-}
-
-// parseActionFromMetadata reconstructs an Action from picker metadata
-func parseActionFromMetadata(metadata map[string]string) sources.Action {
-	wid := 0
-	if widStr, ok := metadata["wid"]; ok {
-		wid, _ = strconv.Atoi(widStr)
-	}
-
-	return sources.Action{
-		Type:       metadata["actionType"],
-		WindowID:   wid,
-		AppPath:    metadata["appPath"],
-		Command:    metadata["command"],
-		ProfileDir: metadata["profileDir"],
-		DirPath:    metadata["dirPath"],
-	}
-}
-
-// handleWindowFocus focuses a window from a picker selection
-func handleWindowFocus(ctx context.Context, selected *PickerItem, cfg *gridConfig.Config) error {
-	widStr, ok := selected.Metadata["wid"]
-	if !ok || widStr == "" {
-		return fmt.Errorf("selected item missing window ID")
-	}
-
-	widInt, err := strconv.ParseUint(widStr, 10, 32)
-	if err != nil {
-		return fmt.Errorf("invalid window ID %q: %w", widStr, err)
-	}
-	windowID := uint32(widInt)
-
-	c := client.NewClient(socketPath, timeout)
-	defer c.Close()
-
-	if err := gridFocus.FocusWindow(ctx, c, windowID); err != nil {
-		if strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "not found") {
-			return fmt.Errorf("window no longer exists")
-		}
-		return fmt.Errorf("focus failed: %w", err)
-	}
-
-	// Sync border focus so the active border updates to the newly focused window
-	if displayUUID := selected.Metadata["displayUUID"]; displayUUID != "" {
-		gridReconcile.SyncBorderFocus(ctx, c, displayUUID, windowID, cfg)
-	}
-
-	// Warp mouse to window
-	if err := gridMouse.WarpToWindow(ctx, c, windowID); err != nil {
-		jsonlog.Log("pick.warp_warn", jsonlog.WithMsg("mouse warp failed"), jsonlog.WithData(map[string]any{
-			"wid": windowID,
-			"err": err.Error(),
-		}))
-	}
-
-	return nil
-}
-
-// handleOpenDir opens a directory in a new Ghostty window with tmux,
-// then assigns the window to the current active cell.
-func handleOpenDir(ctx context.Context, selected *PickerItem, cfg *gridConfig.Config) error {
-	dirPath := selected.Metadata["dirPath"]
-	if dirPath == "" {
-		return fmt.Errorf("selected item missing dirPath")
-	}
-
-	c := client.NewClient(socketPath, timeout)
-	defer c.Close()
-
-	// Get snapshot BEFORE spawning to track existing Ghostty windows
-	preSnap, err := gridServer.Fetch(ctx, c)
-	if err != nil {
-		jsonlog.Log("pick.opendir.presnap_err", jsonlog.WithMsg(err.Error()))
-		// Continue anyway - we'll try to find the window
-	}
-
-	// Track existing Ghostty window IDs before spawn
-	existingGhosttyWindows := make(map[uint32]bool)
-	if preSnap != nil {
-		for _, w := range preSnap.Windows {
-			if w.AppName == "Ghostty" || w.BundleID == "com.mitchellh.ghostty" {
-				existingGhosttyWindows[w.ID] = true
-			}
-		}
-	}
-
-	// Execute the open-dir action (spawns Ghostty with tmux)
-	action := parseActionFromMetadata(selected.Metadata)
-	if err := sources.ExecuteAction(ctx, action); err != nil {
-		return fmt.Errorf("failed to open directory: %w", err)
-	}
-
-	// Get current state to find active cell
-	runtimeState, err := gridState.LoadState()
-	if err != nil {
-		jsonlog.Log("pick.opendir.state_err", jsonlog.WithMsg(err.Error()))
-		return nil // Don't fail - the window is open, just not assigned
-	}
-
-	// Get current space
-	snap, err := gridServer.Fetch(ctx, c)
-	if err != nil {
-		jsonlog.Log("pick.opendir.snap_err", jsonlog.WithMsg(err.Error()))
-		return nil
-	}
-
-	spaceState := runtimeState.GetSpaceReadOnly(snap.SpaceID)
-	if spaceState == nil || spaceState.FocusedCell == "" {
-		jsonlog.Log("pick.opendir.no_cell", jsonlog.WithMsg("no focused cell"))
-		return nil
-	}
-
-	activeCellID := spaceState.FocusedCell
-
-	// Poll for the new Ghostty window (up to 3 seconds)
-	// Only accept windows that didn't exist before spawn
-	var newWindowID uint32
-	for i := 0; i < 30; i++ {
-		time.Sleep(100 * time.Millisecond)
-
-		newSnap, err := gridServer.Fetch(ctx, c)
-		if err != nil {
-			continue
-		}
-
-		// Find new Ghostty window that didn't exist before spawn
-		for _, w := range newSnap.Windows {
-			if w.AppName == "Ghostty" || w.BundleID == "com.mitchellh.ghostty" {
-				// Skip windows that existed before we spawned
-				if existingGhosttyWindows[w.ID] {
-					continue
-				}
-				newWindowID = w.ID
-				break
-			}
-		}
-
-		if newWindowID != 0 {
-			break
-		}
-	}
-
-	if newWindowID == 0 {
-		jsonlog.Log("pick.opendir.no_window", jsonlog.WithMsg("new window not found"))
-		return nil
-	}
-
-	// Get the current focused index in this cell
-	cellState := spaceState.Cells[activeCellID]
-	insertIdx := 0
-	if cellState != nil && len(cellState.Windows) > 0 {
-		insertIdx = cellState.LastFocusedIdx
-	}
-
-	jsonlog.Log("pick.opendir.found", jsonlog.WithData(map[string]any{
-		"wid":  newWindowID,
-		"cell": activeCellID,
-		"idx":  insertIdx,
-	}))
-
-	// Assign window to active cell above the currently focused window
-	mutableSpaceState := runtimeState.GetSpace(snap.SpaceID)
-	mutableSpaceState.InsertWindowAtIndex(newWindowID, activeCellID, insertIdx)
-	mutableSpaceState.SetFocus(activeCellID, insertIdx)
-	runtimeState.MarkUpdated()
-
-	if err := runtimeState.Save(); err != nil {
-		jsonlog.Log("pick.opendir.save_err", jsonlog.WithMsg(err.Error()))
-	}
-
-	// Refresh snapshot and apply layout for this cell
-	newSnap, err := gridServer.Fetch(ctx, c)
-	if err != nil {
-		jsonlog.Log("pick.opendir.snap2_err", jsonlog.WithMsg(err.Error()))
-		return nil
-	}
-
-	opts := gridLayout.DefaultApplyOptions()
-	opts.Strategy = gridTypes.AssignPreserve
-	if cfg.Settings.BaseSpacing > 0 {
-		opts.BaseSpacing = cfg.Settings.BaseSpacing
-	}
-	if settingsPadding, err := cfg.GetSettingsPadding(); err == nil {
-		opts.SettingsPadding = settingsPadding
-	}
-	if settingsWindowSpacing, err := cfg.GetSettingsWindowSpacing(); err == nil {
-		opts.SettingsWindowSpacing = settingsWindowSpacing
-	}
-
-	if err := gridLayout.ApplyCellLayout(ctx, c, newSnap, cfg, runtimeState, activeCellID, opts); err != nil {
-		jsonlog.Log("pick.opendir.layout_err", jsonlog.WithMsg(err.Error()))
-	}
-
-	// Focus the new window
-	if err := gridFocus.FocusWindow(ctx, c, newWindowID); err != nil {
-		jsonlog.Log("pick.opendir.focus_err", jsonlog.WithMsg(err.Error()))
-	}
-
-	return nil
-}
 
 // MARK: - the-grid Focus Commands
 
@@ -4737,7 +3697,7 @@ The tmux session persists across toggle cycles.`,
 
 		// Tier 2: PID alive but WID stale — find window via server query
 		if savedPID > 0 && pidAlive(savedPID) {
-			wid, _, found, err := c.FindWindow(ctx, "Ghostty", "grid-terminal")
+			wid, _, found, err := c.FindWindow(ctx, "Ghostty", "grid:scratch")
 			if err == nil && found {
 				saveTerminalWID(widFile, wid)
 				params := map[string]interface{}{"windowId": fmt.Sprintf("%d", wid)}
@@ -4757,7 +3717,7 @@ The tmux session persists across toggle cycles.`,
 		}
 
 		// Tier 3: No saved state — search for orphaned grid-terminal
-		if wid, pid, found, err := c.FindWindow(ctx, "Ghostty", "grid-terminal"); err == nil && found {
+		if wid, pid, found, err := c.FindWindow(ctx, "Ghostty", "grid:scratch"); err == nil && found {
 			saveTerminalWID(widFile, wid)
 			saveTerminalPID(pidFile, pid)
 			params := map[string]interface{}{"windowId": fmt.Sprintf("%d", wid)}
@@ -4773,11 +3733,19 @@ The tmux session persists across toggle cycles.`,
 		activeDisplay, _ := c.GetActiveDisplay(ctx)
 
 		tmuxPath := tmux.FindTmux()
+		shell := os.Getenv("SHELL")
+		if shell == "" {
+			shell = "/bin/zsh"
+		}
+		// Launch tmux via the user's shell to avoid macOS security alert
+		// GRID_TERMINAL=scratch env var identifies the scratchpad window
+		tmuxCmd := tmuxPath + " new-session -A -s grid-scratch"
 		p := exec.Command("open", "-na", "Ghostty.app", "--args",
-			"--title=grid-terminal",
+			"--title=grid:scratch",
 			"--window-decoration=none",
 			"--quit-after-last-window-closed=true",
-			"-e", tmuxPath, "new-session", "-A", "-s", "grid-scratch")
+			"--env=GRID_TERMINAL=scratch",
+			"--command="+shell+" -l -c '"+tmuxCmd+"'")
 		if err := p.Run(); err != nil {
 			return fmt.Errorf("failed to launch Ghostty: %w", err)
 		}
@@ -4787,7 +3755,7 @@ The tmux session persists across toggle cycles.`,
 		var newPID int
 		for i := 0; i < 50; i++ {
 			time.Sleep(100 * time.Millisecond)
-			wid, pid, found, err := c.FindWindow(ctx, "Ghostty", "grid-terminal")
+			wid, pid, found, err := c.FindWindow(ctx, "Ghostty", "grid:scratch")
 			if err == nil && found {
 				newWinID = wid
 				newPID = pid
@@ -5064,11 +4032,8 @@ func init() {
 	rootCmd.AddCommand(eventCmd)
 	eventCmd.AddCommand(eventFocusCmd)
 
-	// Add the-grid pick commands
+	// Add the-grid pick command
 	rootCmd.AddCommand(pickCmd)
-	pickCmd.AddCommand(pickWindowCmd)
-	pickCmd.Flags().StringSlice("only", nil, "Only show these sources (windows,apps,chrome,actions)")
-	pickCmd.Flags().StringSlice("exclude", nil, "Exclude these sources")
 
 	// Add the-grid focus commands
 	rootCmd.AddCommand(focusCmd)
@@ -5240,7 +4205,6 @@ func shouldSkipMutex(cmd *cobra.Command) bool {
 		"thegrid record":      true,
 		"thegrid terminal":    true,
 		"thegrid pick":        true,
-		"thegrid pick window": true,
 		"thegrid view":        true,
 		"thegrid layout edit": true, // manages its own mutex (release during editor)
 	}

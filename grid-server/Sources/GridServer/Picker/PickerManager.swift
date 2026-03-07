@@ -17,6 +17,9 @@ class PickerManager {
     private var discoveryTask: Task<Void, Never>?
     private var isVisible = false
 
+    // Stored continuation for RPC callers awaiting a picker result
+    private var pendingRPCContinuation: CheckedContinuation<PickerResult, Never>?
+
     // Grace period flag to ignore windowDidResignKey during activation policy switch
     private var isActivating = false
     private var activationGraceTimer: DispatchWorkItem?
@@ -107,6 +110,25 @@ class PickerManager {
         jlog("pick.show")
     }
 
+    /// Show the picker for an RPC caller and wait for a result.
+    /// The server still executes the action; the result is returned for informational purposes.
+    /// Must be called on main thread (use MainActor.run from Task context).
+    func showForRPC() async -> PickerResult {
+        dispatchPrecondition(condition: .onQueue(.main))
+
+        // If already visible, cancel and return cancelled
+        if isVisible {
+            hide()
+        }
+
+        let result: PickerResult = await withCheckedContinuation { continuation in
+            self.pendingRPCContinuation = continuation
+            self.show()
+        }
+
+        return result
+    }
+
     /// Hide the picker and cancel any in-flight discovery
     /// Must be called on main thread
     func hide() {
@@ -126,6 +148,12 @@ class PickerManager {
         // Switch back to prohibited (no Dock icon)
         NSApp.setActivationPolicy(.prohibited)
 
+        // Resume any pending RPC continuation with cancelled
+        if let continuation = pendingRPCContinuation {
+            pendingRPCContinuation = nil
+            continuation.resume(returning: .cancelled)
+        }
+
         jlog("pick.hide")
     }
 
@@ -133,6 +161,10 @@ class PickerManager {
 
     /// Called by PickerWindow.onResult callback
     private func handleResult(_ result: PickerResult) {
+        // Capture pending continuation before hide() clears it
+        let continuation = pendingRPCContinuation
+        pendingRPCContinuation = nil
+
         // Hide first (clears UI before action executes)
         hide()
 
@@ -146,6 +178,11 @@ class PickerManager {
             executeAction(for: item)
         case .cancelled:
             break
+        }
+
+        // Resume RPC continuation after action execution
+        if let continuation = continuation {
+            continuation.resume(returning: result)
         }
     }
 

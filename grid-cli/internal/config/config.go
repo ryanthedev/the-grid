@@ -375,7 +375,6 @@ func ExpandTilde(path string) string {
 // ExpandPaths expands tilde in all path fields of the config.
 // This should be called after config validation.
 func (c *Config) ExpandPaths() {
-	c.Settings.PickerPath = ExpandTilde(c.Settings.PickerPath)
 	c.Settings.Recording.OutputDir = ExpandTilde(c.Settings.Recording.OutputDir)
 
 	if c.Picker != nil {

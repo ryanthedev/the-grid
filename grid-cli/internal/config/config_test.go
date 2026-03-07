@@ -809,7 +809,6 @@ func TestExpandPaths(t *testing.T) {
 
 	cfg := &Config{
 		Settings: Settings{
-			PickerPath: "~/bin/picker",
 			Recording: RecordingSettings{
 				OutputDir: "~/recordings",
 			},
@@ -826,9 +825,6 @@ func TestExpandPaths(t *testing.T) {
 
 	cfg.ExpandPaths()
 
-	if cfg.Settings.PickerPath != filepath.Join(home, "bin/picker") {
-		t.Errorf("PickerPath not expanded: %q", cfg.Settings.PickerPath)
-	}
 	if cfg.Settings.Recording.OutputDir != filepath.Join(home, "recordings") {
 		t.Errorf("OutputDir not expanded: %q", cfg.Settings.Recording.OutputDir)
 	}
