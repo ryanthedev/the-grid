@@ -43,6 +43,9 @@ class GridCommandRouter {
     private let simpleBorderManager: SimpleBorderManager
     private let gridRecorder: GridRecorder
 
+    // Cached terminal window ID to avoid full-scan on every toggle
+    private var cachedTerminalWindowID: UInt32? = nil
+
     // Short flag -> long flag mapping for BFD commands
     private static let shortFlagMap: [Character: String] = [
         "m": "mouse",
@@ -172,8 +175,7 @@ class GridCommandRouter {
             case "record":
                 return try await handleRecord(parsed)
             case "terminal":
-                DistributedNotificationCenter.default().post(name: NSNotification.Name("com.thegrid.terminal.toggle"), object: nil)
-                return .ok("terminal toggled")
+                return await handleTerminal()
             default:
                 return .error("unknown domain: \(parsed.domain)")
             }
@@ -674,6 +676,151 @@ class GridCommandRouter {
         default:
             return .cell(id: nil)
         }
+    }
+
+    // ============================================================
+    // PRIVATE: handleTerminal
+    // ============================================================
+
+    private func handleTerminal() async -> CommandResult {
+        // Get fresh window manager state
+        let wmState = await stateManager.getState()
+
+        // Try to find existing terminal window
+        if let windowID = findTerminalWindow(wmState) {
+            return await toggleTerminalWindow(windowID, wmState)
+        } else {
+            return await launchTerminal()
+        }
+    }
+
+    private func findTerminalWindow(_ wmState: WindowManagerState) -> UInt32? {
+        // Fast path: check cached ID against current state
+        if let cached = cachedTerminalWindowID {
+            if let win = wmState.windows[String(cached)] {
+                // Verify it's still the terminal (title + bundleID)
+                let app = wmState.applications[String(win.pid)]
+                if win.title == "grid-terminal"
+                    && app?.bundleIdentifier == "com.mitchellh.ghostty" {
+                    return cached
+                }
+            }
+            // Cache miss: window gone or identity changed
+            cachedTerminalWindowID = nil
+        }
+
+        // Slow path: scan all windows
+        for (widStr, win) in wmState.windows {
+            if win.title == "grid-terminal" {
+                let app = wmState.applications[String(win.pid)]
+                if app?.bundleIdentifier == "com.mitchellh.ghostty" {
+                    if let wid = UInt32(widStr) {
+                        cachedTerminalWindowID = wid
+                        return wid
+                    }
+                }
+            }
+        }
+
+        return nil
+    }
+
+    private func toggleTerminalWindow(
+        _ windowID: UInt32,
+        _ wmState: WindowManagerState
+    ) async -> CommandResult {
+        let cid = wmState.metadata.connectionID
+
+        // Check if window is currently visible (ordered in)
+        var orderedIn: UInt8 = 0
+        let err = SLSWindowIsOrderedIn(cid, windowID, &orderedIn)
+        let isVisible = (err == .success && orderedIn != 0)
+
+        // Determine if window is on the active space
+        let activeSpaceID = wmState.metadata.activeSpaceID
+        let win = wmState.windows[String(windowID)]
+        let onActiveSpace: Bool
+        if let activeSpaceID, let win {
+            onActiveSpace = win.spaces.contains(activeSpaceID)
+        } else {
+            onActiveSpace = false
+        }
+
+        if isVisible && onActiveSpace {
+            // Terminal is visible on this space -> hide it
+            _ = windowManipulator.mssClient.orderWindowOut(windowID)
+            jlog("term.hide", data: ["wid": windowID])
+            return .ok("terminal hidden")
+        } else {
+            // Terminal is hidden or on another space -> bring here and show
+            if let activeSpaceID {
+                // Move to active space if not already there
+                if !onActiveSpace {
+                    _ = windowManipulator.mssClient.moveWindowToSpace(
+                        windowID: windowID, spaceID: activeSpaceID
+                    )
+                }
+            }
+
+            // Show and focus
+            _ = windowManipulator.mssClient.orderWindowToFront(windowID)
+            if let pid = win?.pid {
+                _ = windowManipulator.focusWindow(pid: pid, windowID: windowID)
+            }
+
+            jlog("term.show", data: ["wid": windowID])
+            return .ok("terminal shown")
+        }
+    }
+
+    private func launchTerminal() async -> CommandResult {
+        // Build the launch command
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        process.arguments = [
+            "-na", "Ghostty.app",
+            "--args",
+            "--title=grid-terminal",
+            "--window-decoration=none",
+            "-e", "tmux", "new-session", "-A", "-s", "grid-scratch"
+        ]
+
+        do {
+            try process.run()
+        } catch {
+            jlog("err.term.launch", data: ["err": error.localizedDescription])
+            return .error("failed to launch terminal: \(error.localizedDescription)")
+        }
+
+        // Poll for the terminal window to appear (up to 3 seconds)
+        let maxAttempts = 15
+        for attempt in 0..<maxAttempts {
+            try? await Task.sleep(nanoseconds: 200_000_000)
+
+            let wmState = await stateManager.getState()
+            if let windowID = findTerminalWindow(wmState) {
+                // Set layer to above (persists across hide/show)
+                _ = windowManipulator.mssClient.setWindowLayer(
+                    windowID: windowID, layer: .above
+                )
+
+                // Focus the window
+                if let win = wmState.windows[String(windowID)] {
+                    _ = windowManipulator.focusWindow(
+                        pid: win.pid, windowID: windowID
+                    )
+                }
+
+                jlog("term.launched", data: [
+                    "wid": windowID,
+                    "attempts": attempt + 1
+                ])
+                return .ok("terminal launched")
+            }
+        }
+
+        jlog("err.term.timeout")
+        return .error("terminal launch timed out")
     }
 
     // ============================================================
