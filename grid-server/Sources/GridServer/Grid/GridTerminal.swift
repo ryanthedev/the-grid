@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import CoreGraphics
 
@@ -144,11 +145,23 @@ class GridTerminal {
             }
 
             // Terminal is visible on this space -> hide it
-            _ = windowManipulator.mssClient.orderWindowOut(windowID)
+            // Use NSRunningApplication.hide() — orderWindowOut doesn't stick for Ghostty
+            if let win {
+                if let app = NSRunningApplication(processIdentifier: win.pid) {
+                    app.hide()
+                }
+            }
             jlog("term.hide", data: ["wid": windowID])
             return .ok("terminal hidden")
         } else {
             // Terminal is hidden or on another space -> bring here and show
+            if let win {
+                if let app = NSRunningApplication(processIdentifier: win.pid) {
+                    app.unhide()
+                    app.activate()
+                }
+            }
+
             if let activeSpaceID, !onActiveSpace {
                 _ = windowManipulator.mssClient.moveWindowToSpace(
                     windowID: windowID, spaceID: activeSpaceID
