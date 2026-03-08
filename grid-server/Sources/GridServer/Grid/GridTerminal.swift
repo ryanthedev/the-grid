@@ -54,7 +54,7 @@ class GridTerminal {
             if let win = wmState.windows[String(cached)] {
                 // Verify it's still the terminal (title + bundleID)
                 let app = wmState.applications[String(win.pid)]
-                if win.title == "grid-terminal"
+                if matchesTerminalTitle(win.title)
                     && app?.bundleIdentifier == "com.mitchellh.ghostty" {
                     return cached
                 }
@@ -65,7 +65,7 @@ class GridTerminal {
 
         // Slow path: scan all windows
         for (widStr, win) in wmState.windows {
-            if win.title == "grid-terminal" {
+            if matchesTerminalTitle(win.title) {
                 let app = wmState.applications[String(win.pid)]
                 if app?.bundleIdentifier == "com.mitchellh.ghostty" {
                     if let wid = UInt32(widStr) {
@@ -77,6 +77,12 @@ class GridTerminal {
         }
 
         return nil
+    }
+
+    // Match both new title and legacy title for transition
+    private func matchesTerminalTitle(_ title: String?) -> Bool {
+        guard let title else { return false }
+        return title == "grid:scratch" || title == "grid-terminal"
     }
 
     // ============================================================
@@ -143,6 +149,78 @@ class GridTerminal {
     }
 
     // ============================================================
+    // PRIVATE: findTmux
+    // ============================================================
+
+    private func findTmux() -> String {
+        // Check common installation paths in order
+        for path in ["/opt/homebrew/bin/tmux", "/usr/local/bin/tmux", "/usr/bin/tmux"] {
+            if FileManager.default.fileExists(atPath: path) {
+                return path
+            }
+        }
+
+        // Fall back to `which tmux` for non-standard locations
+        let whichProcess = Process()
+        whichProcess.executableURL = URL(fileURLWithPath: "/usr/bin/which")
+        whichProcess.arguments = ["tmux"]
+        let pipe = Pipe()
+        whichProcess.standardOutput = pipe
+        do {
+            try whichProcess.run()
+            whichProcess.waitUntilExit()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            let result = String(data: data, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !result.isEmpty {
+                return result
+            }
+        } catch {
+            // which failed, fall through to default
+        }
+
+        // Last resort default
+        return "tmux"
+    }
+
+    // ============================================================
+    // PRIVATE: sizeAndCenterOnDisplay
+    // ============================================================
+
+    private func sizeAndCenterOnDisplay(
+        windowID: UInt32,
+        pid: pid_t,
+        display: DisplayState
+    ) async {
+        guard let windowManipulator = windowManipulator else { return }
+
+        // Get visible frame, fall back to full frame, bail if neither available
+        guard let visibleFrame = display.visibleFrame ?? display.frame else { return }
+
+        // Calculate 80% x 60% of visible frame
+        let winW = visibleFrame.width * 0.8
+        let winH = visibleFrame.height * 0.6
+
+        // Get display offset from config (@MainActor)
+        let displayName = display.name ?? ""
+        let displayUUID = display.uuid
+        let offset = await MainActor.run { gridConfig?.getDisplayOffset(uuid: displayUUID, name: displayName) }
+
+        // Center on display, applying offset
+        let offsetX = offset?.x ?? 0
+        let offsetY = offset?.y ?? 0
+        let x = visibleFrame.origin.x + (visibleFrame.width - winW) / 2 + offsetX
+        let y = visibleFrame.origin.y + (visibleFrame.height - winH) / 2 + offsetY
+
+        // Apply frame via AX
+        guard let element = windowManipulator.getAXElement(pid: pid, windowID: windowID) else { return }
+        let frame = CGRect(x: x, y: y, width: winW, height: winH)
+        _ = windowManipulator.setWindowFrame(element: element, frame: frame)
+
+        jlog("term.sized", data: ["wid": windowID, "width": winW, "height": winH])
+    }
+
+    // ============================================================
     // PRIVATE: launchTerminal
     // ============================================================
 
@@ -152,15 +230,21 @@ class GridTerminal {
             return .error("terminal not initialized")
         }
 
+        // Resolve paths
+        let tmuxPath = findTmux()
+        let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+
         // Build the launch command
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
         process.arguments = [
             "-na", "Ghostty.app",
             "--args",
-            "--title=grid-terminal",
+            "--title=grid:scratch",
             "--window-decoration=none",
-            "-e", "tmux", "new-session", "-A", "-s", "grid-scratch"
+            "--quit-after-last-window-closed=true",
+            "--env=GRID_TERMINAL=scratch",
+            "--command=\(shell) -l -c '\(tmuxPath) new-session -A -s grid-scratch'"
         ]
 
         do {
@@ -170,13 +254,19 @@ class GridTerminal {
             return .error("failed to launch terminal: \(error.localizedDescription)")
         }
 
-        // Poll for the terminal window to appear (up to 3 seconds)
-        let maxAttempts = 15
+        // Poll for the terminal window to appear (25 attempts x 200ms = 5s)
+        let maxAttempts = 25
         for attempt in 0..<maxAttempts {
             try? await Task.sleep(nanoseconds: 200_000_000)
 
             let wmState = await stateManager.getState()
             if let windowID = findTerminalWindow(wmState) {
+                // Size and center on active display BEFORE setting layer and focus
+                if let activeDisplayUUID = wmState.metadata.activeDisplayUUID,
+                   let display = wmState.displays.first(where: { $0.uuid == activeDisplayUUID }) {
+                    await sizeAndCenterOnDisplay(windowID: windowID, pid: wmState.windows[String(windowID)]?.pid ?? 0, display: display)
+                }
+
                 // Set layer to above (persists across hide/show)
                 _ = windowManipulator.mssClient.setWindowLayer(
                     windowID: windowID, layer: .above
