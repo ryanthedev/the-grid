@@ -1,6 +1,14 @@
 import Foundation
 import CoreGraphics
 
+// Codable struct for persisting a terminal window frame
+struct TerminalFrame: Codable {
+    let x: Double
+    let y: Double
+    let width: Double
+    let height: Double
+}
+
 class GridTerminal {
 
     // Dependencies (weak references, set via setup)
@@ -10,6 +18,15 @@ class GridTerminal {
 
     // Cached terminal window ID to avoid full-scan on every toggle
     private var cachedTerminalWindowID: UInt32? = nil
+
+    // Per-display frame persistence
+    private var terminalFrames: [String: TerminalFrame] = [:]
+    private var terminalFramesLoaded: Bool = false
+
+    // File path for persisted frames
+    private var terminalFramePath: String {
+        XDG.stateHome + "/thegrid/terminal-frame.json"
+    }
 
     init() {}
 
@@ -112,6 +129,20 @@ class GridTerminal {
         }
 
         if isVisible && onActiveSpace {
+            // Save frame before hiding for per-display persistence
+            loadTerminalFrames()
+            if let activeDisplayUUID = wmState.metadata.activeDisplayUUID,
+               let win = wmState.windows[String(windowID)] {
+                let frame = TerminalFrame(
+                    x: win.frame.origin.x,
+                    y: win.frame.origin.y,
+                    width: win.frame.width,
+                    height: win.frame.height
+                )
+                terminalFrames[activeDisplayUUID] = frame
+                saveTerminalFrames()
+            }
+
             // Terminal is visible on this space -> hide it
             _ = windowManipulator.mssClient.orderWindowOut(windowID)
             jlog("term.hide", data: ["wid": windowID])
@@ -122,18 +153,74 @@ class GridTerminal {
                 _ = windowManipulator.mssClient.moveWindowToSpace(
                     windowID: windowID, spaceID: activeSpaceID
                 )
+            }
 
-                // Reposition onto the active display so it's visible after cross-display move
-                if let win,
-                   let activeDisplayUUID = wmState.metadata.activeDisplayUUID,
-                   let display = wmState.displays.first(where: { $0.uuid == activeDisplayUUID }),
-                   let displayFrame = display.visibleFrame,
+            // Reposition: restore saved position or center on display
+            loadTerminalFrames()
+            let activeDisplayUUID = wmState.metadata.activeDisplayUUID
+            let display = wmState.displays.first(where: { $0.uuid == activeDisplayUUID })
+            // Get visible frame, fall back to frame
+            let displayFrame = display?.visibleFrame ?? display?.frame
+
+            var positioned = false
+
+            // Try to restore saved position for this display
+            if let activeDisplayUUID,
+               let savedFrame = terminalFrames[activeDisplayUUID],
+               let displayFrame,
+               let win = wmState.windows[String(windowID)] {
+                let windowWidth = win.frame.width
+                let windowHeight = win.frame.height
+
+                // Bounds check: verify saved position keeps window on-screen
+                let inBounds =
+                    savedFrame.x >= displayFrame.origin.x
+                    && savedFrame.y >= displayFrame.origin.y
+                    && savedFrame.x + windowWidth <= displayFrame.origin.x + displayFrame.width
+                    && savedFrame.y + windowHeight <= displayFrame.origin.y + displayFrame.height
+
+                if inBounds,
                    let element = windowManipulator.getAXElement(pid: win.pid, windowID: windowID) {
-                    // Center horizontally, place near top of display
-                    let x = displayFrame.origin.x + (displayFrame.width - win.frame.width) / 2
-                    let y = displayFrame.origin.y
-                    _ = windowManipulator.setWindowPosition(element: element, point: CGPoint(x: x, y: y))
+                    _ = windowManipulator.setWindowPosition(
+                        element: element,
+                        point: CGPoint(x: savedFrame.x, y: savedFrame.y)
+                    )
+                    jlog("term.position", data: [
+                        "mode": "restore",
+                        "x": savedFrame.x,
+                        "y": savedFrame.y,
+                        "display": activeDisplayUUID
+                    ])
+                    positioned = true
                 }
+            }
+
+            // Fall back to center mode if no saved frame or bounds check failed
+            if !positioned,
+               let displayFrame,
+               let win = wmState.windows[String(windowID)],
+               let element = windowManipulator.getAXElement(pid: win.pid, windowID: windowID) {
+                // Get display offset from config (@MainActor)
+                let displayName = display?.name ?? ""
+                let displayUUID = display?.uuid ?? ""
+                let offset = await MainActor.run {
+                    gridConfig?.getDisplayOffset(uuid: displayUUID, name: displayName)
+                }
+                let offsetX = offset?.x ?? 0
+                let offsetY = offset?.y ?? 0
+
+                let x = displayFrame.origin.x + (displayFrame.width - win.frame.width) / 2 + offsetX
+                let y = displayFrame.origin.y + (displayFrame.height - win.frame.height) / 2 + offsetY
+                _ = windowManipulator.setWindowPosition(
+                    element: element,
+                    point: CGPoint(x: x, y: y)
+                )
+                jlog("term.position", data: [
+                    "mode": "center",
+                    "x": x,
+                    "y": y,
+                    "display": activeDisplayUUID ?? ""
+                ])
             }
 
             // Show, set floating layer, and focus
@@ -145,6 +232,39 @@ class GridTerminal {
 
             jlog("term.show", data: ["wid": windowID])
             return .ok("terminal shown")
+        }
+    }
+
+    // ============================================================
+    // PRIVATE: loadTerminalFrames / saveTerminalFrames
+    // ============================================================
+
+    private func loadTerminalFrames() {
+        if terminalFramesLoaded { return }
+        terminalFramesLoaded = true
+        terminalFrames = [:]
+
+        guard let data = FileManager.default.contents(atPath: terminalFramePath) else {
+            return
+        }
+
+        do {
+            terminalFrames = try JSONDecoder().decode(
+                [String: TerminalFrame].self, from: data
+            )
+        } catch {
+            jlog("warn.term.frames.load", data: ["err": error.localizedDescription])
+        }
+    }
+
+    private func saveTerminalFrames() {
+        do {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = .prettyPrinted
+            let data = try encoder.encode(terminalFrames)
+            try data.write(to: URL(fileURLWithPath: terminalFramePath), options: .atomic)
+        } catch {
+            jlog("warn.term.frames.save", data: ["err": error.localizedDescription])
         }
     }
 
