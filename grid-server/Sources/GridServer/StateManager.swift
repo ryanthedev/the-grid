@@ -49,11 +49,8 @@ actor StateManager: StateEventHandler {
     // How long to consider a focus as "CLI-initiated" (prevents loop)
     private let cliFocusWindow: TimeInterval = 0.5
 
-    // CLI path for invoking border sync on external focus
+    // CLI path (used for ResizeManager)
     private var cliPath: String = "thegrid"
-
-    // Debug: sequence counter for CLI invocations to track ordering
-    private var cliInvokeSequence: Int = 0
 
     func setBorderEvents(_ events: BorderEvents) {
         self.borderEvents = events
@@ -100,20 +97,21 @@ actor StateManager: StateEventHandler {
 
     // MARK: - Public Interface
 
-    func start() async {
-        // Load server config for window blacklist and CLI path FIRST (before state refresh)
-        do {
-            let config = try await ServerConfig.load()
-            windowBlacklist = Set(config.windowBlacklist)
-            cliPath = config.cliPath
-            ResizeManager.shared.cliPath = config.cliPath
+    func start(gridConfig: GridConfig? = nil) async {
+        // Load config from GridConfig (replaces ServerConfig)
+        if let cfg = gridConfig {
+            // Read values from MainActor-isolated config
+            let blacklist = await MainActor.run { cfg.windowBlacklist }
+            windowBlacklist = Set(blacklist)
             JSONLogger.shared.log("srv.cfg.loaded", data: [
-                "blacklist_count": windowBlacklist.count,
-                "cli_path": cliPath
+                "blacklist_count": windowBlacklist.count
             ])
-        } catch {
-            JSONLogger.shared.log("srv.cfg.error", msg: "failed to load server config", data: ["error": "\(error)"])
         }
+
+        // Resolve CLI path (transitional: removed when border sync moves in-process)
+        let resolvedCliPath = StateManager.resolveCliPath("thegrid")
+        cliPath = resolvedCliPath
+        ResizeManager.shared.cliPath = resolvedCliPath
 
         // Build initial state (now uses blacklist filtering)
         await refreshCompleteState()
@@ -138,6 +136,12 @@ actor StateManager: StateEventHandler {
 
     func getState() -> WindowManagerState {
         return state
+    }
+
+    /// Override activeSpaceID — used after cross-display moves where the OS
+    /// hasn't yet updated which display/space is active.
+    func overrideActiveSpace(_ spaceID: UInt64) {
+        state.metadata.activeSpaceID = spaceID
     }
 
     /// Graceful shutdown - cleanup all observers and timers
@@ -1182,8 +1186,13 @@ var windows: [String: WindowState] = [:]
         let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
         timer.schedule(deadline: .now() + interval, repeating: interval)
         timer.setEventHandler { [weak self] in
+            // Perform heavy CGWindowList call outside actor to avoid blocking
+            let options: CGWindowListOption = [.optionAll, .excludeDesktopElements]
+            guard let windowList = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
+                return
+            }
             Task {
-                await self?.pollWindowState()
+                await self?.applyPollResults(windowList)
             }
         }
         timer.resume()
@@ -1197,14 +1206,9 @@ var windows: [String: WindowState] = [:]
         pollTimer = nil
     }
 
-    /// Poll window state from CGWindowList
-    private func pollWindowState() {
+    /// Apply pre-fetched CGWindowList results to state (called on actor)
+    private func applyPollResults(_ windowList: [[String: Any]]) {
         let pollTimestamp = Date()
-
-        let options: CGWindowListOption = [.optionAll, .excludeDesktopElements]
-        guard let windowList = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
-            return
-        }
 
         var seenWindowIDs = Set<UInt32>()
 
@@ -1224,10 +1228,10 @@ var windows: [String: WindowState] = [:]
             }
         }
 
-        // Remove windows no longer in CGWindowList
+        // Remove windows no longer in CGWindowList and notify via EventRouter
+        var destroyedWindowIDs: [UInt32] = []
         for windowKey in state.windows.keys {
             if let windowID = UInt32(windowKey), !seenWindowIDs.contains(windowID) {
-                // Inline removal logic (don't call handleWindowDestroyed to avoid log confusion)
                 let pid = state.windows[windowKey]?.pid
                 if state.metadata.focusedWindowID == windowID {
                     state.metadata.focusedWindowID = nil
@@ -1238,6 +1242,19 @@ var windows: [String: WindowState] = [:]
                 }
                 for spaceKey in state.spaces.keys {
                     state.spaces[spaceKey]?.windows.removeAll { $0 == windowID }
+                }
+                destroyedWindowIDs.append(windowID)
+            }
+        }
+
+        // Route destroy events so GridReconciler cleans up cell assignments and borders
+        if !destroyedWindowIDs.isEmpty {
+            Task {
+                for windowID in destroyedWindowIDs {
+                    await EventRouter.shared.route(
+                        .windowDestroyed(windowID: windowID),
+                        from: .poll
+                    )
                 }
             }
         }
@@ -1260,12 +1277,6 @@ var windows: [String: WindowState] = [:]
         // Update title
         if let name = windowInfo[kCGWindowName as String] as? String {
             window.title = name
-        }
-
-        // Get AX properties and prefer AX title if available
-        let axProps = getAXProperties(pid: window.pid, windowID: windowID)
-        if let axTitle = axProps.title, !axTitle.isEmpty {
-            window.title = axTitle
         }
 
         // Recompute displayUUID and derive space from display
@@ -1520,117 +1531,15 @@ var windows: [String: WindowState] = [:]
 
         JSONLogger.shared.log("win.focus", data: logData)
 
-        // Check if this was a CLI-initiated focus (skip CLI invocation to prevent loop)
-        if wasRecentlyCliFocused(windowID) {
-            JSONLogger.shared.log("win.focus.cli", data: ["wid": windowID, "skip": true])
-        } else {
-            // External focus (click, etc.) - invoke CLI to sync borders
-            invokeCLIForBorderSync(windowID: windowID)
-        }
+        // Border sync is handled by GridReconciler via EventRouter focusChanged events
 
         if let stateSpan = stateSpan {
             await stateSpan.end()
         }
     }
 
-    /// Invoke CLI to refresh layouts after a space change.
-    /// Fire-and-forget: spawns process asynchronously so the server isn't blocked.
-    private func invokeCLIForLayoutRefresh() {
-        let path = cliPath
-        let seq = cliInvokeSequence
-        cliInvokeSequence += 1
-
-        JSONLogger.shared.log("cli.invoke.spawn", data: [
-            "cmd": "layout refresh",
-            "seq": seq
-        ])
-
-        Task.detached {
-            let process = Process()
-            if path.hasPrefix("/") {
-                process.executableURL = URL(fileURLWithPath: path)
-                process.arguments = ["layout", "refresh"]
-            } else {
-                process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-                process.arguments = [path, "layout", "refresh"]
-            }
-            process.standardOutput = FileHandle.nullDevice
-            process.standardError = FileHandle.nullDevice
-
-            do {
-                try process.run()
-                process.waitUntilExit()
-
-                let status = process.terminationStatus
-                if status == 0 {
-                    JSONLogger.shared.log("cli.invoke.ok", data: ["cmd": "layout refresh", "seq": seq])
-                } else {
-                    JSONLogger.shared.log("cli.invoke.err", data: ["cmd": "layout refresh", "seq": seq, "status": status])
-                }
-            } catch {
-                JSONLogger.shared.log("cli.invoke.err", data: ["cmd": "layout refresh", "seq": seq, "error": "\(error)"])
-            }
-        }
-    }
-
-    /// Invoke CLI to sync borders for external focus changes
-    /// Fire-and-forget: spawns process asynchronously, logs result, no retries
-    private func invokeCLIForBorderSync(windowID: UInt32) {
-        let path = cliPath
-        let seq = cliInvokeSequence
-        cliInvokeSequence += 1
-        let spawnTime = Date()
-
-        // Log when process is SPAWNED (not just when it completes)
-        JSONLogger.shared.log("cli.invoke.spawn", data: [
-            "wid": windowID,
-            "seq": seq,
-            "path": path
-        ])
-
-        Task.detached {
-            let process = Process()
-            if path.hasPrefix("/") {
-                process.executableURL = URL(fileURLWithPath: path)
-                process.arguments = ["event", "focus", String(windowID)]
-            } else {
-                process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-                process.arguments = [path, "event", "focus", String(windowID)]
-            }
-            process.standardOutput = FileHandle.nullDevice
-            process.standardError = FileHandle.nullDevice
-
-            do {
-                try process.run()
-                process.waitUntilExit()
-
-                let status = process.terminationStatus
-                let durationMs = Int(Date().timeIntervalSince(spawnTime) * 1000)
-                if status == 0 {
-                    JSONLogger.shared.log("cli.invoke.ok", data: [
-                        "wid": windowID,
-                        "seq": seq,
-                        "dur_ms": durationMs
-                    ])
-                } else {
-                    JSONLogger.shared.log("cli.invoke.err", data: [
-                        "wid": windowID,
-                        "seq": seq,
-                        "dur_ms": durationMs,
-                        "status": status,
-                        "path": path
-                    ])
-                }
-            } catch {
-                JSONLogger.shared.log("cli.invoke.err", data: [
-                    "wid": windowID,
-                    "seq": seq,
-                    "path": path,
-                    "error": "\(error)"
-                ])
-            }
-        }
-    }
+    // Legacy CLI invocation methods removed — GridReconciler handles
+    // border sync and layout refresh via EventRouter events.
 
     private func handleWindowMinimized(_ windowID: UInt32) async {
         let window = state.windows[String(windowID)]
@@ -1787,8 +1696,7 @@ var windows: [String: WindowState] = [:]
 
         state.metadata.update()
 
-        // Reapply layouts after state is fully updated so windows snap into position
-        invokeCLIForLayoutRefresh()
+        // Layout refresh handled by GridReconciler via EventRouter space change events
     }
 
     /// Update activeDisplayUUID and activeSpaceID based on which display has the focused/active space
@@ -2142,6 +2050,25 @@ return
     func getDisplayAtMousePosition() -> String? {
         let mousePos = getCurrentMousePosition()
         return getDisplayUUIDAtPoint(mousePos)
+    }
+
+    // MARK: - CLI Path Resolution (transitional, removed when CLI invocation moves in-process)
+
+    private static func resolveCliPath(_ name: String) -> String {
+        if name.hasPrefix("/") { return name }
+        let searchPaths = [
+            "/opt/homebrew/bin/\(name)",
+            "/usr/local/bin/\(name)",
+            NSHomeDirectory() + "/.local/bin/\(name)",
+            "/usr/bin/\(name)",
+        ]
+        let fm = FileManager.default
+        for candidate in searchPaths {
+            if fm.isExecutableFile(atPath: candidate) {
+                return candidate
+            }
+        }
+        return name
     }
 }
 

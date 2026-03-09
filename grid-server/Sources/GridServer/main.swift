@@ -42,12 +42,21 @@ struct GridServerCommand: ParsableCommand {
         // Initialize OpenTelemetry tracing
         Tracing.initialize()
 
-        // Kill any stale grid-terminal from previous server session
-        let killTask = Process()
-        killTask.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
-        killTask.arguments = ["-9", "-f", "grid-terminal"]
-        try? killTask.run()
-        killTask.waitUntilExit()
+        // Kill any stale grid-picker from previous sessions
+        let killPicker = Process()
+        killPicker.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
+        killPicker.arguments = ["-9", "-f", "grid-picker"]
+        try? killPicker.run()
+        killPicker.waitUntilExit()
+
+        // Remove stale Go CLI mutex file
+        let stateDir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".local/state/thegrid")
+        let lockPath = stateDir.appendingPathComponent("cli.lock")
+        if FileManager.default.fileExists(atPath: lockPath.path) {
+            try? FileManager.default.removeItem(at: lockPath)
+            jlog("srv.cleanup", data: ["file": lockPath.path])
+        }
 
         // Log server start
         jlog("srv.start", data: ["ver": GridServerVersion, "commit": GridServerCommit, "socket": socketPath])
@@ -73,8 +82,6 @@ struct GridServerCommand: ParsableCommand {
         // Set up signal handling for graceful shutdown
         // Note: Handlers are re-wired after BFD initialization to include bfdManager cleanup
         let signalQueue = DispatchQueue(label: "com.thegrid.signals")
-        var shouldShutdown = false
-
         let signalSource = DispatchSource.makeSignalSource(signal: SIGINT, queue: signalQueue)
         signalSource.resume()
         signal(SIGINT, SIG_IGN)
@@ -89,7 +96,7 @@ struct GridServerCommand: ParsableCommand {
 
             // Initialize NSApplication for NSWorkspace notifications
             _ = NSApplication.shared
-            NSApplication.shared.setActivationPolicy(.prohibited)
+            NSApplication.shared.setActivationPolicy(.accessory)
 
             // Initialize border system
             let connectionID = SLSMainConnectionID()
@@ -99,16 +106,93 @@ struct GridServerCommand: ParsableCommand {
             messageHandler.simpleBorderManager = simpleBorderManager
             jlog("bdr.init")
 
-            // Initialize StateManager (async) and connect border events
+            // Initialize GridConfig (replaces ServerConfig)
+            let gridConfig = GridConfig()
             Task {
-                await StateManager.shared.start()
+                do {
+                    try await gridConfig.load()
+                    jlog("grid.cfg.ready")
+                } catch {
+                    jlog("err.grid.cfg", data: ["err": "\(error)"])
+                }
+            }
+
+            // Initialize GridState (load persisted state)
+            let gridState = GridState()
+            Task {
+                await gridState.load()
+            }
+
+            // Initialize GridReconciler (wired after StateManager starts)
+            let gridReconciler = GridReconciler()
+
+            // Initialize StateManager (async) and connect border events + reconciler
+            Task {
+                await StateManager.shared.start(gridConfig: gridConfig)
                 await StateManager.shared.setBorderEvents(borderEvents)
                 jlog("state.init")
+
+                // Wire reconciler after StateManager is ready
+                gridReconciler.setup(
+                    gridState: gridState,
+                    gridConfig: gridConfig,
+                    stateManager: StateManager.shared,
+                    simpleBorderManager: simpleBorderManager
+                )
             }
+
+            // Initialize Grid feature modules + command router
+            let gridFocus = GridFocus()
+            let gridCellOps = GridCellOps()
+            let gridWindowMove = GridWindowMove()
+            let gridApply = GridApply()
+            let gridResize = GridResize()
+            let windowManipulator = WindowManipulator(connectionID: connectionID)
+
+            // Configure PickerManager with window manipulator for focus restoration
+            PickerManager.shared.configure(with: gridConfig, windowManipulator: windowManipulator)
+
+            let gridRecorder = GridRecorder(
+                gridState: gridState,
+                gridConfig: gridConfig,
+                stateManager: StateManager.shared
+            )
+
+            let gridTerminalManager = GridTerminalManager(
+                windowManipulator: windowManipulator,
+                stateManager: StateManager.shared,
+                gridReconciler: gridReconciler
+            )
+
+            let commandRouter = GridCommandRouter(
+                gridFocus: gridFocus,
+                gridCellOps: gridCellOps,
+                gridWindowMove: gridWindowMove,
+                gridApply: gridApply,
+                gridResize: gridResize,
+                gridState: gridState,
+                gridConfig: gridConfig,
+                stateManager: StateManager.shared,
+                windowManipulator: windowManipulator,
+                gridReconciler: gridReconciler,
+                simpleBorderManager: simpleBorderManager,
+                gridRecorder: gridRecorder,
+                gridTerminalManager: gridTerminalManager
+            )
+
+            // Register Grid RPC handlers (thin CLI bridge)
+            messageHandler.registerGridHandlers(
+                router: commandRouter,
+                gridState: gridState,
+                gridConfig: gridConfig,
+                stateManager: StateManager.shared
+            )
 
             // Initialize BFD hotkey daemon
             // Note: bfdManager captured by shutdown closure - will be stopped on exit
             let bfdManager = BFDManager()
+            BFDManager.shared = bfdManager
+            bfdManager.setCommandRouter(commandRouter)
             Task {
                 if await bfdManager.start() {
                     jlog("bfd.ready")
@@ -121,7 +205,6 @@ struct GridServerCommand: ParsableCommand {
             // Re-wire the signal handlers with bfdManager in scope
             signalSource.setEventHandler {
                 jlog("srv.sig.int")
-                shouldShutdown = true
                 Task {
                     await StateManager.shared.shutdown()
                     bfdManager.stop()
@@ -132,7 +215,6 @@ struct GridServerCommand: ParsableCommand {
             }
             termSignalSource.setEventHandler {
                 jlog("srv.sig.term")
-                shouldShutdown = true
                 Task {
                     await StateManager.shared.shutdown()
                     bfdManager.stop()
@@ -149,10 +231,10 @@ struct GridServerCommand: ParsableCommand {
 
             jlog("srv.ready")
 
-            // Keep the server running
-            while !shouldShutdown {
-                RunLoop.current.run(mode: .default, before: Date.distantFuture)
-            }
+            // Run the NSApplication event loop.
+            // Required when launched via `open -a` so macOS treats us as a
+            // responsive GUI app and delivers keyboard/mouse events properly.
+            NSApp.run()
 
         } catch {
             jlog("err.srv.start", data: ["err": "\(error)"])

@@ -30,9 +30,8 @@ class BorderEvents: StateEventHandler {
     // MARK: - StateEventHandler Protocol
 
     func handle(_ event: StateEvent, context: EventContext) async throws {
-        // Border sync is driven exclusively by CLI commands, not AX events.
-        // This prevents race conditions between server-side and CLI-side updates.
-        // The CLI calls SyncBorders explicitly after operations that change cell state.
+        // Border sync is now driven by GridReconciler. This handler remains
+        // as a no-op for backward compatibility during migration.
         _ = (event, context)
     }
 }

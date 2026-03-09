@@ -157,6 +157,20 @@ class BFDKeyHandler {
         }
     }
 
+    /// Temporarily suspend the event tap (e.g., while picker is visible)
+    func suspend() {
+        guard let tap = eventTap, CGEvent.tapIsEnabled(tap: tap) else { return }
+        CGEvent.tapEnable(tap: tap, enable: false)
+        JSONLogger.shared.log("bfd.suspend")
+    }
+
+    /// Resume the event tap after suspension
+    func resume() {
+        guard let tap = eventTap, !CGEvent.tapIsEnabled(tap: tap) else { return }
+        CGEvent.tapEnable(tap: tap, enable: true)
+        JSONLogger.shared.log("bfd.resume")
+    }
+
     /// Stop capturing keyboard events
     func stop() {
         healthCheckTimer?.invalidate()

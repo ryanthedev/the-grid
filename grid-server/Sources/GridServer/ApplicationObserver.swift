@@ -128,27 +128,28 @@ class ApplicationObserver {
     func handleNotification(element: AXUIElement, notification: CFString) async {
         let notifName = notification as String
 
-        // For AXCreated and AXUIElementDestroyed notifications, check element role first
-        // to avoid processing non-window elements (buttons, menus, popups, etc.)
-        if notifName == kAXCreatedNotification as String ||
-           notifName == kAXUIElementDestroyedNotification as String {
-
-            // Check if this element is actually a window
+        // For AXCreated, check element role to avoid processing non-window elements
+        if notifName == kAXCreatedNotification as String {
             var roleValue: CFTypeRef?
             let roleResult = AXUIElementCopyAttributeValue(
                 element,
                 kAXRoleAttribute as CFString,
                 &roleValue
             )
-
-            // Only process elements with role "AXWindow"
             if roleResult == .success, let role = roleValue as? String {
                 if role != "AXWindow" {
-                    // Not a window - silently ignore (menus, buttons, etc.)
                     return
                 }
             } else {
-                // Can't determine role - skip it to be safe
+                // Can't determine role - skip to be safe
+                return
+            }
+        }
+
+        // For AXUIElementDestroyed, the element is already dead — can't query role.
+        // Instead, try to get the window ID. If it fails, it wasn't a tracked window.
+        if notifName == kAXUIElementDestroyedNotification as String {
+            guard getWindowID(from: element) != nil else {
                 return
             }
         }
