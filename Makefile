@@ -147,6 +147,7 @@ dist-universal: app-bundle cli-universal viewer-universal
 	@cp VERSION dist/thegrid-$(VERSION)/
 	@cp LICENSE dist/thegrid-$(VERSION)/ 2>/dev/null || echo "No LICENSE file"
 	@cp README.md dist/thegrid-$(VERSION)/ 2>/dev/null || true
+	@echo "bin/thegrid bin/grid-viewer" > dist/thegrid-$(VERSION)/FORMULA_BINS
 	@cd dist && tar -czf thegrid-$(VERSION)-darwin-universal.tar.gz thegrid-$(VERSION)
 	@echo ""
 	@echo "Universal distribution tarball created:"

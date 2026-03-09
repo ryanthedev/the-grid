@@ -294,6 +294,7 @@ actor GridTerminalManager {
         jlog("term.launch")
 
         let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+        let tmux = resolveBinaryPath("tmux") ?? "/opt/homebrew/bin/tmux"
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
@@ -304,7 +305,7 @@ actor GridTerminalManager {
             "--window-decoration=none",
             "--quit-after-last-window-closed=true",
             "--env=GRID_TERMINAL=scratch",
-            "--command=\(shell) -l -c 'tmux new-session -A -s grid-scratch'"
+            "--command=\(shell) -l -c '\(tmux) new-session -A -s grid-scratch'"
         ]
 
         do {
@@ -441,5 +442,21 @@ actor GridTerminalManager {
         } catch {
             jlog("err.term.frames.save", msg: "\(error)")
         }
+    }
+
+    /// Resolve a binary name to its full path using the server process's PATH.
+    /// Falls back to common homebrew locations if not found in PATH.
+    private func resolveBinaryPath(_ name: String) -> String? {
+        let pathDirs = (ProcessInfo.processInfo.environment["PATH"] ?? "")
+            .split(separator: ":")
+            .map(String.init)
+        let fallbacks = ["/opt/homebrew/bin", "/usr/local/bin"]
+        for dir in pathDirs + fallbacks {
+            let full = "\(dir)/\(name)"
+            if FileManager.default.isExecutableFile(atPath: full) {
+                return full
+            }
+        }
+        return nil
     }
 }
