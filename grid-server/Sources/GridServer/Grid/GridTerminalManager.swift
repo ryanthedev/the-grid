@@ -95,6 +95,10 @@ actor GridTerminalManager {
     /// Persisted to disk so frames survive server restarts.
     private var displayFrames: [String: CGRect] = [:]
 
+    /// Window that was focused before the terminal was shown.
+    /// Used to restore focus when hiding the terminal.
+    private var previousWindowID: UInt32?
+
     // MARK: - Initialization
 
     init(windowManipulator: WindowManipulator, stateManager: StateManager, gridReconciler: GridReconciler) {
@@ -181,6 +185,16 @@ actor GridTerminalManager {
             _ = windowManipulator.setWindowPosition(element: element, point: Self.offScreenPoint)
         }
 
+        // Restore focus to the window that was active before terminal was shown
+        if let prevWID = previousWindowID {
+            let state = await stateManager.getState()
+            let key = String(prevWID)
+            if let window = state.windows[key] {
+                _ = windowManipulator.focusWindow(pid: window.pid, windowID: prevWID)
+            }
+            previousWindowID = nil
+        }
+
         isHidden = true
     }
 
@@ -188,6 +202,10 @@ actor GridTerminalManager {
     /// Uses per-display saved frame or computes a default centered frame.
     private func show(wid: UInt32, pid: pid_t) async {
         jlog("term.show", data: ["wid": wid])
+
+        // Save currently focused window so we can restore on hide
+        let state = await stateManager.getState()
+        previousWindowID = state.metadata.focusedWindowID
 
         // Determine target frame: saved per-display frame or centered default
         let displayUUID = await getActiveDisplayUUID()

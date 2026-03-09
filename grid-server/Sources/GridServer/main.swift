@@ -82,8 +82,6 @@ struct GridServerCommand: ParsableCommand {
         // Set up signal handling for graceful shutdown
         // Note: Handlers are re-wired after BFD initialization to include bfdManager cleanup
         let signalQueue = DispatchQueue(label: "com.thegrid.signals")
-        var shouldShutdown = false
-
         let signalSource = DispatchSource.makeSignalSource(signal: SIGINT, queue: signalQueue)
         signalSource.resume()
         signal(SIGINT, SIG_IGN)
@@ -151,6 +149,9 @@ struct GridServerCommand: ParsableCommand {
             let gridResize = GridResize()
             let windowManipulator = WindowManipulator(connectionID: connectionID)
 
+            // Configure PickerManager with window manipulator for focus restoration
+            PickerManager.shared.configure(with: gridConfig, windowManipulator: windowManipulator)
+
             let gridRecorder = GridRecorder(
                 gridState: gridState,
                 gridConfig: gridConfig,
@@ -204,7 +205,6 @@ struct GridServerCommand: ParsableCommand {
             // Re-wire the signal handlers with bfdManager in scope
             signalSource.setEventHandler {
                 jlog("srv.sig.int")
-                shouldShutdown = true
                 Task {
                     await StateManager.shared.shutdown()
                     bfdManager.stop()
@@ -215,7 +215,6 @@ struct GridServerCommand: ParsableCommand {
             }
             termSignalSource.setEventHandler {
                 jlog("srv.sig.term")
-                shouldShutdown = true
                 Task {
                     await StateManager.shared.shutdown()
                     bfdManager.stop()

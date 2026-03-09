@@ -29,6 +29,11 @@ class PickerManager {
     // Grid config for picker sources (actions, zoxide path)
     private var gridConfig: GridConfig?
 
+    // Window that was focused before the picker was shown (for cancel restoration)
+    private var previousWindowID: UInt32?
+    private var previousWindowPID: pid_t?
+    private var windowManipulator: WindowManipulator?
+
     // Optional callback invoked when a launch-type action is selected
     // Set by GridCommandRouter before show(), cleared in hide()
     var onLaunch: ((PickerAction) -> Void)?
@@ -42,10 +47,33 @@ class PickerManager {
         ])
     }
 
-    /// Configure with grid config (called after server startup)
-    func configure(with config: GridConfig) {
+    /// Configure with grid config and window manipulator (called after server startup)
+    func configure(with config: GridConfig, windowManipulator: WindowManipulator? = nil) {
         dispatchPrecondition(condition: .onQueue(.main))
         self.gridConfig = config
+        if let wm = windowManipulator {
+            self.windowManipulator = wm
+        }
+    }
+
+    // MARK: - Focus Restoration
+
+    /// Save the currently focused window so we can restore on cancel.
+    /// Must be called on main thread, before show().
+    func savePreviousWindow(windowID: UInt32, pid: pid_t) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        previousWindowID = windowID
+        previousWindowPID = pid
+    }
+
+    /// Restore focus to the window that was active before the picker was shown.
+    private func restorePreviousWindow() {
+        guard let wid = previousWindowID, let pid = previousWindowPID, let wm = windowManipulator else {
+            return
+        }
+        _ = wm.focusWindow(pid: pid, windowID: wid)
+        previousWindowID = nil
+        previousWindowPID = nil
     }
 
     // MARK: - Show / Hide
@@ -184,7 +212,7 @@ class PickerManager {
             ActionExecutor.execute(action)
 
         case .cancelled:
-            break
+            restorePreviousWindow()
         }
 
         // Resume RPC continuation after action execution

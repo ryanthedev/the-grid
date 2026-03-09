@@ -103,10 +103,6 @@ actor StateManager: StateEventHandler {
             // Read values from MainActor-isolated config
             let blacklist = await MainActor.run { cfg.windowBlacklist }
             windowBlacklist = Set(blacklist)
-            // Pass config to PickerManager on main thread
-            await MainActor.run {
-                PickerManager.shared.configure(with: cfg)
-            }
             JSONLogger.shared.log("srv.cfg.loaded", data: [
                 "blacklist_count": windowBlacklist.count
             ])

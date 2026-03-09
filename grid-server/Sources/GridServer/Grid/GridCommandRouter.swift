@@ -572,8 +572,14 @@ class GridCommandRouter {
             }
         }
 
-        // 3. Show the picker
+        // 3. Save focused window for cancel restoration, then show the picker
+        let state = await stateManager.getState()
+        let focusedWID = state.metadata.focusedWindowID
+        let focusedPID: pid_t? = focusedWID.flatMap { state.windows[String($0)]?.pid }
         await MainActor.run {
+            if let wid = focusedWID, let pid = focusedPID {
+                PickerManager.shared.savePreviousWindow(windowID: wid, pid: pid)
+            }
             PickerManager.shared.show()
         }
         return .ok("picker shown")
