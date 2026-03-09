@@ -121,11 +121,6 @@ jobs:
           git add VERSION
           git commit -m "chore: bump version to $NEW_VERSION [skip ci]"
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.21'
-
       - name: Import code signing certificate
         env:
           CODESIGN_CERT_BASE64: ${{ secrets.CODESIGN_CERT_BASE64 }}
@@ -191,10 +186,9 @@ jobs:
           # Verify universal binaries
           echo ""
           echo "Verifying universal binaries:"
-          file dist/thegrid-${NEW_VERSION}/bin/grid-server
-          file dist/thegrid-${NEW_VERSION}/bin/thegrid
-          file dist/thegrid-${NEW_VERSION}/bin/grid-picker
-          file dist/thegrid-${NEW_VERSION}/bin/grid-viewer
+          file "dist/thegrid-${NEW_VERSION}/GridServer.app/Contents/MacOS/grid-server"
+          file "dist/thegrid-${NEW_VERSION}/bin/thegrid"
+          file "dist/thegrid-${NEW_VERSION}/bin/grid-viewer"
 
       - name: Calculate SHA256
         id: sha256
