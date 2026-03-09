@@ -152,9 +152,8 @@ class GridCommandRouter {
                 // events (e.g. appActivated for same-app windows) from
                 // contaminating cell lastFocusedWid tracking
                 gridReconciler.setSuppressed(true, syncOnResume: false)
-                let focusResult = try await handleFocus(parsed)
-                gridReconciler.setSuppressed(false, syncOnResume: true)
-                return focusResult
+                defer { gridReconciler.setSuppressed(false, syncOnResume: true) }
+                return try await handleFocus(parsed)
             case "layout":
                 return try await handleLayout(parsed)
             case "cell":
