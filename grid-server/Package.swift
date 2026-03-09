@@ -14,10 +14,6 @@ let package = Package(
             targets: ["GridServer"]
         ),
         .executable(
-            name: "grid-terminal",
-            targets: ["GridTerminal"]
-        ),
-        .executable(
             name: "grid-viewer",
             targets: ["GridViewer"]
         ),
@@ -30,8 +26,7 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.3.0"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.5.0"),
         .package(url: "https://github.com/jpsim/Yams.git", from: "5.0.0"),
-        .package(url: "https://github.com/open-telemetry/opentelemetry-swift-core.git", from: "2.3.0"),
-        .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", from: "1.2.0")
+        .package(url: "https://github.com/open-telemetry/opentelemetry-swift-core.git", from: "2.3.0")
     ],
     targets: [
         .systemLibrary(
@@ -56,11 +51,6 @@ let package = Package(
                 .unsafeFlags(["-F", "/System/Library/PrivateFrameworks"]),
                 .linkedFramework("SkyLight")
             ]
-        ),
-        .executableTarget(
-            name: "GridTerminal",
-            dependencies: [.product(name: "SwiftTerm", package: "SwiftTerm")],
-            path: "Sources/GridTerminal"
         ),
         .executableTarget(
             name: "GridViewer",

@@ -1,4 +1,4 @@
-.PHONY: help build server cli terminal viewer test clean server-test server-clean run-server install dist dev reset-accessibility setup-signing server-universal cli-universal terminal-universal viewer-universal dist-universal
+.PHONY: help build server cli viewer test clean server-test server-clean run-server install dist dev reset-accessibility setup-signing server-universal cli-universal viewer-universal dist-universal
 
 # Version from VERSION file
 VERSION := $(shell cat VERSION)
@@ -200,7 +200,7 @@ APP_BUNDLE := grid-server/.build/debug/GridServer.app
 DEPLOY_LOCATION := $(HOME)/.local/state/thegrid/GridServer.app
 
 # Build debug app bundle
-dev: server terminal viewer
+dev: server viewer
 	@echo "Creating debug GridServer.app bundle..."
 	@mkdir -p $(APP_BUNDLE)/Contents/MacOS
 	@mkdir -p $(APP_BUNDLE)/Contents/Resources
