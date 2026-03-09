@@ -20,6 +20,10 @@ class GridTerminal {
     // Cached terminal window ID to avoid full-scan on every toggle
     private var cachedTerminalWindowID: UInt32? = nil
 
+    // Window that was focused before terminal was shown (to restore on hide)
+    private var previousFocusedWindowID: UInt32? = nil
+    private var previousFocusedPID: pid_t? = nil
+
     // Per-display frame persistence
     private var terminalFrames: [String: TerminalFrame] = [:]
     private var terminalFramesLoaded: Bool = false
@@ -151,17 +155,24 @@ class GridTerminal {
                     app.hide()
                 }
             }
+
+            // Restore focus to the window that was active before terminal was shown
+            if let prevWID = previousFocusedWindowID, let prevPID = previousFocusedPID {
+                _ = windowManipulator.focusWindow(pid: prevPID, windowID: prevWID)
+                previousFocusedWindowID = nil
+                previousFocusedPID = nil
+            }
+
             jlog("term.hide", data: ["wid": windowID])
             return .ok("terminal hidden")
         } else {
-            // Terminal is hidden or on another space -> bring here and show
-            if let win {
-                if let app = NSRunningApplication(processIdentifier: win.pid) {
-                    app.unhide()
-                    app.activate()
-                }
+            // Save what was focused before showing terminal
+            previousFocusedWindowID = wmState.metadata.focusedWindowID
+            if let focusedWID = wmState.metadata.focusedWindowID {
+                previousFocusedPID = wmState.windows[String(focusedWID)]?.pid
             }
 
+            // Move to active space BEFORE unhiding to avoid flash at old position
             if let activeSpaceID, !onActiveSpace {
                 _ = windowManipulator.mssClient.moveWindowToSpace(
                     windowID: windowID, spaceID: activeSpaceID
@@ -234,6 +245,14 @@ class GridTerminal {
                     "y": y,
                     "display": activeDisplayUUID ?? ""
                 ])
+            }
+
+            // Unhide after repositioning to avoid flash at old position
+            if let win {
+                if let app = NSRunningApplication(processIdentifier: win.pid) {
+                    app.unhide()
+                    app.activate()
+                }
             }
 
             // Show, set floating layer, and focus
