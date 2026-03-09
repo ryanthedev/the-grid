@@ -42,6 +42,13 @@ struct GridServerCommand: ParsableCommand {
         // Initialize OpenTelemetry tracing
         Tracing.initialize()
 
+        // Kill any stale grid-terminal from previous server session
+        let killTask = Process()
+        killTask.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
+        killTask.arguments = ["-9", "-f", "grid-terminal"]
+        try? killTask.run()
+        killTask.waitUntilExit()
+
         // Kill any stale grid-picker from previous sessions
         let killPicker = Process()
         killPicker.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
@@ -82,6 +89,8 @@ struct GridServerCommand: ParsableCommand {
         // Set up signal handling for graceful shutdown
         // Note: Handlers are re-wired after BFD initialization to include bfdManager cleanup
         let signalQueue = DispatchQueue(label: "com.thegrid.signals")
+        var shouldShutdown = false
+
         let signalSource = DispatchSource.makeSignalSource(signal: SIGINT, queue: signalQueue)
         signalSource.resume()
         signal(SIGINT, SIG_IGN)
@@ -149,8 +158,6 @@ struct GridServerCommand: ParsableCommand {
             let gridResize = GridResize()
             let windowManipulator = WindowManipulator(connectionID: connectionID)
 
-            let gridTerminal = GridTerminal()
-
             let gridRecorder = GridRecorder(
                 gridState: gridState,
                 gridConfig: gridConfig,
@@ -169,8 +176,7 @@ struct GridServerCommand: ParsableCommand {
                 windowManipulator: windowManipulator,
                 gridReconciler: gridReconciler,
                 simpleBorderManager: simpleBorderManager,
-                gridRecorder: gridRecorder,
-                gridTerminal: gridTerminal
+                gridRecorder: gridRecorder
             )
 
             // Register Grid RPC handlers (thin CLI bridge)
@@ -198,7 +204,7 @@ struct GridServerCommand: ParsableCommand {
             // Re-wire the signal handlers with bfdManager in scope
             signalSource.setEventHandler {
                 jlog("srv.sig.int")
-
+                shouldShutdown = true
                 Task {
                     await StateManager.shared.shutdown()
                     bfdManager.stop()
@@ -209,7 +215,7 @@ struct GridServerCommand: ParsableCommand {
             }
             termSignalSource.setEventHandler {
                 jlog("srv.sig.term")
-
+                shouldShutdown = true
                 Task {
                     await StateManager.shared.shutdown()
                     bfdManager.stop()

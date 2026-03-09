@@ -17,6 +17,7 @@ struct GridMoveResult: Sendable {
 struct GridMoveOpts: Sendable {
     var wrapAround: Bool = false
     var extend: Bool = false
+    var warpMouse: Bool = false
     var windowID: UInt32 = 0
 }
 
@@ -59,6 +60,16 @@ class GridWindowMove {
     private weak var windowManipulator: WindowManipulator?
     private weak var gridReconciler: GridReconciler?
 
+    // Track last-moved window to prevent rapid moves from picking up
+    // the wrong window due to delayed OS focus events
+    private var lastMovedWindowID: UInt32 = 0
+    private var lastMoveTime: CFAbsoluteTime = 0
+    private let rapidMoveThreshold: CFAbsoluteTime = 1.0
+
+    // Save focusedCell before cross-display move overwrites it,
+    // so it can be restored when the window leaves that space
+    private var savedFocusedCells: [String: String] = [:]
+
     init() {}
 
     func setup(
@@ -88,6 +99,7 @@ class GridWindowMove {
     // ============================================================
 
     func moveWindow(direction: GridDirection, opts: GridMoveOpts) async throws -> GridMoveResult {
+        let moveStart = CFAbsoluteTimeGetCurrent()
         guard let gridState = gridState,
               let gridConfig = gridConfig,
               let stateManager = stateManager,
@@ -97,29 +109,52 @@ class GridWindowMove {
 
         // 1. Get space state
         let wmState = await stateManager.getState()
-        guard let spaceID = gridFocus.findActiveSpaceID(wmState) else {
+        let setupStateMs = Int((CFAbsoluteTimeGetCurrent() - moveStart) * 1000)
+        guard let activeSpaceID = gridFocus.findActiveSpaceID(wmState) else {
             throw GridWindowMoveError.noLayout
         }
+        // 2. Determine which window to move
+        // On rapid moves (< 1s), prefer the last-moved window because
+        // delayed OS focus events may have changed getFocusedWindow.
+        // Also fix spaceID if the window crossed displays (metadata may be stale).
+        var spaceID = activeSpaceID
+        let windowID: UInt32
+        if opts.windowID != 0 {
+            windowID = opts.windowID
+        } else {
+            let now = CFAbsoluteTimeGetCurrent()
+            let isRapidMove = lastMovedWindowID != 0
+                && (now - lastMoveTime) < rapidMoveThreshold
+            if isRapidMove {
+                // Find the window's actual space (may differ from activeSpaceID
+                // after a cross-display move where metadata hasn't caught up)
+                if let actualSpace = await gridState.findSpaceContaining(windowID: lastMovedWindowID) {
+                    spaceID = actualSpace
+                    windowID = lastMovedWindowID
+                } else {
+                    windowID = await gridState.getFocusedWindow(spaceID: spaceID)
+                }
+            } else {
+                windowID = await gridState.getFocusedWindow(spaceID: spaceID)
+            }
+        }
+        guard windowID != 0 else {
+            throw GridWindowMoveError.noFocusedWindow
+        }
+
+        // 3. Get space state (re-fetch in case rapid-move corrected spaceID)
         guard let spaceState = await gridState.getSpaceReadOnly(spaceID),
               !spaceState.currentLayoutId.isEmpty else {
             throw GridWindowMoveError.noLayout
         }
 
-        // 2. Determine which window to move
-        let windowID = opts.windowID != 0
-            ? opts.windowID
-            : await gridState.getFocusedWindow(spaceID: spaceID)
-        guard windowID != 0 else {
-            throw GridWindowMoveError.noFocusedWindow
-        }
-
-        // 3. Find source cell
+        // 4. Find source cell
         let sourceCell = await gridState.getWindowCell(windowID: windowID, inSpace: spaceID)
         guard let sourceCell = sourceCell else {
             throw GridWindowMoveError.windowNotInCell(windowID)
         }
 
-        // 4. Calculate layout and find adjacent cells
+        // 5. Calculate layout and find adjacent cells
         let layoutDef = try await MainActor.run { try gridConfig.getLayout(id: spaceState.currentLayoutId) }
         let displayBounds = gridFocus.getDisplayBoundsForSpace(spaceID, wmState: wmState)
         let columnRatios = await gridState.getColumnRatios(spaceID: spaceID)
@@ -136,16 +171,24 @@ class GridWindowMove {
         var candidates = adjacentMap[direction] ?? []
 
         // 5. Handle no adjacent cells
+        let setupMs = Int((CFAbsoluteTimeGetCurrent() - moveStart) * 1000)
         if candidates.isEmpty {
             // Try cross-display if extend enabled
             if opts.extend {
+                jlog("winmove.setup", data: [
+                    "dir": direction.rawValue,
+                    "setup_ms": setupMs,
+                    "state_ms": setupStateMs,
+                    "cross": true,
+                ])
                 let result = try await moveWindowCrossDisplay(
                     direction: direction,
                     windowID: windowID,
                     sourceCell: sourceCell,
                     currentCellBounds: calculated.cellBounds,
                     wmState: wmState,
-                    spaceID: spaceID
+                    spaceID: spaceID,
+                    warpMouse: opts.warpMouse
                 )
                 return result
             }
@@ -180,7 +223,8 @@ class GridWindowMove {
             spaceID: spaceID,
             layoutDef: layoutDef,
             displayBounds: displayBounds,
-            wmState: wmState
+            wmState: wmState,
+            warpMouse: opts.warpMouse
         )
     }
 
@@ -195,7 +239,8 @@ class GridWindowMove {
         spaceID: String,
         layoutDef: GridLayoutDef,
         displayBounds: CGRect,
-        wmState: WindowManagerState
+        wmState: WindowManagerState,
+        warpMouse: Bool = false
     ) async throws -> GridMoveResult {
         guard let gridState = gridState,
               let gridConfig = gridConfig,
@@ -235,11 +280,16 @@ class GridWindowMove {
             layoutDef: layoutDef
         )
 
-        // 6. Calculate window placements
-        let baseSpacing = await MainActor.run { gridConfig.getBaseSpacing() }
-        let settingsPadding = await MainActor.run { gridConfig.getSettingsPadding() }
-        let settingsWindowSpacing = await MainActor.run { gridConfig.getSettingsWindowSpacing() }
-        let defaultMode = await MainActor.run { gridConfig.settings.defaultStackMode }
+        // 6. Batch all config reads into single MainActor hop
+        let displayUUID = gridFocus.findCurrentDisplayUUID(wmState, spaceID)
+        let displayName = findDisplayName(displayUUID, wmState: wmState)
+        let (baseSpacing, settingsPadding, settingsWindowSpacing, defaultMode, offset) = await MainActor.run {
+            (gridConfig.getBaseSpacing(),
+             gridConfig.getSettingsPadding(),
+             gridConfig.getSettingsWindowSpacing(),
+             gridConfig.settings.defaultStackMode,
+             gridConfig.getDisplayOffset(uuid: displayUUID, name: displayName))
+        }
 
         var placements = GridLayout.calculateAllWindowPlacements(
             calculatedLayout: calculated,
@@ -254,9 +304,6 @@ class GridWindowMove {
         )
 
         // 7. Apply display offset
-        let displayUUID = gridFocus.findCurrentDisplayUUID(wmState, spaceID)
-        let displayName = findDisplayName(displayUUID, wmState: wmState)
-        let offset = await MainActor.run { gridConfig.getDisplayOffset(uuid: displayUUID, name: displayName) }
         if offset.x != 0 || offset.y != 0 {
             for i in 0..<placements.count {
                 placements[i] = GridWindowPlacement(
@@ -269,20 +316,29 @@ class GridWindowMove {
         // 8. Apply placements via WindowManipulator
         await applyPlacementsViaAX(placements)
 
-        // 9. Handle tab mode: raise next window in source cell if tabbed
-        await raiseNextWindowIfTabbed(
-            sourceCell: sourceCell,
-            spaceID: spaceID,
-            cellModes: cellModes,
-            defaultMode: defaultMode
-        )
+        // 9. Skip tab raise for same-display moves — repositioning the moved
+        // window via AX reveals the underlying window naturally. Calling
+        // focusWindow on the remaining window activates its app, causing a
+        // visible flash (e.g. Messages appearing briefly) before we refocus
+        // the moved window.
 
         // 10. Focus the moved window
         try await gridFocus.focusWindowByID(windowID)
 
-        // 11. Sync borders for current space
+        // 10b. Warp mouse cursor to target cell center
+        if warpMouse, let targetBounds = calculated.cellBounds[targetCell] {
+            CGWarpMouseCursorPosition(CGPoint(x: targetBounds.midX, y: targetBounds.midY))
+        }
+
+        // 11. Defer border sync (user-invisible decoration, don't block return)
         let displayUUIDForBorders = gridFocus.findCurrentDisplayUUID(wmState, spaceID)
-        await gridReconciler.syncBordersForSpace(spaceID, displayUUID: displayUUIDForBorders)
+        Task {
+            await gridReconciler.syncBordersForSpace(spaceID, displayUUID: displayUUIDForBorders)
+        }
+
+        // Track for rapid-move detection
+        lastMovedWindowID = windowID
+        lastMoveTime = CFAbsoluteTimeGetCurrent()
 
         return GridMoveResult(
             windowID: windowID,
@@ -304,8 +360,10 @@ class GridWindowMove {
         sourceCell: String,
         currentCellBounds: [String: CGRect],
         wmState: WindowManagerState,
-        spaceID: String
+        spaceID: String,
+        warpMouse: Bool = false
     ) async throws -> GridMoveResult {
+        let t0 = CFAbsoluteTimeGetCurrent()
         guard let gridState = gridState,
               let gridConfig = gridConfig,
               let gridFocus = gridFocus,
@@ -338,8 +396,10 @@ class GridWindowMove {
         }
 
         // 3. Get cells on target display
+        let t1 = CFAbsoluteTimeGetCurrent()
         let (targetCellBounds, targetSpaceID) = try await gridFocus.getDisplayCells(adjacentDisplay)
         let targetSpaceIDStr = String(targetSpaceID)
+        let t2 = CFAbsoluteTimeGetCurrent()
 
         // 4. Map visual position to target display
         let currentDisplayBounds = findDisplayBounds(currentDisplayUUID, from: wmState)
@@ -358,56 +418,107 @@ class GridWindowMove {
         }
 
         // 6. Move window to target space via WindowManipulator
+        let t3 = CFAbsoluteTimeGetCurrent()
         let _ = windowManipulator.moveWindowToSpace(windowID: windowID, spaceID: targetSpaceID)
+        let t4 = CFAbsoluteTimeGetCurrent()
 
         // 7. Update state on both source and target spaces
         await gridState.removeWindow(windowID, fromSpace: spaceID)
-        await gridState.prependWindow(windowID, toCellID: targetCell, inSpace: targetSpaceIDStr)
-        await gridState.setFocus(spaceID: targetSpaceIDStr, cellID: targetCell, windowIndex: 0)
 
-        // 8. Calculate and apply placements for target cell on target display
-        await applyPartialLayout(
-            spaceID: targetSpaceIDStr,
-            cellIDs: [targetCell],
-            displayBounds: targetDisplayBounds,
-            displayUUID: adjacentDisplay.uuid,
-            displayName: adjacentDisplay.name ?? ""
-        )
-
-        // 9. Also rebalance source cell on source display
-        let sourceCellWindows = await gridState.getCellWindows(spaceID: spaceID, cellID: sourceCell)
-        if !sourceCellWindows.isEmpty {
-            await applyPartialLayout(
-                spaceID: spaceID,
-                cellIDs: [sourceCell],
-                displayBounds: currentDisplayBounds,
-                displayUUID: currentDisplayUUID,
-                displayName: findDisplayName(currentDisplayUUID, wmState: wmState)
-            )
-            // Handle tab mode raise for source cell
-            let defaultMode = await MainActor.run { gridConfig.settings.defaultStackMode }
-            let sourceLayoutID = await gridState.getCurrentLayout(spaceID: spaceID)
-            let srcLayoutDef: GridLayoutDef? = try? await MainActor.run { try gridConfig.getLayout(id: sourceLayoutID) }
-            if let layoutDef = srcLayoutDef {
-                let (srcModes, _) = await buildCellModesAndRatios(
-                    cellIDs: [sourceCell],
-                    spaceID: spaceID,
-                    layoutDef: layoutDef
-                )
-                await raiseNextWindowIfTabbed(
-                    sourceCell: sourceCell,
-                    spaceID: spaceID,
-                    cellModes: srcModes,
-                    defaultMode: defaultMode
-                )
+        // Restore source space's focusedCell if it was saved during a previous
+        // cross-display move (prevents stale focusedCell after window bounces back)
+        if let saved = savedFocusedCells.removeValue(forKey: spaceID) {
+            let sourceState = await gridState.getSpaceReadOnly(spaceID)
+            if let ss = sourceState, let cellState = ss.cells[saved], !cellState.windows.isEmpty {
+                await gridState.setFocus(spaceID: spaceID, cellID: saved, windowIndex: cellState.lastFocusedIdx)
             }
         }
 
-        // 10. Focus the moved window
-        try await gridFocus.focusWindowByID(windowID)
+        // Save target space's focusedCell before overwriting (only first time)
+        if savedFocusedCells[targetSpaceIDStr] == nil {
+            let prevFocused = await gridState.getFocusedCell(spaceID: targetSpaceIDStr)
+            if let prev = prevFocused, !prev.isEmpty {
+                savedFocusedCells[targetSpaceIDStr] = prev
+            }
+        }
 
-        // 11. Sync borders on target display
+        await gridState.prependWindow(windowID, toCellID: targetCell, inSpace: targetSpaceIDStr)
+        await gridState.setFocus(spaceID: targetSpaceIDStr, cellID: targetCell, windowIndex: 0)
+        let t5 = CFAbsoluteTimeGetCurrent()
+
+        // 8. Begin move: suppresses reconciler AND starts cooldown tracking
+        // so delayed OS focus events don't bounce borders to wrong windows
+        gridReconciler.beginMove(targetWindowID: windowID)
+
+        // 9. Apply layouts on target and source displays in parallel
+        let sourceCellWindows = await gridState.getCellWindows(spaceID: spaceID, cellID: sourceCell)
+        let sourceDisplayName = findDisplayName(currentDisplayUUID, wmState: wmState)
+
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { [self] in
+                await applyPartialLayout(
+                    spaceID: targetSpaceIDStr,
+                    cellIDs: [targetCell],
+                    displayBounds: targetDisplayBounds,
+                    displayUUID: adjacentDisplay.uuid,
+                    displayName: adjacentDisplay.name ?? ""
+                )
+            }
+            if !sourceCellWindows.isEmpty {
+                group.addTask { [self] in
+                    await applyPartialLayout(
+                        spaceID: spaceID,
+                        cellIDs: [sourceCell],
+                        displayBounds: currentDisplayBounds,
+                        displayUUID: currentDisplayUUID,
+                        displayName: sourceDisplayName
+                    )
+                }
+            }
+        }
+        let t6 = CFAbsoluteTimeGetCurrent()
+
+        // 10. Skip tab raise for cross-display moves — we're leaving the source
+        // display entirely, and raising a window there fires a spurious OS focus
+        // event that races with our focusWindowByID on rapid repeated moves.
+        let t7 = CFAbsoluteTimeGetCurrent()
+
+        // 11. Focus the moved window (do this LAST so it's the final focus state)
+        try await gridFocus.focusWindowByID(windowID)
+        // Tell StateManager the target space is now active so subsequent
+        // focus/move commands don't use stale metadata from delayed OS events
+        await stateManager?.overrideActiveSpace(targetSpaceID)
+        let t8 = CFAbsoluteTimeGetCurrent()
+
+        // 11b. Warp mouse cursor to target cell center on target display
+        if warpMouse, let targetBounds = targetCellBounds[targetCell] {
+            CGWarpMouseCursorPosition(CGPoint(x: targetBounds.midX, y: targetBounds.midY))
+        }
+
+        // 12. Sync borders while still suppressed (no race with OS events).
+        // Source FIRST, target LAST — SimpleBorderManager dispatches to main
+        // queue async, so the last setCellAssignments wins the global focus.
+        await gridReconciler.syncBordersForSpace(spaceID, displayUUID: currentDisplayUUID)
         await gridReconciler.syncBordersForSpace(targetSpaceIDStr, displayUUID: adjacentDisplay.uuid)
+        gridReconciler.endMove()
+
+        let tTotal = CFAbsoluteTimeGetCurrent()
+        jlog("winmove.cross.timing", data: [
+            "wid": windowID,
+            "dir": direction.rawValue,
+            "total_ms": Int((tTotal - t0) * 1000),
+            "find_adj_ms": Int((t1 - t0) * 1000),
+            "get_cells_ms": Int((t2 - t1) * 1000),
+            "sls_move_ms": Int((t4 - t3) * 1000),
+            "state_update_ms": Int((t5 - t4) * 1000),
+            "apply_layout_ms": Int((t6 - t5) * 1000),
+            "tab_raise_ms": Int((t7 - t6) * 1000),
+            "focus_ms": Int((t8 - t7) * 1000),
+        ])
+
+        // Track for rapid-move detection
+        lastMovedWindowID = windowID
+        lastMoveTime = CFAbsoluteTimeGetCurrent()
 
         return GridMoveResult(
             windowID: windowID,
@@ -436,8 +547,27 @@ class GridWindowMove {
 
         let layoutID = await gridState.getCurrentLayout(spaceID: spaceID)
         guard !layoutID.isEmpty else { return }
-        let layoutDefOpt: GridLayoutDef? = try? await MainActor.run { try gridConfig.getLayout(id: layoutID) }
-        guard let layoutDef = layoutDefOpt else { return }
+
+        // Batch all MainActor config reads into a single hop
+        struct ConfigSnapshot: Sendable {
+            let layoutDef: GridLayoutDef?
+            let baseSpacing: Double
+            let padding: GridPadding?
+            let windowSpacing: GridPaddingValue?
+            let defaultMode: GridStackMode
+            let offset: GridDisplayOffset
+        }
+        let config = await MainActor.run {
+            ConfigSnapshot(
+                layoutDef: try? gridConfig.getLayout(id: layoutID),
+                baseSpacing: gridConfig.getBaseSpacing(),
+                padding: gridConfig.getSettingsPadding(),
+                windowSpacing: gridConfig.getSettingsWindowSpacing(),
+                defaultMode: gridConfig.settings.defaultStackMode,
+                offset: gridConfig.getDisplayOffset(uuid: displayUUID, name: displayName)
+            )
+        }
+        guard let layoutDef = config.layoutDef else { return }
 
         let columnRatios = await gridState.getColumnRatios(spaceID: spaceID)
         let rowRatios = await gridState.getRowRatios(spaceID: spaceID)
@@ -460,29 +590,23 @@ class GridWindowMove {
             layoutDef: layoutDef
         )
 
-        let baseSpacing = await MainActor.run { gridConfig.getBaseSpacing() }
-        let settingsPadding = await MainActor.run { gridConfig.getSettingsPadding() }
-        let settingsWindowSpacing = await MainActor.run { gridConfig.getSettingsWindowSpacing() }
-        let defaultMode = await MainActor.run { gridConfig.settings.defaultStackMode }
-
         var placements = GridLayout.calculateAllWindowPlacements(
             calculatedLayout: calculated,
             layout: layoutDef,
             assignments: assignments,
             cellModes: cellModes,
             cellRatios: cellRatios,
-            defaultMode: defaultMode,
-            baseSpacing: baseSpacing,
-            settingsPadding: settingsPadding,
-            settingsWindowSpacing: settingsWindowSpacing
+            defaultMode: config.defaultMode,
+            baseSpacing: config.baseSpacing,
+            settingsPadding: config.padding,
+            settingsWindowSpacing: config.windowSpacing
         )
 
-        let offset = await MainActor.run { gridConfig.getDisplayOffset(uuid: displayUUID, name: displayName) }
-        if offset.x != 0 || offset.y != 0 {
+        if config.offset.x != 0 || config.offset.y != 0 {
             for i in 0..<placements.count {
                 placements[i] = GridWindowPlacement(
                     windowID: placements[i].windowID,
-                    bounds: placements[i].bounds.offsetBy(dx: offset.x, dy: offset.y)
+                    bounds: placements[i].bounds.offsetBy(dx: config.offset.x, dy: config.offset.y)
                 )
             }
         }
@@ -554,42 +678,6 @@ class GridWindowMove {
         }
     }
 
-    // raiseNextWindowIfTabbed: raise the remaining visible window in source cell
-    // after a window is moved out of a tabbed cell
-    private func raiseNextWindowIfTabbed(
-        sourceCell: String,
-        spaceID: String,
-        cellModes: [String: GridStackMode],
-        defaultMode: GridStackMode
-    ) async {
-        let mode = cellModes[sourceCell] ?? defaultMode
-        guard mode == .tabs else { return }
-
-        guard let gridState = gridState else { return }
-        let cellWindows = await gridState.getCellWindows(spaceID: spaceID, cellID: sourceCell)
-        guard !cellWindows.isEmpty else { return }
-
-        // Focus the last-focused window in the source cell
-        let spaceState = await gridState.getSpaceReadOnly(spaceID)
-        let cellState = spaceState?.cells[sourceCell]
-        var nextIdx = 0
-        if let cellState = cellState {
-            if cellState.lastFocusedWid != 0 {
-                for (i, wid) in cellWindows.enumerated() {
-                    if wid == cellState.lastFocusedWid {
-                        nextIdx = i
-                        break
-                    }
-                }
-            } else if cellState.lastFocusedIdx >= 0 && cellState.lastFocusedIdx < cellWindows.count {
-                nextIdx = cellState.lastFocusedIdx
-            }
-        }
-
-        // Raise via WindowManipulator focus (just AX raise, don't change grid focus)
-        guard let context = await ManipulationContext.from(windowID: cellWindows[nextIdx]) else { return }
-        let _ = windowManipulator?.focusWindow(pid: context.pid, windowID: cellWindows[nextIdx])
-    }
 
     // findDisplayBounds: look up display bounds from wmState
     private func findDisplayBounds(_ displayUUID: String, from wmState: WindowManagerState) -> CGRect {

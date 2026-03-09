@@ -433,6 +433,16 @@ actor GridState {
                 cell.splitRatios = equalRatios(cell.windows.count)
             }
 
+            // Fix space-level focus if the removed window's cell was focused
+            if space.focusedCell == cellID {
+                if cell.windows.isEmpty {
+                    space.focusedCell = ""
+                    space.focusedWindow = 0
+                } else {
+                    space.focusedWindow = cell.lastFocusedIdx
+                }
+            }
+
             space.cells[cellID] = cell
             spaces[spaceID] = space
             markDirty()
@@ -496,6 +506,18 @@ actor GridState {
         for (cellID, cell) in space.cells {
             if cell.windows.contains(windowID) {
                 return cellID
+            }
+        }
+        return nil
+    }
+
+    // Find which space contains a window (searches all spaces)
+    func findSpaceContaining(windowID: UInt32) -> String? {
+        for (spaceID, space) in spaces {
+            for (_, cell) in space.cells {
+                if cell.windows.contains(windowID) {
+                    return spaceID
+                }
             }
         }
         return nil

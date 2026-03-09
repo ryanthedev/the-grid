@@ -117,9 +117,16 @@ class GridFocus {
         let adjacentMap = GridLayout.getAdjacentCells(cellID: currentCell, cellBounds: calculated.cellBounds)
         var candidates = adjacentMap[direction] ?? []
 
+        jlog("focus.move", data: [
+            "dir": direction.rawValue,
+            "cell": currentCell,
+            "candidates": candidates.count,
+            "allCells": calculated.cellBounds.count
+        ])
+
         if candidates.isEmpty {
-            // Try cross-display if extend enabled
-            if opts.extend {
+            // Try cross-display first
+            do {
                 let windowID = try await moveFocusCrossDisplay(
                     direction: direction,
                     wmState: wmState,
@@ -128,8 +135,6 @@ class GridFocus {
                     currentCellBounds: calculated.cellBounds
                 )
                 if opts.warpMouse {
-                    // Warp to the target cell on the target display
-                    // Re-fetch state to get the new focused cell's bounds
                     let newSpaceID = findActiveSpaceIDAfterCrossDisplay(direction, wmState: wmState)
                     if let newSpaceID = newSpaceID {
                         let newFocusedCell = await gridState.getFocusedCell(spaceID: newSpaceID)
@@ -147,13 +152,11 @@ class GridFocus {
                     }
                 }
                 return windowID
+            } catch {
+                // Cross-display failed — fall through to wrap-around
             }
 
-            if !opts.wrapAround {
-                throw GridFocusError.noCellInDirection
-            }
-
-            // Wrap: find cells on opposite edge
+            // Wrap: find cells on opposite edge of current display
             candidates = findWrapTarget(direction: direction, currentCell: currentCell, cellBounds: calculated.cellBounds)
             if candidates.isEmpty {
                 throw GridFocusError.noCellInDirection
@@ -318,8 +321,15 @@ class GridFocus {
         // Find current display UUID
         let currentDisplayUUID = findCurrentDisplayUUID(wmState, spaceID)
         guard !currentDisplayUUID.isEmpty else {
+            jlog("focus.cross.err", msg: "cannot determine display", data: ["spaceID": spaceID])
             throw GridFocusError.cannotDetermineDisplay
         }
+
+        jlog("focus.cross.try", data: [
+            "dir": direction.rawValue,
+            "display": String(currentDisplayUUID.prefix(8)),
+            "displays": wmState.displays.count
+        ])
 
         // Find adjacent display in direction
         var adjacentDisplay = findAdjacentDisplay(
@@ -328,6 +338,7 @@ class GridFocus {
             displays: wmState.displays
         )
         if adjacentDisplay == nil {
+            jlog("focus.cross.no_adjacent", data: ["dir": direction.rawValue])
             // Try opposite display for wrap-around
             adjacentDisplay = findOppositeDisplay(
                 currentDisplayUUID: currentDisplayUUID,
@@ -336,13 +347,25 @@ class GridFocus {
             )
         }
         guard let adjacentDisplay = adjacentDisplay else {
+            jlog("focus.cross.no_display", data: ["dir": direction.rawValue])
             throw GridFocusError.noDisplayInDirection
         }
+
+        jlog("focus.cross.found", data: [
+            "target": String(adjacentDisplay.uuid.prefix(8)),
+            "targetSpace": adjacentDisplay.currentSpaceID
+        ])
 
         // Get cells on target display
         let (targetCellBounds, targetSpaceID) = try await getDisplayCells(adjacentDisplay)
         let targetSpaceIDStr = String(targetSpaceID)
         let targetSpaceState = await gridState.getSpaceReadOnly(targetSpaceIDStr)
+
+        jlog("focus.cross.cells", data: [
+            "targetSpace": targetSpaceIDStr,
+            "cells": targetCellBounds.count,
+            "hasState": targetSpaceState != nil
+        ])
 
         // Get display bounds for position mapping
         let currentDisplayBounds = getDisplayBounds(currentDisplayUUID, wmState.displays)
@@ -752,10 +775,16 @@ class GridFocus {
         return nil
     }
 
-    // findActiveSpaceID: find the active space from WindowManagerState
+    // findActiveSpaceID: find the focused display's active space
+    // Uses metadata.activeSpaceID which tracks the display that has focus,
+    // not just any display's active space (multi-monitor has one per display).
     func findActiveSpaceID(
         _ wmState: WindowManagerState
     ) -> String? {
+        if let activeSpaceID = wmState.metadata.activeSpaceID {
+            return String(activeSpaceID)
+        }
+        // Fallback: find any active space (single-monitor case)
         for (spaceKey, space) in wmState.spaces {
             if space.isActive {
                 return spaceKey

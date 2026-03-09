@@ -49,11 +49,8 @@ actor StateManager: StateEventHandler {
     // How long to consider a focus as "CLI-initiated" (prevents loop)
     private let cliFocusWindow: TimeInterval = 0.5
 
-    // CLI path for invoking border sync on external focus
+    // CLI path (used for ResizeManager)
     private var cliPath: String = "thegrid"
-
-    // Debug: sequence counter for CLI invocations to track ordering
-    private var cliInvokeSequence: Int = 0
 
     func setBorderEvents(_ events: BorderEvents) {
         self.borderEvents = events
@@ -143,6 +140,12 @@ actor StateManager: StateEventHandler {
 
     func getState() -> WindowManagerState {
         return state
+    }
+
+    /// Override activeSpaceID — used after cross-display moves where the OS
+    /// hasn't yet updated which display/space is active.
+    func overrideActiveSpace(_ spaceID: UInt64) {
+        state.metadata.activeSpaceID = spaceID
     }
 
     /// Graceful shutdown - cleanup all observers and timers
@@ -1525,117 +1528,15 @@ var windows: [String: WindowState] = [:]
 
         JSONLogger.shared.log("win.focus", data: logData)
 
-        // Check if this was a CLI-initiated focus (skip CLI invocation to prevent loop)
-        if wasRecentlyCliFocused(windowID) {
-            JSONLogger.shared.log("win.focus.cli", data: ["wid": windowID, "skip": true])
-        } else {
-            // External focus (click, etc.) - invoke CLI to sync borders
-            invokeCLIForBorderSync(windowID: windowID)
-        }
+        // Border sync is handled by GridReconciler via EventRouter focusChanged events
 
         if let stateSpan = stateSpan {
             await stateSpan.end()
         }
     }
 
-    /// Invoke CLI to refresh layouts after a space change.
-    /// Fire-and-forget: spawns process asynchronously so the server isn't blocked.
-    private func invokeCLIForLayoutRefresh() {
-        let path = cliPath
-        let seq = cliInvokeSequence
-        cliInvokeSequence += 1
-
-        JSONLogger.shared.log("cli.invoke.spawn", data: [
-            "cmd": "layout refresh",
-            "seq": seq
-        ])
-
-        Task.detached {
-            let process = Process()
-            if path.hasPrefix("/") {
-                process.executableURL = URL(fileURLWithPath: path)
-                process.arguments = ["layout", "refresh"]
-            } else {
-                process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-                process.arguments = [path, "layout", "refresh"]
-            }
-            process.standardOutput = FileHandle.nullDevice
-            process.standardError = FileHandle.nullDevice
-
-            do {
-                try process.run()
-                process.waitUntilExit()
-
-                let status = process.terminationStatus
-                if status == 0 {
-                    JSONLogger.shared.log("cli.invoke.ok", data: ["cmd": "layout refresh", "seq": seq])
-                } else {
-                    JSONLogger.shared.log("cli.invoke.err", data: ["cmd": "layout refresh", "seq": seq, "status": status])
-                }
-            } catch {
-                JSONLogger.shared.log("cli.invoke.err", data: ["cmd": "layout refresh", "seq": seq, "error": "\(error)"])
-            }
-        }
-    }
-
-    /// Invoke CLI to sync borders for external focus changes
-    /// Fire-and-forget: spawns process asynchronously, logs result, no retries
-    private func invokeCLIForBorderSync(windowID: UInt32) {
-        let path = cliPath
-        let seq = cliInvokeSequence
-        cliInvokeSequence += 1
-        let spawnTime = Date()
-
-        // Log when process is SPAWNED (not just when it completes)
-        JSONLogger.shared.log("cli.invoke.spawn", data: [
-            "wid": windowID,
-            "seq": seq,
-            "path": path
-        ])
-
-        Task.detached {
-            let process = Process()
-            if path.hasPrefix("/") {
-                process.executableURL = URL(fileURLWithPath: path)
-                process.arguments = ["event", "focus", String(windowID)]
-            } else {
-                process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-                process.arguments = [path, "event", "focus", String(windowID)]
-            }
-            process.standardOutput = FileHandle.nullDevice
-            process.standardError = FileHandle.nullDevice
-
-            do {
-                try process.run()
-                process.waitUntilExit()
-
-                let status = process.terminationStatus
-                let durationMs = Int(Date().timeIntervalSince(spawnTime) * 1000)
-                if status == 0 {
-                    JSONLogger.shared.log("cli.invoke.ok", data: [
-                        "wid": windowID,
-                        "seq": seq,
-                        "dur_ms": durationMs
-                    ])
-                } else {
-                    JSONLogger.shared.log("cli.invoke.err", data: [
-                        "wid": windowID,
-                        "seq": seq,
-                        "dur_ms": durationMs,
-                        "status": status,
-                        "path": path
-                    ])
-                }
-            } catch {
-                JSONLogger.shared.log("cli.invoke.err", data: [
-                    "wid": windowID,
-                    "seq": seq,
-                    "path": path,
-                    "error": "\(error)"
-                ])
-            }
-        }
-    }
+    // Legacy CLI invocation methods removed — GridReconciler handles
+    // border sync and layout refresh via EventRouter events.
 
     private func handleWindowMinimized(_ windowID: UInt32) async {
         let window = state.windows[String(windowID)]
@@ -1792,8 +1693,7 @@ var windows: [String: WindowState] = [:]
 
         state.metadata.update()
 
-        // Reapply layouts after state is fully updated so windows snap into position
-        invokeCLIForLayoutRefresh()
+        // Layout refresh handled by GridReconciler via EventRouter space change events
     }
 
     /// Update activeDisplayUUID and activeSpaceID based on which display has the focused/active space

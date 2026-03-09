@@ -47,6 +47,11 @@ func runProcess(_ executable: String, args: [String]) async -> String? {
 
             do {
                 try process.run()
+                // Read pipe BEFORE waitUntilExit to avoid deadlock.
+                // If the subprocess writes more than the pipe buffer (64KB),
+                // it blocks on write until someone reads — calling
+                // waitUntilExit first would deadlock.
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
                 process.waitUntilExit()
 
                 guard process.terminationStatus == 0 else {
@@ -54,7 +59,6 @@ func runProcess(_ executable: String, args: [String]) async -> String? {
                     return
                 }
 
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
                 let output = String(data: data, encoding: .utf8)?
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                 continuation.resume(returning: output ?? "")

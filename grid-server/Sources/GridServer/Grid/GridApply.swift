@@ -479,6 +479,12 @@ class GridApply {
         _ displayUUID: String,
         wmState: WindowManagerState
     ) -> String? {
+        // Use display.currentSpaceID directly (avoids non-deterministic space iteration)
+        if let display = wmState.displays.first(where: { $0.uuid == displayUUID }),
+           display.currentSpaceID != 0 {
+            return String(display.currentSpaceID)
+        }
+        // Fallback: iterate spaces
         for (spaceKey, space) in wmState.spaces {
             if space.displayUUID == displayUUID && space.isActive {
                 return spaceKey

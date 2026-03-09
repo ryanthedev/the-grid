@@ -108,7 +108,13 @@ class FocusTracker: StateEventHandler {
     private func captureCurrentFocus() async {
         // Get current space from stateManager
         let wmState = await stateManager.getState()
-        let currentDisplay = wmState.displays.first(where: { $0.isMain == true }) ?? wmState.displays.first
+        // Use metadata.activeDisplayUUID to find the focused display (not isMain which is the primary monitor)
+        let currentDisplay: DisplayState?
+        if let activeUUID = wmState.metadata.activeDisplayUUID {
+            currentDisplay = wmState.displays.first(where: { $0.uuid == activeUUID }) ?? wmState.displays.first
+        } else {
+            currentDisplay = wmState.displays.first
+        }
         guard let currentDisplay else { return }
         let spaceID = String(currentDisplay.currentSpaceID)
 
@@ -455,7 +461,13 @@ func resolveTarget(
     case .cell(let id):
         // Get current space from stateManager
         let wmState = await stateManager.getState()
-        let currentDisplay = wmState.displays.first(where: { $0.isMain == true }) ?? wmState.displays.first
+        // Use metadata.activeDisplayUUID to find the focused display (not isMain which is the primary monitor)
+        let currentDisplay: DisplayState?
+        if let activeUUID = wmState.metadata.activeDisplayUUID {
+            currentDisplay = wmState.displays.first(where: { $0.uuid == activeUUID }) ?? wmState.displays.first
+        } else {
+            currentDisplay = wmState.displays.first
+        }
         guard let currentDisplay else {
             throw RecordingError.targetResolutionFailed("no displays")
         }
@@ -528,8 +540,14 @@ func resolveTarget(
             let d = wmState.displays[idx]
             return ResolvedTarget(label: "screen-\(index)", regions: [d.frame ?? .zero])
         } else {
-            // Current display
-            let current = wmState.displays.first(where: { $0.isMain == true }) ?? wmState.displays[0]
+            // Current display (use focused display, not primary monitor)
+            let current: DisplayState
+            if let activeUUID = wmState.metadata.activeDisplayUUID,
+               let active = wmState.displays.first(where: { $0.uuid == activeUUID }) {
+                current = active
+            } else {
+                current = wmState.displays[0]
+            }
             return ResolvedTarget(label: "screen", regions: [current.frame ?? .zero])
         }
 
@@ -609,7 +627,13 @@ actor GridRecorder {
         if options.follow {
             // Follow mode: capture full screen, track focus changes
             let wmState = await stateManager.getState()
-            let display = wmState.displays.first(where: { $0.isMain == true }) ?? wmState.displays.first
+            // Use focused display, not primary monitor
+            let display: DisplayState?
+            if let activeUUID = wmState.metadata.activeDisplayUUID {
+                display = wmState.displays.first(where: { $0.uuid == activeUUID }) ?? wmState.displays.first
+            } else {
+                display = wmState.displays.first
+            }
             let fullScreenRegion = display?.frame ?? .zero
             capturedFile = tempPath("recording", "mov")
 

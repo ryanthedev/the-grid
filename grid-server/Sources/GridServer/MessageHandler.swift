@@ -1621,12 +1621,17 @@ completion(Response(id: request.id, result: AnyCodable(["success": true])))
         register(method: "grid.layout.current") { request, completion in
             Task {
                 let wmState = await stateManager.getState()
-                // Find active space ID from the first display
+                // Use metadata.activeSpaceID for the focused display's space
                 var spaceID = ""
-                for display in wmState.displays {
-                    if display.currentSpaceID != 0 {
-                        spaceID = String(display.currentSpaceID)
-                        break
+                if let activeSpaceID = wmState.metadata.activeSpaceID {
+                    spaceID = String(activeSpaceID)
+                } else {
+                    // Fallback: first display with a non-zero space
+                    for display in wmState.displays {
+                        if display.currentSpaceID != 0 {
+                            spaceID = String(display.currentSpaceID)
+                            break
+                        }
                     }
                 }
                 let currentLayoutID = await gridState.getCurrentLayout(spaceID: spaceID)

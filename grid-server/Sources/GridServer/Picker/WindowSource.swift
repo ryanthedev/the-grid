@@ -18,10 +18,14 @@ struct WindowSource: PickerSource {
 
     func discover() async throws -> [PickerItem] {
         // 1. Refresh enricher caches (subprocess calls for process tree, tmux, ssh)
+        jlog("pick.win.refresh.start")
         await enricher.refreshCaches()
+        jlog("pick.win.refresh.done")
 
         // 2. Get windows from StateManager
+        jlog("pick.win.state.start")
         let state = await StateManager.shared.getState()
+        jlog("pick.win.state.done", data: ["windows": "\(state.windows.count)"])
 
         var items: [PickerItem] = []
 
@@ -122,6 +126,7 @@ struct WindowSource: PickerSource {
             items.append(item)
         }
 
+        jlog("pick.win.enrich.done", data: ["items": "\(items.count)"])
         // Persist tmux cache after processing all windows
         enricher.cleanup()
 

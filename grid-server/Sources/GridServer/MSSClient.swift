@@ -93,11 +93,23 @@ class MSSClient {
         }
     }
 
+    // Cache MSS availability permanently until explicitly reset (e.g., wake).
+    // MSS requires a scripting addition injected into Dock — if it's not there
+    // at startup, it won't appear mid-session. Avoids 600ms retry penalty.
+    private var cachedAvailable: Bool?
+
     /// Check if MSS payload is loaded and available.
-    /// Retries up to 3 times with reconnection on failure (handles post-wake instability).
+    /// Result is cached permanently — if MSS isn't available at first check,
+    /// it won't become available mid-session. Call resetAvailabilityCache()
+    /// after sleep/wake to re-probe.
     /// - Returns: true if MSS is ready to use
     func isAvailable() -> Bool {
         return queue.sync {
+            if let cached = cachedAvailable {
+                return cached
+            }
+
+            // First check: probe with retries
             for attempt in 0..<3 {
                 guard let ctx = ctx else {
                     reconnect()
@@ -109,6 +121,11 @@ class MSSClient {
                 let result = mss_handshake(ctx, &capabilities, &version)
 
                 if result == 0 {
+                    cachedAvailable = true
+                    JSONLogger.shared.log("mss.available", data: [
+                        "version": version.map { String(cString: $0) } ?? "unknown",
+                        "capabilities": capabilities,
+                    ])
                     return true
                 }
 
@@ -118,14 +135,21 @@ class MSSClient {
                     "attempt": attempt + 1
                 ])
 
-                // Reconnect and retry (except on last attempt)
                 if attempt < 2 {
                     reconnect()
-                    // Brief sync pause to let Dock.app recover
                     Thread.sleep(forTimeInterval: 0.3)
                 }
             }
+            cachedAvailable = false
+            JSONLogger.shared.log("mss.unavailable", msg: "MSS not available, using SkyLight fallback")
             return false
+        }
+    }
+
+    /// Reset availability cache (call on system wake to re-probe MSS)
+    func resetAvailabilityCache() {
+        queue.sync {
+            cachedAvailable = nil
         }
     }
 

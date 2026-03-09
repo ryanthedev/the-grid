@@ -42,7 +42,6 @@ class GridCommandRouter {
     private let gridReconciler: GridReconciler
     private let simpleBorderManager: SimpleBorderManager
     private let gridRecorder: GridRecorder
-    private let gridTerminal: GridTerminal
 
     // Short flag -> long flag mapping for BFD commands
     private static let shortFlagMap: [Character: String] = [
@@ -63,8 +62,7 @@ class GridCommandRouter {
         windowManipulator: WindowManipulator,
         gridReconciler: GridReconciler,
         simpleBorderManager: SimpleBorderManager,
-        gridRecorder: GridRecorder,
-        gridTerminal: GridTerminal
+        gridRecorder: GridRecorder
     ) {
         self.gridFocus = gridFocus
         self.gridCellOps = gridCellOps
@@ -78,7 +76,6 @@ class GridCommandRouter {
         self.gridReconciler = gridReconciler
         self.simpleBorderManager = simpleBorderManager
         self.gridRecorder = gridRecorder
-        self.gridTerminal = gridTerminal
 
         // Wire feature modules via their setup() methods
         gridFocus.setup(
@@ -120,12 +117,6 @@ class GridCommandRouter {
             gridApply: gridApply,
             gridFocus: gridFocus,
             stateManager: stateManager
-        )
-
-        gridTerminal.setup(
-            stateManager: stateManager,
-            windowManipulator: windowManipulator,
-            gridConfig: gridConfig
         )
 
         // Circular dependency resolution
@@ -181,7 +172,8 @@ class GridCommandRouter {
             case "record":
                 return try await handleRecord(parsed)
             case "terminal":
-                return await gridTerminal.toggle()
+                DistributedNotificationCenter.default().post(name: NSNotification.Name("com.thegrid.terminal.toggle"), object: nil)
+                return .ok("terminal toggled")
             default:
                 return .error("unknown domain: \(parsed.domain)")
             }

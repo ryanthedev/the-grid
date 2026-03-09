@@ -310,7 +310,7 @@ class WindowManipulator {
 
     /// Move a window to a specific space
     func moveWindowToSpace(windowID: UInt32, spaceID: UInt64) -> Bool {
-        JSONLogger.shared.log("win.space", data: ["wid": windowID, "sid": spaceID])
+        let t0 = CFAbsoluteTimeGetCurrent()
 
         // Validate space type - don't allow moves to fullscreen spaces
         let spaceType = SLSSpaceGetType(connectionID, spaceID)
@@ -322,6 +322,7 @@ class WindowManipulator {
 
         // Check current space
         let currentSpace = getWindowSpace(windowID: windowID)
+        let t1 = CFAbsoluteTimeGetCurrent()
 
         if currentSpace == spaceID {
 return true
@@ -335,7 +336,9 @@ return true
             if mssClient.isAvailable() {
 
                 // Use MSS to move window
+                let t2 = CFAbsoluteTimeGetCurrent()
                 let success = mssClient.moveWindowToSpace(windowID: windowID, spaceID: spaceID)
+                let t3 = CFAbsoluteTimeGetCurrent()
 
                 if !success {
                     JSONLogger.shared.log("mss.fail", data: ["op": "move", "wid": windowID, "sid": spaceID])
@@ -344,10 +347,19 @@ return true
 
                 // Verify the move
                 let newSpace = getWindowSpace(windowID: windowID)
+                let t4 = CFAbsoluteTimeGetCurrent()
                 let verified = newSpace == spaceID
 
+                JSONLogger.shared.log("win.space.timing", data: [
+                    "wid": windowID,
+                    "method": "mss",
+                    "check_space_ms": Int((t1 - t0) * 1000),
+                    "mss_move_ms": Int((t3 - t2) * 1000),
+                    "verify_ms": Int((t4 - t3) * 1000),
+                    "total_ms": Int((t4 - t0) * 1000),
+                ])
+
                 if verified {
-                    JSONLogger.shared.log("mss.move", data: ["wid": windowID, "sid": spaceID])
                     return true
                 } else {
                     JSONLogger.shared.log("err.verify", data: ["wid": windowID, "expected": spaceID, "actual": newSpace as Any])
@@ -355,9 +367,14 @@ return true
                 }
 
             } else {
-                // MSS not available
-                JSONLogger.shared.log("warn.mss", data: ["reason": "not_available"])
-                return false
+                // MSS not available — fall back to direct SkyLight API
+                JSONLogger.shared.log("warn.mss", data: ["reason": "not_available", "fallback": "sls"])
+                let success = moveWindowViaSkyLightAPI(windowID: windowID, spaceID: spaceID)
+                if !success {
+                    return false
+                }
+                let newSpace = getWindowSpace(windowID: windowID)
+                return newSpace == spaceID
             }
         } else {
             // Older macOS - use direct API

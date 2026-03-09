@@ -8,7 +8,7 @@
 
 import AppKit
 
-class PickerWindow: NSWindow {
+class PickerWindow: NSPanel {
     private let textField: NSTextField
     private let closeButton: NSButton
     private let emptyLabel: NSLabel
@@ -92,8 +92,9 @@ class PickerWindow: NSWindow {
     // MARK: - Setup
 
     private func setupWindow() {
+        isFloatingPanel = true
         level = .floating
-        collectionBehavior = [.canJoinAllSpaces, .transient]
+        collectionBehavior = [.canJoinAllSpaces, .transient, .fullScreenAuxiliary]
         isOpaque = false
         backgroundColor = .clear
         hasShadow = true
@@ -198,7 +199,7 @@ class PickerWindow: NSWindow {
     // MARK: - Key Handling
 
     override var canBecomeKey: Bool { true }
-    override var canBecomeMain: Bool { false }
+    override var canBecomeMain: Bool { true }
 
     override func keyDown(with event: NSEvent) {
         // ESC — cancel

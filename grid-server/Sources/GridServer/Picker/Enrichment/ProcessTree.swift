@@ -35,8 +35,8 @@ class ProcessTree {
 
                     do {
                         try process.run()
-                        process.waitUntilExit()
                         let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                        process.waitUntilExit()
                         let out = String(data: data, encoding: .utf8) ?? ""
                         continuation.resume(returning: out)
                     } catch {
