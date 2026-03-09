@@ -160,6 +160,7 @@ class SimpleBorderManager {
            let cellID = assignments[newFocused] {
             let previousCellID = activeCellID
             let previousDisplayUUID = currentDisplayUUID
+            let previousFocusedWindow = focusedWindowID
 
             // Update state
             focusedWindowID = newFocused
@@ -170,6 +171,15 @@ class SimpleBorderManager {
             let displayChanged = displayUUID != previousDisplayUUID
             if displayChanged || cellID != previousCellID {
                 rebuildBorderPool(source: displayChanged ? "atomic-displayChange" : "atomic-cellChange")
+            } else if newFocused != previousFocusedWindow {
+                // Same cell, different window: reassign border roles
+                let stackMode = cellStackModes[cellID] ?? "tabs"
+                isActiveCellTabbed = (stackMode == "tabs")
+                reassignBorders(previousFocused: previousFocusedWindow)
+            } else {
+                // Same cell, same window: refresh positions (windows may have moved
+                // during suppressed operations like layout apply or swap)
+                rebuildBorderPool(source: "atomic-positionRefresh")
             }
         } else if displayUUID == currentDisplayUUID {
             // No focus update requested - existing behavior for current display
@@ -499,42 +509,6 @@ class SimpleBorderManager {
         guard let newFocused = focusedWindowID else { return }
         let config = BorderConfigManager.shared
 
-        // For tabbed cells: retarget the existing active border (no demote/promote)
-        if isActiveCellTabbed {
-            if let border = activeBorder {
-                border.retarget(to: newFocused)
-                // Update style with new stack indicator (index changed)
-                applyActiveStyle(to: border)
-                Task {
-                    JSONLogger.shared.log("bdr.retarget_focus", data: [
-                        "prev": previousFocused ?? 0,
-                        "new": newFocused
-                    ])
-                }
-            } else {
-                // Edge case: no active border exists, acquire one from pool
-                // First verify window is still in active cell
-                guard let cellID = activeCellID,
-                      let displayUUID = currentDisplayUUID,
-                      let assignments = cellAssignmentsPerDisplay[displayUUID],
-                      assignments[newFocused] == cellID else {
-                    Task {
-                        JSONLogger.shared.log("err.bdr.invalid_tabbed", data: ["wid": newFocused])
-                    }
-                    return
-                }
-                if let border = acquireBorder(for: newFocused) {
-                    activeBorder = border
-                    applyActiveStyle(to: border)
-                    Task {
-                        JSONLogger.shared.log("warn.bdr.missing_tabbed", data: ["wid": newFocused])
-                    }
-                }
-            }
-            return
-        }
-
-        // For non-tabbed cells: demote/promote as before
         // Step 1: Demote previous active border to inactive
         if let prevWindow = previousFocused, let border = activeBorder {
             updateBorderStyle(border, style: config.inactiveStyle)
@@ -575,21 +549,14 @@ class SimpleBorderManager {
         let windowsInCell = assignments.filter { $0.value == cellID }.map { $0.key }
         let config = BorderConfigManager.shared
 
-        // Determine if cell is tabbed using actual stackMode (not window count)
+        // Track stack mode for cell
         let stackModes = cellStackModesPerDisplay[displayUUID] ?? [:]
         let stackMode = stackModes[cellID] ?? "tabs"
         isActiveCellTabbed = (stackMode == "tabs")
 
-        // Acquire borders for windows in cell (from pool or create new)
-        // For tabbed cells: only acquire border for focused window (retarget on focus change)
-        // For non-tabbed cells: acquire borders for all windows (active + inactive)
+        // Acquire borders for all windows in cell (active + inactive)
         for windowID in windowsInCell {
             let isFocused = (windowID == focusedWindowID)
-
-            // Skip inactive borders for tabbed cells
-            if isActiveCellTabbed && !isFocused {
-                continue
-            }
 
             guard let border = acquireBorder(for: windowID) else { continue }
 

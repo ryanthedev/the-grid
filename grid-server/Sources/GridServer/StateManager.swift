@@ -1190,8 +1190,13 @@ var windows: [String: WindowState] = [:]
         let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
         timer.schedule(deadline: .now() + interval, repeating: interval)
         timer.setEventHandler { [weak self] in
+            // Perform heavy CGWindowList call outside actor to avoid blocking
+            let options: CGWindowListOption = [.optionAll, .excludeDesktopElements]
+            guard let windowList = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
+                return
+            }
             Task {
-                await self?.pollWindowState()
+                await self?.applyPollResults(windowList)
             }
         }
         timer.resume()
@@ -1205,14 +1210,9 @@ var windows: [String: WindowState] = [:]
         pollTimer = nil
     }
 
-    /// Poll window state from CGWindowList
-    private func pollWindowState() {
+    /// Apply pre-fetched CGWindowList results to state (called on actor)
+    private func applyPollResults(_ windowList: [[String: Any]]) {
         let pollTimestamp = Date()
-
-        let options: CGWindowListOption = [.optionAll, .excludeDesktopElements]
-        guard let windowList = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
-            return
-        }
 
         var seenWindowIDs = Set<UInt32>()
 
@@ -1232,10 +1232,10 @@ var windows: [String: WindowState] = [:]
             }
         }
 
-        // Remove windows no longer in CGWindowList
+        // Remove windows no longer in CGWindowList and notify via EventRouter
+        var destroyedWindowIDs: [UInt32] = []
         for windowKey in state.windows.keys {
             if let windowID = UInt32(windowKey), !seenWindowIDs.contains(windowID) {
-                // Inline removal logic (don't call handleWindowDestroyed to avoid log confusion)
                 let pid = state.windows[windowKey]?.pid
                 if state.metadata.focusedWindowID == windowID {
                     state.metadata.focusedWindowID = nil
@@ -1246,6 +1246,19 @@ var windows: [String: WindowState] = [:]
                 }
                 for spaceKey in state.spaces.keys {
                     state.spaces[spaceKey]?.windows.removeAll { $0 == windowID }
+                }
+                destroyedWindowIDs.append(windowID)
+            }
+        }
+
+        // Route destroy events so GridReconciler cleans up cell assignments and borders
+        if !destroyedWindowIDs.isEmpty {
+            Task {
+                for windowID in destroyedWindowIDs {
+                    await EventRouter.shared.route(
+                        .windowDestroyed(windowID: windowID),
+                        from: .poll
+                    )
                 }
             }
         }
@@ -1268,12 +1281,6 @@ var windows: [String: WindowState] = [:]
         // Update title
         if let name = windowInfo[kCGWindowName as String] as? String {
             window.title = name
-        }
-
-        // Get AX properties and prefer AX title if available
-        let axProps = getAXProperties(pid: window.pid, windowID: windowID)
-        if let axTitle = axProps.title, !axTitle.isEmpty {
-            window.title = axTitle
         }
 
         // Recompute displayUUID and derive space from display

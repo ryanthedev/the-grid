@@ -455,37 +455,31 @@ class GridCommandRouter {
         }
 
         switch cmd.action {
-        case "grow":
-            // @resize grow [amount] [--cell] [--direction left/right/up/down]
-            let amount = Double(cmd.args.first ?? "0.1") ?? 0.1
-            if cmd.flags.contains("cell") {
-                let dirStr = cmd.flagValues["direction"] ?? "right"
-                guard let direction = GridDirection(from: dirStr) else {
-                    return .error("invalid direction")
-                }
-                try await gridResize.adjustCellBoundary(spaceID: spaceID, direction: direction, delta: amount)
-            } else {
-                try await gridResize.adjustFocusedSplit(spaceID: spaceID, delta: amount)
+        case "cell":
+            // @resize cell <direction> [amount]
+            guard let dirStr = cmd.args.first,
+                  let direction = GridDirection(from: dirStr) else {
+                return .error("missing or invalid direction")
             }
+            let amount = Double(cmd.args.count > 1 ? cmd.args[1] : "0.05") ?? 0.05
+            try await gridResize.adjustCellBoundary(spaceID: spaceID, direction: direction, delta: amount)
+            return .ok("resized cell \(dirStr) by \(amount)")
+
+        case "grow":
+            // @resize grow [amount]
+            let amount = Double(cmd.args.first ?? "0.1") ?? 0.1
+            try await gridResize.adjustFocusedSplit(spaceID: spaceID, delta: amount)
             return .ok("grew by \(amount)")
 
         case "shrink":
-            // Same as grow but negative delta
+            // @resize shrink [amount]
             let amount = Double(cmd.args.first ?? "0.1") ?? 0.1
-            if cmd.flags.contains("cell") {
-                let dirStr = cmd.flagValues["direction"] ?? "right"
-                guard let direction = GridDirection(from: dirStr) else {
-                    return .error("invalid direction")
-                }
-                try await gridResize.adjustCellBoundary(spaceID: spaceID, direction: direction, delta: -amount)
-            } else {
-                try await gridResize.adjustFocusedSplit(spaceID: spaceID, delta: -amount)
-            }
+            try await gridResize.adjustFocusedSplit(spaceID: spaceID, delta: -amount)
             return .ok("shrunk by \(amount)")
 
         case "reset":
-            // @resize reset [--cell] [--all]
-            if cmd.flags.contains("cell") {
+            // @resize reset [--cells] [--all]
+            if cmd.flags.contains("cells") || cmd.flags.contains("cell") {
                 try await gridResize.resetCellRatios(spaceID: spaceID)
             } else {
                 let allCells = cmd.flags.contains("all")

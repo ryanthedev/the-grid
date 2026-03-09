@@ -203,13 +203,23 @@ class GridFocus {
             cellID = firstCell
         }
 
-        let cellWindows = await gridState.getCellWindows(spaceID: spaceID, cellID: cellID)
+        var cellWindows = await gridState.getCellWindows(spaceID: spaceID, cellID: cellID)
+
+        // Prune dead windows (closed but not yet cleaned up from GridState)
+        var pruned = false
+        cellWindows = cellWindows.filter { wid in
+            if wmState.windows[String(wid)] != nil { return true }
+            Task { await gridState.removeWindow(wid, fromSpace: spaceID) }
+            jlog("focus.prune", data: ["wid": wid, "cell": cellID])
+            pruned = true
+            return false
+        }
+
         guard !cellWindows.isEmpty else {
             throw GridFocusError.noWindowsInCell(cellID)
         }
 
         if cellWindows.count == 1 {
-            // Only one window, just ensure it's focused
             let windowID = cellWindows[0]
             try await focusWindowByID(windowID)
             await gridState.setFocus(spaceID: spaceID, cellID: cellID, windowIndex: 0)
@@ -217,7 +227,7 @@ class GridFocus {
         }
 
         // Calculate next/prev index (wrapping)
-        let currentIdx = spaceState.focusedWindow
+        let currentIdx = pruned ? 0 : spaceState.focusedWindow
         let clampedIdx = max(0, min(currentIdx, cellWindows.count - 1))
         let newIdx: Int
         if forward {
@@ -244,11 +254,20 @@ class GridFocus {
 
     // focusCellByID: focus a cell, restoring last-focused window
     private func focusCellByID(spaceID: String, cellID: String) async throws -> UInt32 {
-        guard let gridState = gridState else {
+        guard let gridState = gridState,
+              let stateManager = stateManager else {
             throw GridFocusError.noLayout
         }
 
-        let cellWindows = await gridState.getCellWindows(spaceID: spaceID, cellID: cellID)
+        // Prune dead windows before focusing
+        let wmState = await stateManager.getState()
+        var cellWindows = await gridState.getCellWindows(spaceID: spaceID, cellID: cellID)
+        cellWindows = cellWindows.filter { wid in
+            if wmState.windows[String(wid)] != nil { return true }
+            Task { await gridState.removeWindow(wid, fromSpace: spaceID) }
+            jlog("focus.prune", data: ["wid": wid, "cell": cellID])
+            return false
+        }
         guard !cellWindows.isEmpty else {
             throw GridFocusError.noWindowsInCell(cellID)
         }
