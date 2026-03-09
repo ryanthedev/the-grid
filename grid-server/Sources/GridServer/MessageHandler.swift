@@ -1792,6 +1792,12 @@ completion(Response(id: request.id, result: AnyCodable(["success": true])))
             }
         }
 
+        // grid.terminal -- {}
+        register(method: "grid.terminal") { request, completion in
+            let cmd = "@terminal"
+            dispatchAndRespond(request, commandString: cmd, completion: completion)
+        }
+
         jlog("grid.rpc.registered")
     }
 }
