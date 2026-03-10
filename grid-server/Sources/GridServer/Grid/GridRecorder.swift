@@ -278,6 +278,7 @@ func convertGIF(input: String, output: String, fps: Int, width: Int, quality: Re
     try runProcess(executable: ffmpeg, arguments: [
         "-y", "-i", input,
         "-vf", vf + ",palettegen=stats_mode=diff",
+        "-frames:v", "1", "-update", "1",
         paletteFile,
     ])
 
