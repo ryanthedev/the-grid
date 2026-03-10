@@ -33,6 +33,7 @@ class PickerManager {
     private var previousWindowID: UInt32?
     private var previousWindowPID: pid_t?
     private var windowManipulator: WindowManipulator?
+    private var gridReconciler: GridReconciler?
 
     // Optional callback invoked when a launch-type action is selected
     // Set by GridCommandRouter before show(), cleared in hide()
@@ -48,11 +49,14 @@ class PickerManager {
     }
 
     /// Configure with grid config and window manipulator (called after server startup)
-    func configure(with config: GridConfig, windowManipulator: WindowManipulator? = nil) {
+    func configure(with config: GridConfig, windowManipulator: WindowManipulator? = nil, gridReconciler: GridReconciler? = nil) {
         dispatchPrecondition(condition: .onQueue(.main))
         self.gridConfig = config
         if let wm = windowManipulator {
             self.windowManipulator = wm
+        }
+        if let gr = gridReconciler {
+            self.gridReconciler = gr
         }
     }
 
@@ -181,8 +185,15 @@ class PickerManager {
         pendingRPCContinuation = nil
         let capturedOnLaunch = onLaunch
 
+        // Suppress reconciler during hide+focus to prevent stale
+        // appActivated events (fired by orderOut) from updating borders
+        gridReconciler?.setSuppressed(true, syncOnResume: false)
+
         // Hide first (clears UI before action executes)
         hide()
+
+        // Track the focus target so we can re-assert it after the stale event
+        var focusTarget: (pid: pid_t, wid: UInt32)? = nil
 
         switch result {
         case .selected(let item):
@@ -208,11 +219,33 @@ class PickerManager {
                 }
             }
 
+            // Capture focus target for re-assertion
+            if case .focusWindow(let pid, let windowID) = action {
+                focusTarget = (pid: pid, wid: windowID)
+            }
+
             // Execute the action
             ActionExecutor.execute(action)
 
         case .cancelled:
+            if let wid = previousWindowID, let pid = previousWindowPID {
+                focusTarget = (pid: pid, wid: wid)
+            }
             restorePreviousWindow()
+        }
+
+        // Async: re-assert focus and unsuppress after stale appActivated drains
+        let reconciler = gridReconciler
+        let wm = windowManipulator
+        let target = focusTarget
+        DispatchQueue.main.async {
+            // Re-focus the intended window to overwrite the stale OS focus
+            if let target, let wm {
+                _ = wm.focusWindow(pid: target.pid, windowID: target.wid)
+            }
+            // Unsuppress without sync — the re-focus above will trigger a natural
+            // appActivated event that the reconciler will process correctly
+            reconciler?.setSuppressed(false, syncOnResume: false)
         }
 
         // Resume RPC continuation after action execution
