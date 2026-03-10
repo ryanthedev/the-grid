@@ -10,6 +10,7 @@ The `thegrid record` command captures screen regions as GIF, MP4, WebM, or MOV f
 
 ### Core Features
 
+- **Toggle recording** — start with a command, stop with ctrl-c or same hotkey
 - Record layout cells, windows, screens, or all displays
 - Multiple output formats (GIF, MP4, WebM, MOV)
 - Focus-following mode that crops to tracked cells
@@ -31,8 +32,11 @@ The `thegrid record` command captures screen regions as GIF, MP4, WebM, or MOV f
 ### Basic Examples
 
 ```bash
-# Record focused cell as GIF for 5 seconds
+# Record focused cell — press ctrl-c to stop
 thegrid record
+
+# Record for a fixed duration (5 seconds)
+thegrid record -d 5
 
 # Record specific cell
 thegrid record cell main -d 10
@@ -47,23 +51,49 @@ thegrid record screen
 thegrid record all -f mp4
 
 # Record with focus-following (crop follows focused cell)
-thegrid record --follow -d 15
+thegrid record --follow
+```
+
+### Toggle Mode (Default)
+
+When `--duration` is omitted, recording starts immediately and runs until stopped:
+
+**CLI:**
+```bash
+# Start recording, press ctrl-c when done
+thegrid record
+thegrid record cell main -f mp4
+thegrid record screen --cursor
+```
+
+**BFD hotkey:**
+```
+# Press once to start, press again to stop
+@record toggle cell --open
+@record toggle screen -f mp4
+```
+
+**Other stop methods:**
+```bash
+# From another terminal or BFD hotkey
+@record stop
+thegrid record stop   # (via RPC: grid.record.stop)
 ```
 
 ### Common Workflows
 
 ```bash
-# High-quality MP4 demo video
-thegrid record cell editor -f mp4 -q high -d 30 -w 1920
+# High-quality MP4 demo video (toggle — stop when done)
+thegrid record cell editor -f mp4 -q high -w 1920
 
-# Quick GIF for sharing
+# Quick GIF for sharing (fixed 5 seconds)
 thegrid record window -d 5 --countdown 2 --open
 
-# Full screen recording with cursor
-thegrid record screen -f mp4 --cursor -d 60
+# Full screen recording with cursor (toggle)
+thegrid record screen -f mp4 --cursor
 
-# Follow-focus tutorial recording
-thegrid record --follow -d 20 -f mp4 --cursor --open
+# Follow-focus tutorial recording (toggle)
+thegrid record --follow -f mp4 --cursor --open
 ```
 
 ---
@@ -156,13 +186,14 @@ thegrid record all
 
 ### Duration
 
-How long to record.
+How long to record. When omitted, recording runs indefinitely until stopped.
 
 ```bash
 -d, --duration <seconds>
 ```
 
-- Default: `5`
+- Default: **indefinite** (toggle mode — press ctrl-c or use `@record stop` to finish)
+- Pass `-d <seconds>` for fixed-duration recording
 - Range: Any positive integer
 - Example: `-d 10` records for 10 seconds
 
@@ -664,15 +695,24 @@ vars:
   grid: ~/.local/bin/thegrid
 
 hotkeys:
-  # Quick cell recording
-  ctrl-shift-r: ${grid} record --countdown 2 -d 5 --open
+  # Toggle recording — press once to start, press again to stop
+  ctrl-shift-r: @record toggle cell --open
 
-  # Follow-focus demo recording
-  ctrl-shift-f: ${grid} record --follow -d 15 -f mp4 --cursor --open
+  # Toggle follow-focus recording
+  ctrl-shift-f: @record toggle cell --follow -f mp4 --cursor --open
 
-  # High-quality window capture
-  ctrl-shift-w: ${grid} record window -f mp4 -q high -d 10 --open
+  # Quick fixed-duration cell recording (5 seconds)
+  ctrl-shift-g: @record start cell -d 5 --countdown 2 --open
+
+  # High-quality window capture (10 seconds)
+  ctrl-shift-w: @record start window -f mp4 -q high -d 10 --open
 ```
+
+**Toggle commands** (`@record toggle`) are recommended for BFD because the same hotkey
+starts and stops recording — no need to guess how long you need.
+
+**Fixed-duration commands** (`@record start ... -d N`) are useful for quick captures
+where you know the length in advance.
 
 ### Shell Aliases
 
@@ -839,7 +879,7 @@ thegrid record cell main -d 5 --json
 | `filePath` | string | Absolute path to output file |
 | `format` | string | Output format (gif, mp4, webm, mov) |
 | `size` | int64 | File size in bytes |
-| `duration` | int | Recording duration in seconds |
+| `duration` | int | Actual recording duration in seconds |
 
 ---
 
@@ -857,56 +897,42 @@ thegrid record cell main -d 5 --json
 
 ### Source Files
 
-- `grid-cli/internal/record/record.go` - Main orchestration
-- `grid-cli/internal/record/target.go` - Target parsing and resolution
-- `grid-cli/internal/record/capture.go` - screencapture wrapper
-- `grid-cli/internal/record/convert.go` - ffmpeg transcoding
-- `grid-cli/internal/record/follow.go` - Focus tracking and crop filter
-- `grid-cli/internal/record/ffmpeg.go` - ffmpeg availability check
-- `grid-cli/cmd/grid/main.go` - Command definition (line 4018+)
+- `grid-server/Sources/GridServer/Grid/GridRecorder.swift` - Recording actor, capture, conversion, toggle support
+- `grid-server/Sources/GridServer/Grid/GridCommandRouter.swift` - `@record` command dispatch
+- `grid-server/Sources/GridServer/MessageHandler.swift` - RPC endpoints (`grid.record.start/stop/toggle`)
+- `grid-server/Sources/GridCLI/RecordCommand.swift` - CLI command definition
 
-### Key Types
+### Key Types (Swift)
 
-```go
-type Target struct {
-    Type TargetType  // cell, window, screen, all
-    ID   string      // optional identifier
+```swift
+enum RecordingTarget: Sendable {
+    case cell(id: String?)
+    case window(id: UInt32?)
+    case screen(index: Int?)
+    case all
 }
 
-type ResolvedTarget struct {
-    Label   string       // for filename
-    Regions []types.Rect // pixel bounds
+struct RecordingOptions: Sendable {
+    var duration: Int? = nil   // nil = indefinite (toggle mode)
+    var format: String = "gif"
+    var quality: RecordingQuality = .medium
+    // ... fps, width, countdown, cursor, open, follow
 }
 
-type Options struct {
-    Duration  int
-    Output    string
-    OutputDir string
-    Format    string
-    FPS       int
-    Width     int
-    Quality   QualityLevel
-    Countdown int
-    Cursor    bool
-    Open      bool
-    Follow    bool
-    FollowCtx *FollowContext
-}
-
-type Result struct {
-    FilePath string
-    Format   string
-    Size     int64
-    Duration int
+struct RecordingResult: Codable, Sendable {
+    let filePath: String
+    let format: String
+    let size: Int64
+    let duration: Int  // actual elapsed seconds
 }
 ```
 
 ### Pipeline Flow
 
-1. **Parse target** - `ParseTarget(args)` -> `Target`
-2. **Resolve bounds** - `ResolveTarget(target, snap, state, config)` -> `ResolvedTarget`
-3. **Capture** - `Capture(region, duration, cursor, outPath)` or parallel captures
-4. **Stitch** (if multi-region) - `Stitch(inputs, output, regions)`
+1. **Parse target** — `parseRecordingTarget(action:args:)` → `RecordingTarget`
+2. **Resolve bounds** — `resolveTarget(target:gridState:gridConfig:stateManager:)` → `ResolvedTarget`
+3. **Capture** — `captureRegion(region:duration:cursor:outPath:onProcess:)` or parallel captures
+4. **Stitch** (if multi-region) — `stitchRecordings(inputs:output:regions:)`
 5. **Follow crop** (if enabled) - `TrackFocus()` + `BuildCropFilter()` + `ApplyCropFilter()`
 6. **Convert** (if not MOV) - `Convert(input, output, format, fps, width, quality)`
 7. **Return result** - `Result{FilePath, Format, Size, Duration}`
