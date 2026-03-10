@@ -1081,9 +1081,12 @@ actor GridRecorder {
         formatter.dateFormat = "yyyyMMdd-HHmmss"
         let ts = formatter.string(from: Date())
         let name = "recording-\(label)-\(ts).\(format)"
+        let outDir: String
         if !dir.isEmpty {
-            return (dir as NSString).appendingPathComponent(name)
+            outDir = dir
+        } else {
+            outDir = (NSHomeDirectory() as NSString).appendingPathComponent("Desktop")
         }
-        return name
+        return (outDir as NSString).appendingPathComponent(name)
     }
 }
