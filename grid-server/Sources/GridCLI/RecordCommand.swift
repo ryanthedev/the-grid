@@ -13,8 +13,8 @@ struct RecordCommand: ParsableCommand {
     @Argument(help: "Target ID")
     var id: String?
 
-    @Option(name: [.short, .long], help: "Duration in seconds")
-    var duration: Int = 5
+    @Option(name: [.short, .long], help: "Duration in seconds (omit for toggle mode)")
+    var duration: Int? = nil
 
     @Option(name: [.short, .long], help: "Output file path")
     var output: String?
@@ -51,7 +51,6 @@ struct RecordCommand: ParsableCommand {
 
         var params: [String: Any] = [
             "target": target,
-            "duration": duration,
             "format": format,
             "fps": fps,
             "width": width,
@@ -68,7 +67,65 @@ struct RecordCommand: ParsableCommand {
             params["output"] = output
         }
 
-        let result = try client.call("grid.record.start", params: params)
-        printResult(result, json: globals.json)
+        // Only include duration when explicitly set
+        if let d = duration {
+            params["duration"] = d
+        }
+
+        if duration == nil {
+            // Toggle (indefinite) mode
+            try runToggleMode(client: client, params: params)
+        } else {
+            // Fixed-duration mode: send start, block until server responds with result
+            let result = try client.call("grid.record.start", params: params)
+            printResult(result, json: globals.json)
+        }
+    }
+
+    // Private helper — handles the indefinite-recording flow.
+    // This function never returns normally; it exits via exit(0) or throws.
+    //
+    // Note: throws is declared so ArgumentParser can surface errors, but in
+    // practice this function only exits via exit(0). The RunLoop.main.run()
+    // call at the end blocks forever until the SIGINT handler fires.
+    private func runToggleMode(client: RPCClient, params: [String: Any]) throws -> Never {
+        // Send start — should return fast (server starts recording in background)
+        let _ = try client.call("grid.record.start", params: params)
+
+        // Inform user
+        print("Recording... press ctrl-c to stop")
+
+        // Suppress default SIGINT termination so our handler can run instead
+        signal(SIGINT, SIG_IGN)
+
+        // Create signal source on main queue
+        let sigintSource = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
+
+        sigintSource.setEventHandler { [globals] in
+            // User pressed ctrl-c
+            // Print newline to move past the ^C echo in the terminal
+            print("")
+
+            // Send stop RPC — this will block until the server responds with result
+            do {
+                let result = try client.call("grid.record.stop", params: [:])
+                printResult(result, json: globals.json)
+            } catch {
+                // Print error to stderr then exit with failure
+                fputs("Error stopping recording: \(error)\n", stderr)
+                _exit(1)
+            }
+
+            _exit(0)
+        }
+
+        sigintSource.resume()
+
+        // Block here until SIGINT fires
+        RunLoop.main.run()
+
+        // Unreachable — RunLoop.main.run() only returns if there are no more
+        // sources, but sigintSource keeps it alive. Satisfy the Never return type:
+        fatalError("unreachable")
     }
 }
