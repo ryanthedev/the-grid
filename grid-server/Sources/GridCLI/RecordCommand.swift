@@ -20,7 +20,7 @@ struct RecordCommand: ParsableCommand {
     var output: String?
 
     @Option(name: [.short, .long], help: "Output format (gif, mp4, mov)")
-    var format: String = "gif"
+    var format: String = "mp4"
 
     @Option(name: .long, help: "Frames per second (0 = auto)")
     var fps: Int = 0

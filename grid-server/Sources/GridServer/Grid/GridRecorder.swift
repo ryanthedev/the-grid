@@ -19,7 +19,7 @@ struct RecordingOptions: Sendable {
     var duration: Int? = nil
     var output: String? = nil
     var outputDir: String = ""
-    var format: String = "gif"
+    var format: String = "mp4"
     var fps: Int = 0
     var width: Int = 0
     var quality: RecordingQuality = .medium
