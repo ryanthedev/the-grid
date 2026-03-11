@@ -34,6 +34,8 @@ class PickerManager {
     private var previousWindowPID: pid_t?
     private var windowManipulator: WindowManipulator?
     private var gridReconciler: GridReconciler?
+    private var gridState: GridState?
+    private var isHandlingResult: Bool = false
 
     // Optional callback invoked when a launch-type action is selected
     // Set by GridCommandRouter before show(), cleared in hide()
@@ -49,7 +51,7 @@ class PickerManager {
     }
 
     /// Configure with grid config and window manipulator (called after server startup)
-    func configure(with config: GridConfig, windowManipulator: WindowManipulator? = nil, gridReconciler: GridReconciler? = nil) {
+    func configure(with config: GridConfig, windowManipulator: WindowManipulator? = nil, gridReconciler: GridReconciler? = nil, gridState: GridState? = nil) {
         dispatchPrecondition(condition: .onQueue(.main))
         self.gridConfig = config
         if let wm = windowManipulator {
@@ -57,6 +59,9 @@ class PickerManager {
         }
         if let gr = gridReconciler {
             self.gridReconciler = gr
+        }
+        if let gs = gridState {
+            self.gridState = gs
         }
     }
 
@@ -180,20 +185,20 @@ class PickerManager {
 
     /// Called by PickerWindow.onResult callback
     private func handleResult(_ result: PickerResult) {
+        isHandlingResult = true
+        defer { isHandlingResult = false }
+
         // Capture callbacks before hide() clears them
         let continuation = pendingRPCContinuation
         pendingRPCContinuation = nil
         let capturedOnLaunch = onLaunch
 
-        // Suppress reconciler during hide+focus to prevent stale
-        // appActivated events (fired by orderOut) from updating borders
+        // Suppress reconciler BEFORE hide to catch all stale appActivated events.
+        // Suppression stays active until our Task{} updates GridState and unsuppresses.
         gridReconciler?.setSuppressed(true, syncOnResume: false)
 
         // Hide first (clears UI before action executes)
         hide()
-
-        // Track the focus target so we can re-assert it after the stale event
-        var focusTarget: (pid: pid_t, wid: UInt32)? = nil
 
         switch result {
         case .selected(let item):
@@ -205,6 +210,8 @@ class PickerManager {
             // Parse action from metadata
             guard let action = PickerAction.from(metadata: item.metadata) else {
                 jlog("pick.err.noaction", data: ["id": item.id])
+                // Unsuppress immediately since no action to track
+                gridReconciler?.setSuppressed(false, syncOnResume: true)
                 break
             }
 
@@ -214,44 +221,56 @@ class PickerManager {
                 case .openApp, .openDir, .openChromeProfile:
                     capturedOnLaunch(action)
                 case .focusWindow, .exec:
-                    // Not launch actions -- skip callback
                     break
                 }
-            }
-
-            // Capture focus target for re-assertion
-            if case .focusWindow(let pid, let windowID) = action {
-                focusTarget = (pid: pid, wid: windowID)
             }
 
             // Execute the action
             ActionExecutor.execute(action)
 
-        case .cancelled:
-            if let wid = previousWindowID, let pid = previousWindowPID {
-                focusTarget = (pid: pid, wid: wid)
+            // For focusWindow: update GridState in Task{} then unsuppress with sync.
+            // Suppression remains active until Task runs, catching all stale events.
+            if case .focusWindow(_, let windowID) = action {
+                let reconciler = gridReconciler
+                Task { [weak self] in
+                    await self?.updateGridStateFocus(windowID)
+                    reconciler?.setSuppressed(false, syncOnResume: true)
+                }
+            } else {
+                // Non-focus actions (openDir, openApp, exec): unsuppress immediately.
+                // GridState has pre-picker focus which is correct until new window appears.
+                gridReconciler?.setSuppressed(false, syncOnResume: true)
             }
-            restorePreviousWindow()
-        }
 
-        // Async: re-assert focus and unsuppress after stale appActivated drains
-        let reconciler = gridReconciler
-        let wm = windowManipulator
-        let target = focusTarget
-        DispatchQueue.main.async {
-            // Re-focus the intended window to overwrite the stale OS focus
-            if let target, let wm {
-                _ = wm.focusWindow(pid: target.pid, windowID: target.wid)
-            }
-            // Unsuppress without sync — the re-focus above will trigger a natural
-            // appActivated event that the reconciler will process correctly
-            reconciler?.setSuppressed(false, syncOnResume: false)
+        case .cancelled:
+            restorePreviousWindow()
+            // GridState already has correct pre-picker focus. Just unsuppress.
+            gridReconciler?.setSuppressed(false, syncOnResume: true)
         }
 
         // Resume RPC continuation after action execution
         if let continuation = continuation {
             continuation.resume(returning: result)
         }
+    }
+
+    // MARK: - GridState Focus Update
+
+    /// Update GridState focus tracking to match the window we just focused via picker
+    private func updateGridStateFocus(_ windowID: UInt32) async {
+        guard let gridState else { return }
+        guard let spaceID = await gridState.findSpaceContaining(windowID: windowID) else {
+            jlog("pick.focus.nostate", data: ["wid": windowID])
+            return
+        }
+        guard let cellID = await gridState.getWindowCell(windowID: windowID, inSpace: spaceID) else {
+            jlog("pick.focus.nocell", data: ["wid": windowID, "space": spaceID])
+            return
+        }
+        let cellWindows = await gridState.getCellWindows(spaceID: spaceID, cellID: cellID)
+        let windowIndex = cellWindows.firstIndex(of: windowID) ?? 0
+        await gridState.setFocus(spaceID: spaceID, cellID: cellID, windowIndex: windowIndex)
+        jlog("pick.focus.gridstate", data: ["wid": windowID, "cell": cellID, "idx": windowIndex])
     }
 
     // MARK: - Async Discovery
@@ -325,6 +344,7 @@ class PickerManager {
     // MARK: - Window Notifications
 
     @objc private func windowDidResignKey(_ notification: Notification) {
+        guard !isHandlingResult else { return }
         handleResult(.cancelled)
     }
 }
