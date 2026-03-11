@@ -619,6 +619,18 @@ class GridCommandRouter {
             return .ok(active ? "recording" : "idle")
         }
 
+        // "stop" needs no target or options — stop whatever is running.
+        if cmd.action == "stop" {
+            do {
+                let result = try await gridRecorder.stop()
+                let data = try JSONEncoder().encode(result)
+                let json = String(data: data, encoding: .utf8) ?? "{}"
+                return .ok(json)
+            } catch {
+                return .error(error.localizedDescription)
+            }
+        }
+
         let target = parseRecordingTarget(action: cmd.action, args: cmd.args)
 
         var options = RecordingOptions()
@@ -653,11 +665,44 @@ class GridCommandRouter {
             options.open = true
         }
 
-        let result = try await gridRecorder.record(target: target, options: options)
-        let encoder = JSONEncoder()
-        let data = try encoder.encode(result)
-        let json = String(data: data, encoding: .utf8) ?? "{}"
-        return .ok(json)
+        // "toggle" needs target+options on start; actor ignores them on stop.
+        if cmd.action == "toggle" {
+            do {
+                let result = try await gridRecorder.toggle(target: target, options: options)
+                if let result {
+                    // Recording just stopped — encode full result.
+                    let data = try JSONEncoder().encode(result)
+                    let json = String(data: data, encoding: .utf8) ?? "{}"
+                    return .ok(json)
+                } else {
+                    // Recording just started — no result yet.
+                    return .ok("{\"action\":\"started\"}")
+                }
+            } catch {
+                return .error(error.localizedDescription)
+            }
+        }
+
+        // "start" and bare target actions: branch on duration.
+        // nil duration → startRecording (background, returns immediately).
+        // non-nil duration → record (blocks until done, returns result).
+        if options.duration == nil {
+            do {
+                try await gridRecorder.startRecording(target: target, options: options)
+                return .ok("{\"action\":\"started\"}")
+            } catch {
+                return .error(error.localizedDescription)
+            }
+        } else {
+            do {
+                let result = try await gridRecorder.record(target: target, options: options)
+                let data = try JSONEncoder().encode(result)
+                let json = String(data: data, encoding: .utf8) ?? "{}"
+                return .ok(json)
+            } catch {
+                return .error(error.localizedDescription)
+            }
+        }
     }
 
     private func parseRecordingTarget(action: String, args: [String]) -> RecordingTarget {

@@ -1792,6 +1792,84 @@ completion(Response(id: request.id, result: AnyCodable(["success": true])))
             }
         }
 
+        // grid.record.stop -- stop whatever recording is active, return RecordingResult JSON
+        register(method: "grid.record.stop") { request, completion in
+            Task {
+                let cmdResult = await router.dispatch("@record stop")
+                if cmdResult.success {
+                    if let data = cmdResult.message.data(using: .utf8),
+                       let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                        completion(Response(id: request.id, result: AnyCodable(dict)))
+                    } else {
+                        completion(Response(
+                            id: request.id,
+                            result: AnyCodable(["ok": true, "message": cmdResult.message])
+                        ))
+                    }
+                } else {
+                    completion(Response(
+                        id: request.id,
+                        error: ErrorInfo(code: -32000, message: cmdResult.message)
+                    ))
+                }
+            }
+        }
+
+        // grid.record.toggle -- start if idle, stop if recording; same params as grid.record.start
+        register(method: "grid.record.toggle") { request, completion in
+            Task {
+                let targetStr = request.params?["target"]?.value as? String ?? "cell"
+                let idStr = request.params?["id"]?.value as? String
+
+                var parts = ["@record", "toggle", targetStr]
+                if let id = idStr {
+                    parts.append(id)
+                }
+
+                let intFlags = ["duration", "fps", "width", "countdown"]
+                for flag in intFlags {
+                    if let val = request.params?[flag]?.value as? Int, val != 0 || flag == "countdown" {
+                        parts.append("--\(flag)")
+                        parts.append(String(val))
+                    }
+                }
+                let strFlags = ["format", "quality", "output"]
+                for flag in strFlags {
+                    if let val = request.params?[flag]?.value as? String, !val.isEmpty {
+                        parts.append("--\(flag)")
+                        parts.append(val)
+                    }
+                }
+                let boolFlags = ["cursor", "open", "follow"]
+                for flag in boolFlags {
+                    if let val = request.params?[flag]?.value as? Bool, val {
+                        parts.append("--\(flag)")
+                    }
+                }
+
+                let cmd = parts.joined(separator: " ")
+                jlog("grid.rpc.record.toggle", data: ["cmd": cmd])
+                let cmdResult = await router.dispatch(cmd)
+
+                if cmdResult.success {
+                    if let data = cmdResult.message.data(using: .utf8),
+                       let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                        completion(Response(id: request.id, result: AnyCodable(dict)))
+                    } else {
+                        completion(Response(
+                            id: request.id,
+                            result: AnyCodable(["ok": true, "message": cmdResult.message])
+                        ))
+                    }
+                } else {
+                    completion(Response(
+                        id: request.id,
+                        error: ErrorInfo(code: -32000, message: cmdResult.message)
+                    ))
+                }
+            }
+        }
+
         // grid.terminal -- {}
         register(method: "grid.terminal") { request, completion in
             let cmd = "@terminal"
