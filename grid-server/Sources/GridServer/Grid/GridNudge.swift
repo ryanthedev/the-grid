@@ -62,7 +62,9 @@ class GridNudge {
     //         axFailed if the AX position call fails.
     // ============================================================
 
-    func move(spaceID: String, direction: GridDirection) async throws {
+    // Returns (windowID, newFrame) so caller can update borders
+    @discardableResult
+    func move(spaceID: String, direction: GridDirection) async throws -> (UInt32, CGRect) {
         guard let gridState = gridState,
               let windowManipulator = windowManipulator else {
             throw GridNudgeError.noFocusedWindow
@@ -78,18 +80,18 @@ class GridNudge {
         }
 
         let step = GridNudge.defaultStep
-        let origin = context.frame?.origin ?? .zero
+        let currentFrame = context.frame ?? .zero
 
         let newOrigin: CGPoint
         switch direction {
         case .left:
-            newOrigin = CGPoint(x: origin.x - step, y: origin.y)
+            newOrigin = CGPoint(x: currentFrame.origin.x - step, y: currentFrame.origin.y)
         case .right:
-            newOrigin = CGPoint(x: origin.x + step, y: origin.y)
+            newOrigin = CGPoint(x: currentFrame.origin.x + step, y: currentFrame.origin.y)
         case .up:
-            newOrigin = CGPoint(x: origin.x, y: origin.y - step)
+            newOrigin = CGPoint(x: currentFrame.origin.x, y: currentFrame.origin.y - step)
         case .down:
-            newOrigin = CGPoint(x: origin.x, y: origin.y + step)
+            newOrigin = CGPoint(x: currentFrame.origin.x, y: currentFrame.origin.y + step)
         }
 
         let success = await windowManipulator.moveWindow(context: context, to: newOrigin)
@@ -97,7 +99,9 @@ class GridNudge {
             throw GridNudgeError.axFailed
         }
 
+        let newFrame = CGRect(origin: newOrigin, size: currentFrame.size)
         jlog("nudge.move", data: ["wid": wid, "dir": direction.rawValue, "x": newOrigin.x, "y": newOrigin.y])
+        return (wid, newFrame)
     }
 
     // ============================================================
@@ -114,7 +118,9 @@ class GridNudge {
     // Throws: noFocusedWindow, windowNotFound, axFailed (same as move).
     // ============================================================
 
-    func resize(spaceID: String, direction: GridDirection) async throws {
+    // Returns (windowID, newFrame) so caller can update borders
+    @discardableResult
+    func resize(spaceID: String, direction: GridDirection) async throws -> (UInt32, CGRect) {
         guard let gridState = gridState,
               let windowManipulator = windowManipulator else {
             throw GridNudgeError.noFocusedWindow
@@ -170,5 +176,6 @@ class GridNudge {
         }
 
         jlog("nudge.resize", data: ["wid": wid, "dir": direction.rawValue, "w": newFrame.size.width, "h": newFrame.size.height])
+        return (wid, newFrame)
     }
 }

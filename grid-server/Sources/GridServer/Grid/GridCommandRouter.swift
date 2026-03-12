@@ -750,17 +750,22 @@ class GridCommandRouter {
 
             // Wire the key handler callback
             let handler = NudgeKeyHandler()
+            let borderManager = self.simpleBorderManager
             handler.onNudge = { [weak self] action in
                 guard let self else { return }
                 switch action {
                 case .move(let direction):
                     // onNudge fires on main thread; bridge to async actor context
                     Task {
-                        try? await self.gridNudge.move(spaceID: spaceID, direction: direction)
+                        if let (wid, frame) = try? await self.gridNudge.move(spaceID: spaceID, direction: direction) {
+                            borderManager.handleWindowMoved(windowID: wid, newFrame: frame)
+                        }
                     }
                 case .resize(let direction):
                     Task {
-                        try? await self.gridNudge.resize(spaceID: spaceID, direction: direction)
+                        if let (wid, frame) = try? await self.gridNudge.resize(spaceID: spaceID, direction: direction) {
+                            borderManager.handleWindowMoved(windowID: wid, newFrame: frame)
+                        }
                     }
                 case .exit:
                     // Dispatch back through the router to avoid mutating nudgeKeyHandler

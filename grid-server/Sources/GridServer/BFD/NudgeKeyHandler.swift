@@ -17,22 +17,15 @@ enum NudgeAction {
 
 // MARK: - Key table
 
-// Maps hardware key code to its (move, resize) NudgeAction pair.
-// Shift selects the resize variant; no shift selects move.
-// Escape is handled separately — it has no resize variant.
+// Maps hardware key code to a direction.
+// Escape is handled separately.
 //
 // Key codes (US layout):
 //   13 = W, 1 = S, 0 = A, 2 = D
 //   126 = Up arrow, 125 = Down arrow, 123 = Left arrow, 124 = Right arrow
-private let nudgeKeyTable: [UInt32: (move: NudgeAction, resize: NudgeAction)] = [
-    13: (.move(.up),    .resize(.up)),
-    1:  (.move(.down),  .resize(.down)),
-    0:  (.move(.left),  .resize(.left)),
-    2:  (.move(.right), .resize(.right)),
-    126: (.move(.up),   .resize(.up)),
-    125: (.move(.down), .resize(.down)),
-    123: (.move(.left), .resize(.left)),
-    124: (.move(.right), .resize(.right)),
+private let nudgeKeyDirection: [UInt32: GridDirection] = [
+    13: .up,    1: .down,   0: .left,   2: .right,
+    126: .up, 125: .down, 123: .left, 124: .right,
 ]
 
 private let escapeKeyCode: UInt32 = 53
@@ -60,9 +53,13 @@ class NudgeKeyHandler {
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
 
+    // Track currently held direction keys for diagonal support
+    private var heldDirections: Set<GridDirection> = []
+
     /// Called on the main thread for each relevant keypress.
     /// Receives `.exit` on Escape, `.move(dir)` on WASD/arrows,
     /// and `.resize(dir)` on Shift+WASD/Shift+arrows.
+    /// For diagonal movement, called once per held direction on each keyDown.
     var onNudge: ((NudgeAction) -> Void)?
 
     init() {}
@@ -83,7 +80,7 @@ class NudgeKeyHandler {
     func start() -> Bool {
         guard eventTap == nil else { return true }
 
-        let eventMask: CGEventMask = (1 << CGEventType.keyDown.rawValue)
+        let eventMask: CGEventMask = (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.keyUp.rawValue)
 
         guard let tap = CGEvent.tapCreate(
             tap: .cghidEventTap,
@@ -119,6 +116,7 @@ class NudgeKeyHandler {
     func stop() {
         guard let tap = eventTap else { return }
 
+        heldDirections.removeAll()
         CGEvent.tapEnable(tap: tap, enable: false)
 
         if let source = runLoopSource {
@@ -153,28 +151,45 @@ class NudgeKeyHandler {
             return Unmanaged.passUnretained(event)
         }
 
+        let keyCode = UInt32(event.getIntegerValueField(.keyboardEventKeycode))
+
+        // keyUp: remove direction from held set, consume if it was a nudge key
+        if type == .keyUp {
+            if let dir = nudgeKeyDirection[keyCode] {
+                heldDirections.remove(dir)
+                return nil
+            }
+            return Unmanaged.passUnretained(event)
+        }
+
         guard type == .keyDown else {
             return Unmanaged.passUnretained(event)
         }
 
-        let keyCode = UInt32(event.getIntegerValueField(.keyboardEventKeycode))
-
         // Escape always exits, regardless of modifier state
         if keyCode == escapeKeyCode {
+            heldDirections.removeAll()
             onNudge?(.exit)
             return nil
         }
 
         // Unknown key — pass through to the focused app
-        guard let entry = nudgeKeyTable[keyCode] else {
+        guard let direction = nudgeKeyDirection[keyCode] else {
             return Unmanaged.passUnretained(event)
         }
 
+        // Track held direction
+        heldDirections.insert(direction)
+
         // Shift selects resize; bare key selects move
         let isShift = event.flags.contains(.maskShift)
-        let action = isShift ? entry.resize : entry.move
 
-        onNudge?(action)
+        // Fire action for all currently held directions (enables diagonal)
+        for dir in heldDirections {
+            let action: NudgeAction = isShift ? .resize(dir) : .move(dir)
+            onNudge?(action)
+        }
+
         // Consume: prevent the key from reaching the focused app
         return nil
     }
