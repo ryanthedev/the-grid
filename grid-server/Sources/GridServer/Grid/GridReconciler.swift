@@ -33,8 +33,10 @@ class GridReconciler: StateEventHandler {
     // Timeout for pending launch target (app may take time to launch)
     private let pendingLaunchTimeout: CFAbsoluteTime = 15.0
 
-    // Suppression flag for bulk operations (layout apply)
-    private var suppressReconciliation: Bool = false
+    // Ref-counted suppression for bulk operations (layout apply, picker, moves).
+    // Multiple callers can nest suppress/unsuppress without interfering.
+    private var suppressionDepth: Int = 0
+    private var suppressReconciliation: Bool { suppressionDepth > 0 }
 
     // Move cooldown: after a cross-display move, ignore OS focus events
     // for non-target windows to prevent delayed appActivated from
@@ -47,13 +49,22 @@ class GridReconciler: StateEventHandler {
 
     // MARK: - Public API
 
-    // Set suppression (called by GridApply and GridWindowMove)
-    // syncOnResume: if true, triggers syncBordersForCurrentSpace when unsuppressing
+    // Increment/decrement suppression depth (called by GridApply, GridWindowMove, PickerManager).
+    // syncOnResume: if true, triggers syncBordersForCurrentSpace when depth reaches 0.
     func setSuppressed(_ suppressed: Bool, syncOnResume: Bool = true) {
-        suppressReconciliation = suppressed
-        if !suppressed && syncOnResume {
-            Task {
-                await syncBordersForCurrentSpace()
+        if suppressed {
+            suppressionDepth += 1
+            jlog("reconcile.suppress.inc", data: ["depth": suppressionDepth])
+        } else {
+            if suppressionDepth <= 0 {
+                jlog("warn.reconcile.suppress.underflow")
+            }
+            suppressionDepth = max(0, suppressionDepth - 1)
+            jlog("reconcile.suppress.dec", data: ["depth": suppressionDepth])
+            if suppressionDepth == 0 && syncOnResume {
+                Task {
+                    await syncBordersForCurrentSpace()
+                }
             }
         }
     }
@@ -62,11 +73,11 @@ class GridReconciler: StateEventHandler {
     // Call beginMove before the move, endMove after explicit border syncs.
     func beginMove(targetWindowID: UInt32) {
         moveTargetWindowID = targetWindowID
-        suppressReconciliation = true
+        suppressionDepth += 1
     }
 
     func endMove() {
-        suppressReconciliation = false
+        suppressionDepth = max(0, suppressionDepth - 1)
         moveEndTime = CFAbsoluteTimeGetCurrent()
     }
 

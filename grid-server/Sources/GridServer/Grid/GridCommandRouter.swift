@@ -300,10 +300,16 @@ class GridCommandRouter {
 
         case "next":
             let windowID = try await gridFocus.cycleFocus(forward: true)
+            if cmd.flags.contains("mouse") {
+                await warpMouseToFocusedWindow()
+            }
             return .ok("focused window \(windowID)")
 
         case "prev":
             let windowID = try await gridFocus.cycleFocus(forward: false)
+            if cmd.flags.contains("mouse") {
+                await warpMouseToFocusedWindow()
+            }
             return .ok("focused window \(windowID)")
 
         case "cell":

@@ -365,7 +365,7 @@ class GridWindowMove {
     ) async throws -> GridMoveResult {
         let t0 = CFAbsoluteTimeGetCurrent()
         guard let gridState = gridState,
-              let gridConfig = gridConfig,
+              let _ = gridConfig,
               let gridFocus = gridFocus,
               let windowManipulator = windowManipulator,
               let gridReconciler = gridReconciler else {
