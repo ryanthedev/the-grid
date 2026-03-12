@@ -35,6 +35,7 @@ class GridCommandRouter {
     private let gridWindowMove: GridWindowMove
     private let gridApply: GridApply
     private let gridResize: GridResize
+    private let gridNudge: GridNudge
     private let gridState: GridState
     private let gridConfig: GridConfig
     private let stateManager: StateManager
@@ -43,6 +44,9 @@ class GridCommandRouter {
     private let simpleBorderManager: SimpleBorderManager
     private let gridRecorder: GridRecorder
     private let gridTerminalManager: GridTerminalManager
+
+    // Non-nil while a nudge session is active — owns the CGEventTap for that session
+    private var nudgeKeyHandler: NudgeKeyHandler?
 
     // Short flag -> long flag mapping for BFD commands
     private static let shortFlagMap: [Character: String] = [
@@ -57,6 +61,7 @@ class GridCommandRouter {
         gridWindowMove: GridWindowMove,
         gridApply: GridApply,
         gridResize: GridResize,
+        gridNudge: GridNudge,
         gridState: GridState,
         gridConfig: GridConfig,
         stateManager: StateManager,
@@ -71,6 +76,7 @@ class GridCommandRouter {
         self.gridWindowMove = gridWindowMove
         self.gridApply = gridApply
         self.gridResize = gridResize
+        self.gridNudge = gridNudge
         self.gridState = gridState
         self.gridConfig = gridConfig
         self.stateManager = stateManager
@@ -120,6 +126,12 @@ class GridCommandRouter {
             gridApply: gridApply,
             gridFocus: gridFocus,
             stateManager: stateManager
+        )
+
+        gridNudge.setup(
+            gridState: gridState,
+            stateManager: stateManager,
+            windowManipulator: windowManipulator
         )
 
         // Circular dependency resolution
@@ -175,6 +187,10 @@ class GridCommandRouter {
                 return try await handleRecord(parsed)
             case "terminal":
                 return await gridTerminalManager.toggle()
+            case "nudge":
+                // Suppression is managed inside handleNudge for the session duration —
+                // enter sets it, exit clears it. No defer here.
+                return await handleNudge(parsed)
             default:
                 return .error("unknown domain: \(parsed.domain)")
             }
@@ -702,6 +718,102 @@ class GridCommandRouter {
             } catch {
                 return .error(error.localizedDescription)
             }
+        }
+    }
+
+    // ============================================================
+    // PRIVATE: handleNudge
+    // ============================================================
+
+    private func handleNudge(_ cmd: ParsedCommand) async -> CommandResult {
+        switch cmd.action {
+
+        case "enter":
+            // Idempotent: if a session is already active, do nothing
+            if nudgeKeyHandler != nil {
+                return .ok("already in nudge mode")
+            }
+
+            // Resolve spaceID once — NudgeKeyHandler.onNudge fires synchronously on the
+            // main thread, so spaceID must be captured here (not fetched per-keypress)
+            guard let spaceID = await resolveActiveSpaceID() else {
+                return .error("no active space")
+            }
+
+            // Suppress the reconciler for the full nudge session.
+            // syncOnResume: false here because no layout change has occurred yet.
+            // exit will call setSuppressed(false, syncOnResume: true) to snap borders.
+            gridReconciler.setSuppressed(true, syncOnResume: false)
+
+            // Suspend BFD event tap so nudge keys are not also processed as hotkeys
+            BFDManager.shared?.suspendEventTap()
+
+            // Wire the key handler callback
+            let handler = NudgeKeyHandler()
+            handler.onNudge = { [weak self] action in
+                guard let self else { return }
+                switch action {
+                case .move(let direction):
+                    // onNudge fires on main thread; bridge to async actor context
+                    Task {
+                        try? await self.gridNudge.move(spaceID: spaceID, direction: direction)
+                    }
+                case .resize(let direction):
+                    Task {
+                        try? await self.gridNudge.resize(spaceID: spaceID, direction: direction)
+                    }
+                case .exit:
+                    // Dispatch back through the router to avoid mutating nudgeKeyHandler
+                    // from within its own callback's call stack
+                    Task {
+                        _ = await self.dispatch("@nudge exit")
+                    }
+                }
+            }
+
+            // Install the event tap — may fail if Accessibility permission is absent
+            guard handler.start() else {
+                BFDManager.shared?.resumeEventTap()
+                gridReconciler.setSuppressed(false, syncOnResume: false)
+                return .error("nudge tap failed (accessibility permission?)")
+            }
+
+            nudgeKeyHandler = handler
+
+            // Activate amber border feedback on the active border
+            await MainActor.run {
+                simpleBorderManager.setNudgeMode(active: true)
+            }
+
+            jlog("nudge.enter", data: ["space": spaceID])
+            return .ok("nudge mode entered")
+
+        case "exit":
+            // Idempotent: if not in nudge mode, no-op
+            guard nudgeKeyHandler != nil else {
+                return .ok("not in nudge mode")
+            }
+
+            // Tear down key handler first to stop any further callbacks
+            nudgeKeyHandler?.stop()
+            nudgeKeyHandler = nil
+
+            // Resume BFD event tap
+            BFDManager.shared?.resumeEventTap()
+
+            // Restore normal active border style
+            await MainActor.run {
+                simpleBorderManager.setNudgeMode(active: false)
+            }
+
+            // Unsuppress with syncOnResume: true so borders snap to final window positions
+            gridReconciler.setSuppressed(false, syncOnResume: true)
+
+            jlog("nudge.exit")
+            return .ok("nudge mode exited")
+
+        default:
+            return .error("unknown nudge action: \(cmd.action)")
         }
     }
 

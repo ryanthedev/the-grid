@@ -58,6 +58,9 @@ class SimpleBorderManager {
     /// Whether active cell has multiple windows (tabbed mode - single border, retarget on focus change)
     private var isActiveCellTabbed: Bool = false
 
+    /// True while nudge mode is active — active border uses nudge style instead of config style
+    private var isNudgeModeActive: Bool = false
+
     // MARK: - Border Management (Role-Based)
 
     /// Reentrancy guard - prevents concurrent border operations
@@ -384,6 +387,56 @@ class SimpleBorderManager {
         Task {
             JSONLogger.shared.log("bdr.display_disconnect", data: ["uuid": displayUUID])
         }
+    }
+
+    // MARK: - Nudge Mode
+
+    /// Switch the active border between normal config style and amber nudge style.
+    /// Must be called on the main queue (dispatches internally if called off-thread).
+    func setNudgeMode(active: Bool) {
+        DispatchQueue.main.async { [weak self] in
+            self?.setNudgeModeImpl(active: active)
+        }
+    }
+
+    private func setNudgeModeImpl(active: Bool) {
+        isNudgeModeActive = active
+
+        if active {
+            if let border = activeBorder, let nudgeStyle = buildNudgeStyle() {
+                updateBorderStyle(border, style: nudgeStyle, isActive: true)
+            }
+        } else {
+            // Restore normal active style now that nudge session has ended
+            if let border = activeBorder {
+                applyActiveStyle(to: border)
+            }
+        }
+
+        jlog("bdr.nudge", data: ["active": active])
+    }
+
+    /// Build the amber nudge border style, inheriting width/radius/glow/shadow from config.
+    private func buildNudgeStyle() -> BorderStyle? {
+        let baseStyle = BorderConfigManager.shared.activeStyle
+
+        return BorderStyle(
+            color: CGColor(red: 1.0, green: 0.75, blue: 0.0, alpha: 1.0),
+            width: baseStyle.width,
+            cornerRadius: baseStyle.cornerRadius,
+            opacity: baseStyle.opacity,
+            styleType: baseStyle.styleType,
+            glowRadius: baseStyle.glowRadius,
+            glowColor: baseStyle.glowColor,
+            glowOpacity: baseStyle.glowOpacity,
+            glowSpread: baseStyle.glowSpread,
+            shadowRadius: baseStyle.shadowRadius,
+            shadowOffset: baseStyle.shadowOffset,
+            shadowColor: baseStyle.shadowColor,
+            shadowOpacity: baseStyle.shadowOpacity
+            // stackIndicator intentionally omitted: nudge mode is free-form positioning,
+            // the indicator would be visually confusing. Restored by applyActiveStyle on exit.
+        )
     }
 
     // MARK: - Private Helpers
@@ -751,12 +804,15 @@ class SimpleBorderManager {
 
         let config = BorderConfigManager.shared
 
-        // Update active border style (with stack indicator)
-        if let border = activeBorder {
-            applyActiveStyle(to: border)
+        // Update active border — skip when nudge mode is active because nudge
+        // owns the active border color for the session duration
+        if !isNudgeModeActive {
+            if let border = activeBorder {
+                applyActiveStyle(to: border)
+            }
         }
 
-        // Update inactive border styles
+        // Inactive border styles always update (nudge mode does not affect them)
         for (_, border) in inactiveBorders {
             updateBorderStyle(border, style: config.inactiveStyle, isActive: false)
         }
@@ -855,8 +911,18 @@ class SimpleBorderManager {
         }
     }
 
-    /// Apply active style with stack indicator attached
+    /// Apply active style with stack indicator attached.
+    /// When nudge mode is active, applies nudge style instead of config style and returns early
+    /// (no stack indicator during free-form positioning).
     private func applyActiveStyle(to border: BorderWindow) {
+        // Nudge mode owns the active border color for the session duration
+        if isNudgeModeActive {
+            if let nudgeStyle = buildNudgeStyle() {
+                updateBorderStyle(border, style: nudgeStyle, isActive: true)
+            }
+            return
+        }
+
         let config = BorderConfigManager.shared
         var style = config.activeStyle
 
