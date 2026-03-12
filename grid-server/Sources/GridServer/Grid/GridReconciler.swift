@@ -33,8 +33,10 @@ class GridReconciler: StateEventHandler {
     // Timeout for pending launch target (app may take time to launch)
     private let pendingLaunchTimeout: CFAbsoluteTime = 15.0
 
-    // Suppression flag for bulk operations (layout apply)
-    private var suppressReconciliation: Bool = false
+    // Ref-counted suppression for bulk operations (layout apply, picker, moves).
+    // Multiple callers can nest suppress/unsuppress without interfering.
+    private var suppressionDepth: Int = 0
+    private var suppressReconciliation: Bool { suppressionDepth > 0 }
 
     // Move cooldown: after a cross-display move, ignore OS focus events
     // for non-target windows to prevent delayed appActivated from
@@ -47,13 +49,22 @@ class GridReconciler: StateEventHandler {
 
     // MARK: - Public API
 
-    // Set suppression (called by GridApply and GridWindowMove)
-    // syncOnResume: if true, triggers syncBordersForCurrentSpace when unsuppressing
+    // Increment/decrement suppression depth (called by GridApply, GridWindowMove, PickerManager).
+    // syncOnResume: if true, triggers syncBordersForCurrentSpace when depth reaches 0.
     func setSuppressed(_ suppressed: Bool, syncOnResume: Bool = true) {
-        suppressReconciliation = suppressed
-        if !suppressed && syncOnResume {
-            Task {
-                await syncBordersForCurrentSpace()
+        if suppressed {
+            suppressionDepth += 1
+            jlog("reconcile.suppress.inc", data: ["depth": suppressionDepth])
+        } else {
+            if suppressionDepth <= 0 {
+                jlog("warn.reconcile.suppress.underflow")
+            }
+            suppressionDepth = max(0, suppressionDepth - 1)
+            jlog("reconcile.suppress.dec", data: ["depth": suppressionDepth])
+            if suppressionDepth == 0 && syncOnResume {
+                Task {
+                    await syncBordersForCurrentSpace()
+                }
             }
         }
     }
@@ -62,11 +73,11 @@ class GridReconciler: StateEventHandler {
     // Call beginMove before the move, endMove after explicit border syncs.
     func beginMove(targetWindowID: UInt32) {
         moveTargetWindowID = targetWindowID
-        suppressReconciliation = true
+        suppressionDepth += 1
     }
 
     func endMove() {
-        suppressReconciliation = false
+        suppressionDepth = max(0, suppressionDepth - 1)
         moveEndTime = CFAbsoluteTimeGetCurrent()
     }
 
@@ -183,27 +194,65 @@ class GridReconciler: StateEventHandler {
 
     private func handleWindowCreated(_ windowID: UInt32, _ pid: pid_t) async {
         // Get current state to find which space we're on
-        guard let stateManager else { return }
+        guard let stateManager else {
+            jlog("reconcile.win.create.bail", data: ["wid": windowID, "reason": "no_stateManager"])
+            return
+        }
         let wmState = await stateManager.getState()
 
         // Find the current space ID from active spaces
-        guard let spaceID = findCurrentSpaceID(from: wmState) else { return }
+        guard let spaceID = findCurrentSpaceID(from: wmState) else {
+            jlog("reconcile.win.create.bail", data: ["wid": windowID, "reason": "no_spaceID"])
+            return
+        }
 
         // Check if there's an active layout for this space
-        guard let gridState else { return }
+        guard let gridState else {
+            jlog("reconcile.win.create.bail", data: ["wid": windowID, "reason": "no_gridState"])
+            return
+        }
         let layoutID = await gridState.getCurrentLayout(spaceID: spaceID)
-        if layoutID.isEmpty { return }
+        if layoutID.isEmpty {
+            jlog("reconcile.win.create.bail", data: ["wid": windowID, "reason": "no_layout", "space": spaceID])
+            return
+        }
 
         // Get the window state from StateManager
-        guard let windowState = wmState.windows[String(windowID)] else { return }
+        guard let windowState = wmState.windows[String(windowID)] else {
+            jlog("reconcile.win.create.bail", data: [
+                "wid": windowID,
+                "reason": "not_in_state",
+                "space": spaceID,
+                "windowCount": wmState.windows.count
+            ])
+            return
+        }
 
         // Check if window is tileable
-        guard isTileable(window: windowState) else { return }
+        guard isTileable(window: windowState) else {
+            jlog("reconcile.win.create.bail", data: [
+                "wid": windowID,
+                "reason": "not_tileable",
+                "role": windowState.role ?? "nil",
+                "subrole": windowState.subrole ?? "nil",
+                "w": windowState.frame.width,
+                "h": windowState.frame.height
+            ])
+            return
+        }
 
         // Check window classification
         let appName = windowState.appName ?? ""
         let category = classifyWindow(window: windowState, appName: appName)
-        if category != .standard { return }
+        if category != .standard {
+            jlog("reconcile.win.create.bail", data: [
+                "wid": windowID,
+                "reason": "not_standard",
+                "category": String(describing: category),
+                "app": appName
+            ])
+            return
+        }
 
         // Auto-assign: find least-populated cell
         let assignments = await gridState.getWindowAssignments(spaceID: spaceID)
