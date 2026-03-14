@@ -198,6 +198,8 @@ class PickerHistory {
         let tmpPath = filePath + ".tmp"
         do {
             try data.write(to: URL(fileURLWithPath: tmpPath))
+            // Remove destination first — moveItem doesn't overwrite
+            try? FileManager.default.removeItem(atPath: filePath)
             try FileManager.default.moveItem(atPath: tmpPath, toPath: filePath)
         } catch {
             try? FileManager.default.removeItem(atPath: tmpPath)

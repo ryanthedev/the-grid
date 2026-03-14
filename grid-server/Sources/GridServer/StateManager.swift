@@ -1211,6 +1211,7 @@ var windows: [String: WindowState] = [:]
         let pollTimestamp = Date()
 
         var seenWindowIDs = Set<UInt32>()
+        var newWindowIDs: [(UInt32, pid_t)] = []
 
         for windowInfo in windowList {
             guard let windowID = windowInfo[kCGWindowNumber as String] as? UInt32 else { continue }
@@ -1224,7 +1225,25 @@ var windows: [String: WindowState] = [:]
                 // else: skip - event data is fresher
             } else {
                 // New window discovered by poll
+                let pid = windowInfo[kCGWindowOwnerPID as String] as? pid_t ?? 0
                 addWindowFromPoll(windowID: windowID, windowInfo: windowInfo, timestamp: pollTimestamp)
+                // Track for windowCreated event routing (only if actually added)
+                if state.windows[String(windowID)] != nil {
+                    newWindowIDs.append((windowID, pid))
+                }
+            }
+        }
+
+        // Route creation events for newly discovered windows so GridReconciler
+        // can handle pending launch targets (AX observer may miss early windows)
+        if !newWindowIDs.isEmpty {
+            Task {
+                for (windowID, pid) in newWindowIDs {
+                    await EventRouter.shared.route(
+                        .windowCreated(windowID: windowID, pid: pid),
+                        from: .poll
+                    )
+                }
             }
         }
 
