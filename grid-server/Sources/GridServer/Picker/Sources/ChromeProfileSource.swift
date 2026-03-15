@@ -53,8 +53,9 @@ struct ChromeProfileSource: PickerSource {
                 name = profileDir
             }
 
-            // Build searchable: name, "chrome", "browser", plus additional names if different
-            var searchable = [name.lowercased(), "chrome", "browser"]
+            // Build searchable: name plus additional names if different
+            // (subtitle "Chrome Profile" handles "chrome" matching at appropriate weight)
+            var searchable = [name.lowercased()]
             if !gaiaName.isEmpty && gaiaName != name {
                 searchable.append(gaiaName.lowercased())
             }
