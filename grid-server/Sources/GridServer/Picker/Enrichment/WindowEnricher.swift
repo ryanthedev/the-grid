@@ -35,7 +35,8 @@ class WindowEnricher {
     // MARK: - Enrichment
 
     /// Enrich a single window. Returns nil if no enrichment applies.
-    func enrich(bundleID: String, pid: pid_t, title: String) async -> EnrichmentResult? {
+    /// axTitle: full AX title (may include browser + profile suffix)
+    func enrich(bundleID: String, pid: pid_t, title: String, axTitle: String? = nil) async -> EnrichmentResult? {
         guard let tree = processTree else { return nil }
 
         var sshResult: EnrichmentResult? = nil
@@ -52,8 +53,9 @@ class WindowEnricher {
         }
 
         // Chrome enrichment (exclusive — no terminal enrichment for Chrome windows)
+        // Use axTitle (has profile suffix) with fallback to CGWindowList title
         if chromeEnricher.supports(bundleID: bundleID) {
-            return chromeEnricher.enrich(windowTitle: title)
+            return chromeEnricher.enrich(windowTitle: axTitle ?? title)
         }
 
         // Combine SSH + Tmux results
