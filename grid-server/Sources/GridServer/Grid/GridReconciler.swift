@@ -254,8 +254,16 @@ class GridReconciler: StateEventHandler {
             return
         }
 
-        // Auto-assign: find least-populated cell
+        // Skip if window is already assigned (e.g., via pending launch target from poll)
         let assignments = await gridState.getWindowAssignments(spaceID: spaceID)
+        for (_, windowIDs) in assignments {
+            if windowIDs.contains(windowID) {
+                jlog("reconcile.win.create.skip", data: ["wid": windowID, "reason": "already_assigned"])
+                return
+            }
+        }
+
+        // Auto-assign: find least-populated cell
         let leastPopulatedCell = findLeastPopulatedCell(assignments)
 
         if !leastPopulatedCell.isEmpty {

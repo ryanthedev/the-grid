@@ -53,7 +53,8 @@ struct WindowSource: PickerSource {
             let enrichment = await enricher.enrich(
                 bundleID: bundleID,
                 pid: pid_t(window.pid),
-                title: windowTitle
+                title: windowTitle,
+                axTitle: window.axTitle
             )
 
             // Build title and subtitle from enrichment result

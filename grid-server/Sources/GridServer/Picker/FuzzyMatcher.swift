@@ -28,6 +28,13 @@ enum FuzzyMatcher {
         }
     }
 
+    /// Characters treated as interchangeable separators
+    private static let separators: Set<Character> = [".", "-", "_", " "]
+
+    private static func isSeparator(_ c: Character) -> Bool {
+        separators.contains(c)
+    }
+
     /// Match a query against a list of items
     /// - Parameters:
     ///   - query: The search query
@@ -38,9 +45,6 @@ enum FuzzyMatcher {
         guard !query.isEmpty else {
             return items.map { MatchResult(item: $0, score: 0, matchedIndices: []) }
         }
-
-        // Determine case sensitivity (smart case: case-insensitive unless query has uppercase)
-        let caseSensitive = query.contains(where: { $0.isUppercase })
 
         var results: [MatchResult] = []
 
@@ -74,8 +78,7 @@ enum FuzzyMatcher {
             for (text, fieldType) in searchFields {
                 if let (rawScore, indices) = matchSingle(
                     query: query,
-                    text: text,
-                    caseSensitive: caseSensitive
+                    text: text
                 ) {
                     hasAnyMatch = true
 
@@ -115,25 +118,16 @@ enum FuzzyMatcher {
     }
 
     /// Match a single query against a single text
-    /// - Parameters:
-    ///   - query: Search query
-    ///   - text: Text to search in
-    ///   - caseSensitive: Whether to match case-sensitively
-    /// - Returns: (score, matched indices) or nil if no match
+    /// Always case-insensitive; exact case matches get a scoring bonus.
+    /// Separators (. - _ space) are interchangeable and skippable in text.
+    /// - Returns: (score, matched indices into original text) or nil if no match
     private static func matchSingle(
         query: String,
-        text: String,
-        caseSensitive: Bool
+        text: String
     ) -> (Int, [Int])? {
-        // Normalize separators: treat hyphens, underscores as spaces
-        let normalizedQuery = query.replacingOccurrences(of: "-", with: " ")
-                                   .replacingOccurrences(of: "_", with: " ")
-        let normalizedText = text.replacingOccurrences(of: "-", with: " ")
-                                 .replacingOccurrences(of: "_", with: " ")
-
-        let queryChars = caseSensitive ? Array(normalizedQuery) : Array(normalizedQuery.lowercased())
-        let textChars = caseSensitive ? Array(normalizedText) : Array(normalizedText.lowercased())
-        let originalTextChars = Array(text)
+        let queryChars = Array(query)
+        let textChars = Array(text)
+        let lowerTextChars = Array(text.lowercased())
 
         var queryIndex = 0
         var matchedIndices: [Int] = []
@@ -143,14 +137,35 @@ enum FuzzyMatcher {
         var consecutiveCount = 0
         var lastMatchIndex = -2
 
-        for (textIndex, char) in textChars.enumerated() {
+        for textIndex in 0..<textChars.count {
             guard queryIndex < queryChars.count else { break }
 
-            if char == queryChars[queryIndex] {
+            let qChar = queryChars[queryIndex]
+
+            // Separator in query matches any separator in text
+            if isSeparator(qChar) {
+                if isSeparator(textChars[textIndex]) {
+                    matchedIndices.append(textIndex)
+                    score += 5
+                    lastMatchIndex = textIndex
+                    consecutiveCount = 0
+                    queryIndex += 1
+                }
+                continue
+            }
+
+            // Case-insensitive comparison
+            let lowerQ = Character(qChar.lowercased())
+            if lowerTextChars[textIndex] == lowerQ {
                 matchedIndices.append(textIndex)
 
                 // Base score for a match
                 var matchScore = 10
+
+                // Bonus for exact case match
+                if textChars[textIndex] == qChar {
+                    matchScore += 3
+                }
 
                 // Bonus for consecutive matches
                 if textIndex == lastMatchIndex + 1 {
@@ -160,14 +175,14 @@ enum FuzzyMatcher {
                     consecutiveCount = 0
                 }
 
-                // Bonus for word boundary match
-                if textIndex == 0 || !originalTextChars[textIndex - 1].isLetter {
+                // Bonus for word boundary match (after separator or start)
+                if textIndex == 0 || !textChars[textIndex - 1].isLetter {
                     matchScore += 15
                 }
 
                 // Bonus for camelCase match
-                if textIndex > 0 && originalTextChars[textIndex].isUppercase &&
-                   originalTextChars[textIndex - 1].isLowercase {
+                if textIndex > 0 && textChars[textIndex].isUppercase &&
+                   textChars[textIndex - 1].isLowercase {
                     matchScore += 10
                 }
 
@@ -191,13 +206,13 @@ enum FuzzyMatcher {
         // Bonus for shorter text (tighter match)
         score += max(0, 100 - text.count)
 
-        // Bonus for exact match
-        if caseSensitive ? text == query : text.lowercased() == query.lowercased() {
+        // Bonus for exact match (case-insensitive)
+        if text.lowercased() == query.lowercased() {
             score += 500
         }
 
-        // Bonus for prefix match
-        if caseSensitive ? text.hasPrefix(query) : text.lowercased().hasPrefix(query.lowercased()) {
+        // Bonus for prefix match (case-insensitive)
+        if text.lowercased().hasPrefix(query.lowercased()) {
             score += 200
         }
 

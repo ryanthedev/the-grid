@@ -1038,11 +1038,9 @@ var windows: [String: WindowState] = [:]
                 windowState.hasZoomButton = axProps.hasZoomButton
                 windowState.isModal = axProps.isModal
 
-                // Prefer AX title over CG title when available
-                // AX title contains tab-specific info (e.g., "GitHub - Google Chrome")
-                // CG title is often generic (e.g., "Google Chrome")
+                // Store AX title separately (richer: includes browser + profile suffix)
                 if let axTitle = axProps.title, !axTitle.isEmpty {
-                    windowState.title = axTitle
+                    windowState.axTitle = axTitle
                 }
             }
 
@@ -1211,6 +1209,7 @@ var windows: [String: WindowState] = [:]
         let pollTimestamp = Date()
 
         var seenWindowIDs = Set<UInt32>()
+        var newWindowIDs: [(UInt32, pid_t)] = []
 
         for windowInfo in windowList {
             guard let windowID = windowInfo[kCGWindowNumber as String] as? UInt32 else { continue }
@@ -1224,7 +1223,25 @@ var windows: [String: WindowState] = [:]
                 // else: skip - event data is fresher
             } else {
                 // New window discovered by poll
+                let pid = windowInfo[kCGWindowOwnerPID as String] as? pid_t ?? 0
                 addWindowFromPoll(windowID: windowID, windowInfo: windowInfo, timestamp: pollTimestamp)
+                // Track for windowCreated event routing (only if actually added)
+                if state.windows[String(windowID)] != nil {
+                    newWindowIDs.append((windowID, pid))
+                }
+            }
+        }
+
+        // Route creation events for newly discovered windows so GridReconciler
+        // can handle pending launch targets (AX observer may miss early windows)
+        if !newWindowIDs.isEmpty {
+            Task {
+                for (windowID, pid) in newWindowIDs {
+                    await EventRouter.shared.route(
+                        .windowCreated(windowID: windowID, pid: pid),
+                        from: .poll
+                    )
+                }
             }
         }
 
@@ -1274,7 +1291,7 @@ var windows: [String: WindowState] = [:]
             )
         }
 
-        // Update title
+        // Update title (CGWindowList page title)
         if let name = windowInfo[kCGWindowName as String] as? String {
             window.title = name
         }
@@ -1341,9 +1358,9 @@ var windows: [String: WindowState] = [:]
         window.hasZoomButton = axProps.hasZoomButton
         window.isModal = axProps.isModal
 
-        // Prefer AX title over CG title when available
+        // Store AX title separately (richer: includes browser + profile suffix)
         if let axTitle = axProps.title, !axTitle.isEmpty {
-            window.title = axTitle
+            window.axTitle = axTitle
         }
 
         // Compute displayUUID geometrically and derive space from display
@@ -1403,9 +1420,9 @@ var windows: [String: WindowState] = [:]
         window.hasZoomButton = axProps.hasZoomButton
         window.isModal = axProps.isModal
 
-        // Prefer AX title over CG title when available
+        // Store AX title separately (richer: includes browser + profile suffix)
         if let axTitle = axProps.title, !axTitle.isEmpty {
-            window.title = axTitle
+            window.axTitle = axTitle
         }
 
         // Compute displayUUID geometrically and derive space from display
@@ -1568,7 +1585,8 @@ var windows: [String: WindowState] = [:]
     private func handleWindowTitleChanged(_ windowID: UInt32, title: String) {
         let key = String(windowID)
         guard var window = state.windows[key] else { return }
-        window.title = title
+        // AX title notifications carry the full title (e.g., with profile suffix)
+        window.axTitle = title
         window.lastUpdated = Date()
         state.windows[key] = window
         state.metadata.update()
