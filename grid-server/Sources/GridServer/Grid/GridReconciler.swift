@@ -31,6 +31,11 @@ class GridReconciler: StateEventHandler {
     // that keeps the validator (and its periodic timer) alive for process lifetime
     private var stateValidator: StateValidator?
 
+    // Guards user commands during sleep/wake recovery.
+    // Non-nil only while handleSystemWake is in progress.
+    // Commands call awaitWakeCompletion() to wait for this to finish.
+    private var wakeValidationTask: Task<Void, Never>? = nil
+
     // One-shot target: next tileable window created on target space claims this cell
     private var pendingLaunchTarget: PendingLaunchTarget?
 
@@ -120,6 +125,15 @@ class GridReconciler: StateEventHandler {
 
     func setValidator(_ validator: StateValidator) {
         self.stateValidator = validator
+    }
+
+    // awaitWakeCompletion
+    //
+    // Called by GridCommandRouter before processing any command.
+    // If wake validation is in progress, suspends the caller until it finishes.
+    // Fast path (common case): wakeValidationTask is nil, returns immediately.
+    func awaitWakeCompletion() async {
+        await wakeValidationTask?.value
     }
 
     // Check if a window is currently fenced (not expired).
@@ -247,8 +261,11 @@ class GridReconciler: StateEventHandler {
         case .windowDeminimized(let windowID):
             await handleWindowDeminimized(windowID)
 
+        case .displayConnected(let displayUUID):
+            await handleDisplayConnected(displayUUID)
+
         case .displayDisconnected(let displayUUID):
-            handleDisplayDisconnected(displayUUID)
+            await handleDisplayDisconnected(displayUUID)
 
         default:
             // Ignore other events (app lifecycle, title changes, etc.)
@@ -526,33 +543,55 @@ class GridReconciler: StateEventHandler {
     }
 
     private func handleSystemWake() async {
-        // Migrate space IDs (macOS may reassign them after sleep)
         guard let stateManager, let gridState else { return }
+
+        jlog("reconcile.wake.start")
+
+        // Capture wmState once for consistency across all steps
         let wmState = await stateManager.getState()
 
-        // Build display -> space ID list map
-        var displaySpaces: [String: [String]] = [:]
-        for display in wmState.displays {
-            var spaceIDs: [String] = []
-            for (spaceKey, space) in wmState.spaces {
-                if space.displayUUID == display.uuid {
-                    spaceIDs.append(spaceKey)
+        // Store the validation work as a tracked task so commands can await completion
+        // via awaitWakeCompletion(). The task reference is cleared on completion.
+        let task = Task { [weak self] in
+            guard let self else { return }
+
+            // Step 1: Migrate space IDs (macOS may reassign after sleep)
+            var displaySpaces: [String: [String]] = [:]
+            for display in wmState.displays {
+                var spaceIDs: [String] = []
+                for (spaceKey, space) in wmState.spaces {
+                    if space.displayUUID == display.uuid {
+                        spaceIDs.append(spaceKey)
+                    }
                 }
+                // Sort by space ID for positional matching
+                displaySpaces[display.uuid] = spaceIDs.sorted()
             }
-            // Sort by space ID for positional matching
-            displaySpaces[display.uuid] = spaceIDs.sorted()
+
+            let migrated = await gridState.migrateSpaceIDs(currentDisplaySpaces: displaySpaces)
+            if migrated {
+                jlog("reconcile.wake.migrated")
+            }
+
+            // Step 2: Full state validation after migration.
+            // Re-fetch wmState so validator sees correct space IDs post-migration.
+            let freshWmState = await stateManager.getState()
+            await self.stateValidator?.validate(wmState: freshWmState)
+
+            // Step 3: Sync borders for current space
+            await self.syncBordersForCurrentSpace()
+
+            jlog("reconcile.wake.done")
+
+            // Clear the task reference so subsequent commands pass through immediately
+            self.wakeValidationTask = nil
         }
+        wakeValidationTask = task
 
-        let migrated = await gridState.migrateSpaceIDs(currentDisplaySpaces: displaySpaces)
-        if migrated {
-            jlog("reconcile.wake.migrated")
-        }
-
-        // Run state validation after migration (prune zombies, dedup, prune dead spaces)
-        await stateValidator?.validate(wmState: wmState)
-
-        // After migration and validation, sync borders for current space
-        await syncBordersForCurrentSpace()
+        // Await the task so handleSystemWake() itself doesn't return until
+        // everything is done. This preserves the existing guarantee that wake
+        // handling is synchronous from the event handler's perspective.
+        await task.value
     }
 
     private func handleWindowMoved(_ windowID: UInt32, _ frame: CGRect) {
@@ -585,8 +624,73 @@ class GridReconciler: StateEventHandler {
         jlog("reconcile.win.unmin", data: ["wid": windowID])
     }
 
-    private func handleDisplayDisconnected(_ displayUUID: String) {
+    // handleDisplayConnected
+    //
+    // Triggered when a display is reconnected (e.g., external monitor plugged back in).
+    // GridState retains the layout and window assignments from before disconnect.
+    // Re-syncs borders and reapplies layouts for the reconnected display.
+    private func handleDisplayConnected(_ displayUUID: String) async {
+        jlog("reconcile.display.connect", data: ["display": displayUUID])
+
+        // Short delay allows macOS to stabilize space/window state after reconnect
+        // before we query it. Without this, wmState may not yet reflect new spaces.
+        // 500ms is enough for display negotiation; short enough to feel instant.
+        try? await Task.sleep(for: .milliseconds(500))
+
+        // Reapply layouts and sync borders for the reconnected display.
+        // refreshAllDisplays handles: find active space, check layout,
+        // reapply window positions, sync borders.
+        let errors = await gridApply?.refreshAllDisplays(displayFilter: displayUUID) ?? []
+
+        if !errors.isEmpty {
+            jlog("warn.reconcile.display.connect.errors",
+                 data: ["display": displayUUID, "errorCount": errors.count])
+        }
+    }
+
+    // handleDisplayDisconnected
+    //
+    // Enhanced disconnect handler. Previous behavior only cleaned up borders.
+    // New behavior also prunes GridState window assignments for spaces on the
+    // disconnected display, preventing zombies from accumulating.
+    //
+    // Why windows but not spaces: macOS may keep space IDs alive for disconnected
+    // displays. pruneDeadSpaces() (StateValidator) handles space cleanup when the
+    // IDs are actually gone. Removing windows eagerly prevents zombie assignments
+    // in cells while preserving layout config for reconnect.
+    private func handleDisplayDisconnected(_ displayUUID: String) async {
+        jlog("reconcile.display.disconnect", data: ["display": displayUUID])
+
+        // Existing: clean up border state for this display
         simpleBorderManager?.handleDisplayDisconnected(displayUUID: displayUUID)
+
+        // New: prune GridState window assignments for spaces on this display
+        guard let gridState, let stateManager else { return }
+        let wmState = await stateManager.getState()
+
+        // Find all space IDs that belong to this display in the current wmState
+        let affectedSpaceIDs = wmState.spaces.compactMap { (spaceID, space) -> String? in
+            space.displayUUID == displayUUID ? spaceID : nil
+        }
+
+        if affectedSpaceIDs.isEmpty {
+            jlog("reconcile.display.disconnect.no_spaces", data: ["display": displayUUID])
+            return
+        }
+
+        // For each affected space, remove all window assignments.
+        // Windows will reappear via windowCreated events when the display reconnects
+        // and the user's apps are still running.
+        for spaceID in affectedSpaceIDs {
+            let assignments = await gridState.getWindowAssignments(spaceID: spaceID)
+            for (_, windowIDs) in assignments {
+                for windowID in windowIDs {
+                    await gridState.removeWindow(windowID, fromSpace: spaceID)
+                    jlog("reconcile.display.disconnect.prune",
+                         data: ["wid": Int(windowID), "space": spaceID, "display": displayUUID])
+                }
+            }
+        }
     }
 
     // MARK: - Border Sync

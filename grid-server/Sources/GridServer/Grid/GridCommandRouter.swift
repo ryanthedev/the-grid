@@ -153,10 +153,15 @@ class GridCommandRouter {
             return .error("invalid command format")
         }
 
-        // 2. Log the dispatch
+        // 2. Wait for any in-progress wake validation to finish.
+        // Fast path during normal operation: returns immediately (task is nil).
+        // This ensures commands see post-migration, post-validation state.
+        await gridReconciler.awaitWakeCompletion()
+
+        // 3. Log the dispatch
         jlog("cmd.dispatch", data: ["domain": parsed.domain, "action": parsed.action])
 
-        // 3. Switch on domain
+        // 4. Switch on domain
         do {
             switch parsed.domain {
             case "focus":
