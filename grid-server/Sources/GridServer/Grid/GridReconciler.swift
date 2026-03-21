@@ -37,23 +37,25 @@ class GridReconciler: StateEventHandler {
     // Timeout for pending launch target (app may take time to launch)
     private let pendingLaunchTimeout: CFAbsoluteTime = 15.0
 
-    // Ref-counted suppression for bulk operations (layout apply, picker, moves).
+    // Ref-counted suppression for bulk operations (layout apply, picker, terminal, focus).
     // Multiple callers can nest suppress/unsuppress without interfering.
     private var suppressionDepth: Int = 0
     private var suppressReconciliation: Bool { suppressionDepth > 0 }
 
-    // Move cooldown: after a cross-display move, ignore OS focus events
-    // for non-target windows to prevent delayed appActivated from
-    // bouncing borders to wrong windows.
-    private var moveTargetWindowID: UInt32 = 0
-    private var moveEndTime: CFAbsoluteTime = 0
-    private let moveCooldownSeconds: CFAbsoluteTime = 1.0
+    // Per-window fencing: OS focus events for fenced windows are dropped
+    // until released or expired. Replaces the old move cooldown model.
+    // Map from window ID to fence expiry time (CFAbsoluteTime).
+    private var fencedWindows: [UInt32: CFAbsoluteTime] = [:]
+
+    // Safety timeout: fences auto-expire after this duration to prevent deadlocks
+    private let fenceTimeoutSeconds: CFAbsoluteTime = 5.0
 
     init() {}
 
     // MARK: - Public API
 
-    // Increment/decrement suppression depth (called by GridApply, GridWindowMove, PickerManager).
+    // Increment/decrement suppression depth (called by GridApply, PickerManager,
+    // GridTerminalManager, GridCommandRouter).
     // syncOnResume: if true, triggers syncBordersForCurrentSpace when depth reaches 0.
     func setSuppressed(_ suppressed: Bool, syncOnResume: Bool = true) {
         if suppressed {
@@ -73,22 +75,32 @@ class GridReconciler: StateEventHandler {
         }
     }
 
-    // Track cross-display move target so we can ignore spurious OS focus events.
-    // Call beginMove before the move, endMove after explicit border syncs.
-    func beginMove(targetWindowID: UInt32) {
-        moveTargetWindowID = targetWindowID
-        suppressionDepth += 1
+    // Fence one or more windows so OS focus events for them are dropped.
+    // Called by move commands before they begin mutating state.
+    // reason: logging context only (not stored).
+    func acquireFence(windowIDs: Set<UInt32>, reason: String) {
+        guard !windowIDs.isEmpty else {
+            jlog("warn.fence.empty", msg: "acquireFence called with empty set")
+            return
+        }
+        let expiresAt = CFAbsoluteTimeGetCurrent() + fenceTimeoutSeconds
+        for windowID in windowIDs {
+            fencedWindows[windowID] = expiresAt
+        }
+        jlog("fence.acquire", data: [
+            "wids": windowIDs.sorted().map { Int($0) },
+            "reason": reason,
+        ])
     }
 
-    func endMove() {
-        suppressionDepth = max(0, suppressionDepth - 1)
-        moveEndTime = CFAbsoluteTimeGetCurrent()
-    }
-
-    // Clear move cooldown so explicit user actions (focus commands)
-    // aren't suppressed by stale move tracking
-    func clearMoveCooldown() {
-        moveTargetWindowID = 0
+    // Release fence for specific windows. Called after border sync completes.
+    func releaseFence(windowIDs: Set<UInt32>) {
+        for windowID in windowIDs {
+            fencedWindows.removeValue(forKey: windowID)
+        }
+        jlog("fence.release", data: [
+            "wids": windowIDs.sorted().map { Int($0) },
+        ])
     }
 
     func setPendingLaunchTarget(_ target: PendingLaunchTarget?) {
@@ -110,9 +122,21 @@ class GridReconciler: StateEventHandler {
         self.stateValidator = validator
     }
 
-    private var isInMoveCooldown: Bool {
-        moveTargetWindowID != 0
-            && (CFAbsoluteTimeGetCurrent() - moveEndTime) < moveCooldownSeconds
+    // Check if a window is currently fenced (not expired).
+    // Lazily cleans up expired entries.
+    private func isWindowFenced(_ windowID: UInt32) -> Bool {
+        guard let expiresAt = fencedWindows[windowID] else {
+            return false
+        }
+
+        if CFAbsoluteTimeGetCurrent() > expiresAt {
+            // Fence expired -- safety timeout hit
+            fencedWindows.removeValue(forKey: windowID)
+            jlog("fence.expired", data: ["wid": Int(windowID)])
+            return false
+        }
+
+        return true
     }
 
     // Store references, register with EventRouter
@@ -137,7 +161,7 @@ class GridReconciler: StateEventHandler {
     // MARK: - StateEventHandler
 
     func handle(_ event: StateEvent, context: EventContext) async throws {
-        // Focus events handle suppression/cooldown internally
+        // Focus events handle suppression/fencing internally
         if case .focusChanged(let focusState) = event {
             await handleFocusChanged(focusState)
             return
@@ -362,22 +386,17 @@ class GridReconciler: StateEventHandler {
     private func handleFocusChanged(_ focusState: FocusState) async {
         guard let gridState, let stateManager, let windowID = focusState.windowID else { return }
 
-        // During suppression (active move), skip entirely — our move code
-        // sets GridState focus explicitly, and OS events would overwrite it.
+        // During suppression (bulk ops: layout apply, picker, terminal, focus),
+        // skip entirely -- the caller sets GridState focus explicitly.
         if suppressReconciliation {
             jlog("reconcile.focus.suppressed", data: ["wid": windowID])
             return
         }
 
-        // During cooldown after a cross-display move, skip ALL focus events.
-        // The explicit border syncs already set correct state. OS fires delayed
-        // appActivated events for 1-3 seconds that would undo our work.
-        if isInMoveCooldown {
-            jlog("reconcile.focus.cooldown", data: [
-                "ignored": windowID,
-                "expected": moveTargetWindowID,
-                "age_ms": Int((CFAbsoluteTimeGetCurrent() - moveEndTime) * 1000),
-            ])
+        // Check fence: if this window is fenced, drop the OS event.
+        // Fences are per-window: other windows' events pass through normally.
+        if isWindowFenced(windowID) {
+            jlog("reconcile.focus.fenced", data: ["wid": windowID])
             return
         }
 

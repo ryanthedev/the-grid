@@ -266,4 +266,12 @@ Eliminates timing-based race conditions structurally. Commands acquire fences th
 
 ## Execution Log
 
-_To be filled during /code-foundations:building_
+### Phase 1: State Validator
+- [x] PRE-GATE: Discovery + pseudocode complete
+- [x] IMPLEMENT: Code written, build passes
+- [x] POST-GATE: Verification passed (retry 1: fixed weak->strong reference for StateValidator lifetime)
+- [x] CHECKPOINT: Committed
+Pipeline: full
+Model: sonnet (plan override)
+Commit: c1fcc56
+Summary: Added StateValidator actor with periodic (~30s) and on-wake validation. Three passes: prune dead windows via SLSGetWindowBounds, deduplicate cross-space windows, prune dead spaces. Wired into GridReconciler with strong reference.

@@ -160,9 +160,6 @@ class GridCommandRouter {
         do {
             switch parsed.domain {
             case "focus":
-                // Clear move cooldown so the reconciler doesn't suppress
-                // the border update triggered by this explicit focus change
-                gridReconciler.clearMoveCooldown()
                 // Suppress reconciler during focus to prevent intermediate OS
                 // events (e.g. appActivated for same-app windows) from
                 // contaminating cell lastFocusedWid tracking
