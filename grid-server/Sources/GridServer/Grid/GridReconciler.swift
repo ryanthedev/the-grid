@@ -611,7 +611,11 @@ class GridReconciler: StateEventHandler {
         let layoutID = await gridState.getCurrentLayout(spaceID: spaceID)
         guard !layoutID.isEmpty else {
             // No layout -- clear borders by sending empty assignments
-            simpleBorderManager?.setCellAssignments([:], forDisplay: displayUUID)
+            if let borderManager = simpleBorderManager {
+                await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                    borderManager.setCellAssignments([:], forDisplay: displayUUID, completion: { continuation.resume() })
+                }
+            }
             return
         }
 
@@ -663,15 +667,22 @@ class GridReconciler: StateEventHandler {
         // Get focused window
         let focusedWID = await gridState.getFocusedWindow(spaceID: spaceID)
 
-        // Send to SimpleBorderManager (atomic update with focus)
-        simpleBorderManager?.setCellAssignments(
-            windowToCellMap,
-            forDisplay: displayUUID,
-            focusedWindowID: focusedWID != 0 ? focusedWID : nil,
-            cellStackModes: cellStackModes,
-            windowOrder: windowOrder,
-            displayFrame: bounds
-        )
+        // Send to SimpleBorderManager and await completion on main queue.
+        // withCheckedContinuation bridges the DispatchQueue.main.async boundary
+        // so that fence releases in GridWindowMove wait for border work to finish.
+        if let borderManager = simpleBorderManager {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                borderManager.setCellAssignments(
+                    windowToCellMap,
+                    forDisplay: displayUUID,
+                    focusedWindowID: focusedWID != 0 ? focusedWID : nil,
+                    cellStackModes: cellStackModes,
+                    windowOrder: windowOrder,
+                    displayFrame: bounds,
+                    completion: { continuation.resume() }
+                )
+            }
+        }
     }
 
     // MARK: - Helpers
