@@ -241,6 +241,12 @@ actor GridState {
         return spaces[spaceID]
     }
 
+    // MARK: - Space Enumeration (for StateValidator)
+
+    func getSpaceIDs() -> [String] {
+        return Array(spaces.keys)
+    }
+
     func removeSpace(_ spaceID: String) {
         spaces.removeValue(forKey: spaceID)
         markDirty()

@@ -27,6 +27,10 @@ class GridReconciler: StateEventHandler {
     private weak var gridApply: GridApply?
     private weak var gridFocus: GridFocus?
 
+    // Strong reference to StateValidator — GridReconciler is the owning reference
+    // that keeps the validator (and its periodic timer) alive for process lifetime
+    private var stateValidator: StateValidator?
+
     // One-shot target: next tileable window created on target space claims this cell
     private var pendingLaunchTarget: PendingLaunchTarget?
 
@@ -100,6 +104,10 @@ class GridReconciler: StateEventHandler {
 
     func setFocus(_ focus: GridFocus) {
         self.gridFocus = focus
+    }
+
+    func setValidator(_ validator: StateValidator) {
+        self.stateValidator = validator
     }
 
     private var isInMoveCooldown: Bool {
@@ -465,7 +473,10 @@ class GridReconciler: StateEventHandler {
             jlog("reconcile.wake.migrated")
         }
 
-        // After migration, sync borders for current space
+        // Run state validation after migration (prune zombies, dedup, prune dead spaces)
+        await stateValidator?.validate(wmState: wmState)
+
+        // After migration and validation, sync borders for current space
         await syncBordersForCurrentSpace()
     }
 
