@@ -1,9 +1,9 @@
 # Plan: Reconciler & Border System Overhaul
 
 **Created:** 2026-03-21
-**Status:** in-progress
+**Status:** complete
 **Started:** 2026-03-21 04:45
-**Current Phase:** 1
+**Completed:** 2026-03-21 06:30
 **Complexity:** complex
 
 ---
@@ -275,3 +275,43 @@ Pipeline: full
 Model: sonnet (plan override)
 Commit: c1fcc56
 Summary: Added StateValidator actor with periodic (~30s) and on-wake validation. Three passes: prune dead windows via SLSGetWindowBounds, deduplicate cross-space windows, prune dead spaces. Wired into GridReconciler with strong reference.
+
+### Phase 2: Command Fencing
+- [x] PRE-GATE: Discovery + pseudocode complete (per-window timestamp model chosen via design-it-twice)
+- [x] IMPLEMENT: Code written, build passes
+- [x] POST-GATE: Verification passed
+- [x] CHECKPOINT: Committed
+Pipeline: full
+Model: opus (plan override)
+Commit: 77a4309
+Summary: Replaced move cooldown with per-window fence model. OS focus events for fenced windows are dropped until fence released (after border sync) or expired (5s safety). Same-display moves now await border sync. findSpaceContaining made deterministic. setSuppressed retained for non-move callers.
+
+### Phase 3: Focus Tracking Hardening
+- [x] PRE-GATE: Discovery + pseudocode complete (snap-back mechanism identified: unfenced cell-mates overwrite move focus)
+- [x] IMPLEMENT: Code written, build passes
+- [x] POST-GATE: Verification passed
+- [x] CHECKPOINT: Committed
+Pipeline: full
+Model: sonnet (plan override)
+Commit: e53232c
+Summary: Added guard 3 in handleFocusChanged to drop OS focus events for cell-mates of fenced windows. Added focus.restore.stale logging in focusCellByID for moved-away lastFocusedWid.
+
+### Phase 4: Border-Per-Cell Model
+- [x] PRE-GATE: Discovery + pseudocode complete (mode-aware rebuild approach chosen via design-it-twice)
+- [x] IMPLEMENT: Code written, build passes
+- [x] POST-GATE: Verification passed
+- [x] CHECKPOINT: Committed
+Pipeline: full
+Model: opus (plan override)
+Commit: 56ae782
+Summary: Tabbed cells now allocate exactly 1 border (retarget on focus change). Replaced atomic-positionRefresh full rebuild with lightweight refreshBorderPositions(). Added completion signaling to setCellAssignments and awaitable syncBordersForSpace via withCheckedContinuation.
+
+### Phase 5: Resilience
+- [x] PRE-GATE: Discovery + pseudocode complete (scope reduced: 2/5 criteria already met by Phases 1 and existing code)
+- [x] IMPLEMENT: Code written, build passes
+- [x] POST-GATE: Verification passed
+- [x] CHECKPOINT: Committed
+Pipeline: full
+Model: sonnet (plan override)
+Commit: 576186a
+Summary: Added wake gate (commands await validation before processing). Enhanced wake handler with full validation pipeline. Display disconnect prunes window assignments. Display reconnect with 500ms stabilization delay.
