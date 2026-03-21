@@ -139,6 +139,53 @@ class GridReconciler: StateEventHandler {
         return true
     }
 
+    // isCellMateOfFencedWindow: returns true if windowID shares a cell (in any
+    // space) with at least one currently-active fenced window.
+    // Called only after isWindowFenced returns false, so windowID itself is not
+    // fenced. Performs lazy expiry cleanup on fencedWindows during iteration.
+    // Returns false immediately when fencedWindows is empty (the common case).
+    private func isCellMateOfFencedWindow(_ windowID: UInt32) async -> Bool {
+        guard let gridState else { return false }
+
+        // Collect active fenced window IDs, expiring stale entries as we go.
+        let now = CFAbsoluteTimeGetCurrent()
+        var activeFencedIDs: Set<UInt32> = []
+        var expiredIDs: [UInt32] = []
+
+        for (fencedWID, expiresAt) in fencedWindows {
+            if now > expiresAt {
+                expiredIDs.append(fencedWID)
+            } else {
+                activeFencedIDs.insert(fencedWID)
+            }
+        }
+
+        for expiredID in expiredIDs {
+            fencedWindows.removeValue(forKey: expiredID)
+            jlog("fence.expired", data: ["wid": Int(expiredID)])
+        }
+
+        // Fast path: no active fences (normal operation outside of moves).
+        if activeFencedIDs.isEmpty { return false }
+
+        // For each space, check whether windowID and any fenced window share a cell.
+        let spaceIDs = await gridState.getSpaceIDs()
+
+        for spaceID in spaceIDs {
+            guard let cellID = await gridState.getWindowCell(windowID: windowID, inSpace: spaceID) else {
+                continue
+            }
+
+            let cellWindows = await gridState.getCellWindows(spaceID: spaceID, cellID: cellID)
+
+            for cellWID in cellWindows where activeFencedIDs.contains(cellWID) {
+                return true
+            }
+        }
+
+        return false
+    }
+
     // Store references, register with EventRouter
     func setup(
         gridState: GridState,
@@ -397,6 +444,15 @@ class GridReconciler: StateEventHandler {
         // Fences are per-window: other windows' events pass through normally.
         if isWindowFenced(windowID) {
             jlog("reconcile.focus.fenced", data: ["wid": windowID])
+            return
+        }
+
+        // Cell-level fence guard: if this window is NOT directly fenced but shares a
+        // cell with a fenced window, drop the event. This prevents collateral OS focus
+        // events (e.g., a previously-focused co-cell window surfacing briefly) from
+        // overwriting the lastFocusedWid that a move command set intentionally.
+        if await isCellMateOfFencedWindow(windowID) {
+            jlog("reconcile.focus.fenced.cell", data: ["wid": windowID])
             return
         }
 

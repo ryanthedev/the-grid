@@ -283,9 +283,19 @@ class GridFocus {
             if cellState.lastFocusedWid != 0 {
                 if let foundIdx = cellWindows.firstIndex(of: cellState.lastFocusedWid) {
                     idx = foundIdx
+                } else {
+                    // lastFocusedWid is not in this cell's window list --
+                    // window moved to another cell/space or was pruned above.
+                    // Log for diagnostics, then fall back to lastFocusedIdx.
+                    jlog("focus.restore.stale", data: [
+                        "wid": cellState.lastFocusedWid,
+                        "cell": cellID,
+                        "spaceID": spaceID,
+                    ])
+                    idx = max(0, min(cellState.lastFocusedIdx, cellWindows.count - 1))
                 }
             } else {
-                // Fall back to lastFocusedIdx
+                // No lastFocusedWid recorded -- use lastFocusedIdx
                 idx = max(0, min(cellState.lastFocusedIdx, cellWindows.count - 1))
             }
         }
