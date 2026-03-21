@@ -93,6 +93,7 @@ class GridCommandRouter {
             stateManager: stateManager,
             windowManipulator: windowManipulator
         )
+        gridFocus.setReconciler(gridReconciler)
 
         gridCellOps.setup(
             gridState: gridState,

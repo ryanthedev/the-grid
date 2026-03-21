@@ -50,6 +50,7 @@ class GridFocus {
     private weak var gridConfig: GridConfig?
     private weak var stateManager: StateManager?
     private weak var windowManipulator: WindowManipulator?
+    private weak var gridReconciler: GridReconciler?
 
     init() {}
 
@@ -64,6 +65,11 @@ class GridFocus {
         self.stateManager = stateManager
         self.windowManipulator = windowManipulator
         jlog("focus.init")
+    }
+
+    // Set reconciler after creation (circular dependency resolution)
+    func setReconciler(_ reconciler: GridReconciler) {
+        self.gridReconciler = reconciler
     }
 
     // ============================================================
@@ -414,9 +420,35 @@ class GridFocus {
         }
 
         // Focus the cell on the target space
-        let windowID = try await focusCellByID(spaceID: targetSpaceIDStr, cellID: targetCell)
+        var windowID = try await focusCellByID(spaceID: targetSpaceIDStr, cellID: targetCell)
 
-        // NOTE: Border sync handled automatically by GridReconciler's focusChanged handler
+        // Tell StateManager the target space is now active so subsequent
+        // syncBordersForCurrentSpace calls (from suppression release) use
+        // the correct display. Without this, macOS metadata still reports
+        // the source display as active (appActivated doesn't fire for
+        // same-app cross-display focus).
+        await stateManager?.overrideActiveSpace(UInt64(targetSpaceID))
+
+        // Check what the OS actually focused — AX may raise a different
+        // window of the same app. Update GridState to match reality.
+        let postState = await stateManager?.getState()
+        if let actualWID = postState?.metadata.focusedWindowID,
+           actualWID != windowID {
+            // OS focused a different window. Find it in the target cell
+            // and update GridState to match.
+            let cellWindows = await gridState.getCellWindows(spaceID: targetSpaceIDStr, cellID: targetCell)
+            if let actualIdx = cellWindows.firstIndex(of: actualWID) {
+                await gridState.setFocus(spaceID: targetSpaceIDStr, cellID: targetCell, windowIndex: actualIdx)
+                windowID = actualWID
+                jlog("focus.cross.corrected", data: [
+                    "requested": windowID,
+                    "actual": actualWID,
+                ])
+            }
+        }
+
+        // Explicitly sync borders for the target display.
+        await gridReconciler?.syncBordersForSpace(targetSpaceIDStr, displayUUID: adjacentDisplay.uuid)
 
         return windowID
     }
