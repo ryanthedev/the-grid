@@ -129,6 +129,25 @@ struct GridServerCommand: ParsableCommand {
                 jlog("notify.store.ready")
             }
 
+            // Instantiate notification event handler with empty config (no event notifications
+            // by default -- opt-in). Phase 5 will wire config from YAML.
+            let notificationEventConfig = NotificationEventConfig()
+            let notificationEventHandler = NotificationEventHandler(
+                store: NotificationStore.shared,
+                config: notificationEventConfig
+            )
+            // NotificationEventHandler self-registers with EventRouter in its init Task
+
+            // Instantiate notification file watcher with empty path (disabled by default).
+            // Phase 5 will wire the path from YAML.
+            let notificationWatcherConfig = NotificationWatcherConfig()
+            let notificationFileWatcher = NotificationFileWatcher(
+                store: NotificationStore.shared,
+                config: notificationWatcherConfig
+            )
+            // No-op if path is empty
+            notificationFileWatcher.start()
+
             // Initialize GridReconciler (wired after StateManager starts)
             let gridReconciler = GridReconciler()
 
@@ -228,6 +247,8 @@ struct GridServerCommand: ParsableCommand {
             signalSource.setEventHandler {
                 jlog("srv.sig.int")
                 Task {
+                    notificationFileWatcher.stop()
+                    await notificationEventHandler.stop()
                     await NotificationStore.shared.flush()
                     await StateManager.shared.shutdown()
                     bfdManager.stop()
@@ -239,6 +260,8 @@ struct GridServerCommand: ParsableCommand {
             termSignalSource.setEventHandler {
                 jlog("srv.sig.term")
                 Task {
+                    notificationFileWatcher.stop()
+                    await notificationEventHandler.stop()
                     await NotificationStore.shared.flush()
                     await StateManager.shared.shutdown()
                     bfdManager.stop()
