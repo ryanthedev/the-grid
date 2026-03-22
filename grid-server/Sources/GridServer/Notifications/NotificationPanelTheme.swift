@@ -1,33 +1,21 @@
 import SwiftUI
 import AppKit
 
-// Color palette for the notification panel. All colors are SwiftUI Color
-// for direct use in views. A configurable struct with sensible dark-theme
-// defaults; Phase 5 replaces colors from YAML config at init time.
+// Color palette unified with PickerColors. Monochromatic grays + cyan accent.
+// Aesthetic direction: quiet, precise, utilitarian.
+// Configurable via YAML; missing keys fall back to defaults.
 struct NotificationPanelTheme {
-    // #121212 - deep dark background, matches PickerColors.background
     let background: Color
-    // #1E1E1E - slightly lifted card/item surface
     let surface: Color
-    // #2A2A2A - selected item highlight
     let surfaceSelected: Color
-    // #BFBFBF - main text (title), matches PickerColors.text
     let textPrimary: Color
-    // #808080 - body/metadata text
     let textSecondary: Color
-    // #5A5A5A - timestamps, source labels
     let textTertiary: Color
-    // #FF9500 - warm attention accent for priority indicators, action hints
     let accent: Color
-    // #CC7700 - shaded accent for unfocused elements
     let accentDim: Color
-    // #FF3B30 - urgent priority indicator
     let urgent: Color
-    // #FFD60A - pin indicator
     let pinned: Color
-    // #333333 - subtle dividers
     let border: Color
-    // #232323 - filter input background, matches PickerColors.inputBackground
     let filterBackground: Color
 
     // NSColor version of background for NSWindow.backgroundColor
@@ -63,18 +51,33 @@ struct NotificationPanelTheme {
         self.windowBackgroundNSColor = windowBackgroundNSColor
     }
 
+    // Monochromatic base + cyan accent, unified with PickerColors.
+    // Scheme: complementary pair — cyan (#00BFFF, ~195°) for interactive,
+    // muted coral (#B85C4A, ~15°) for urgency only. Everything else is neutral gray.
     static let `default` = NotificationPanelTheme(
+        // #121212 — matches PickerColors.background
         background: Color(red: 0x12 / 255.0, green: 0x12 / 255.0, blue: 0x12 / 255.0),
-        surface: Color(red: 0x1E / 255.0, green: 0x1E / 255.0, blue: 0x1E / 255.0),
-        surfaceSelected: Color(red: 0x2A / 255.0, green: 0x2A / 255.0, blue: 0x2A / 255.0),
+        // #1A1A1A — between picker bg and inputBackground
+        surface: Color(red: 0x1A / 255.0, green: 0x1A / 255.0, blue: 0x1A / 255.0),
+        // #1E2A2E — cyan-tinted gray, whisper of accent in selection
+        surfaceSelected: Color(red: 0x1E / 255.0, green: 0x2A / 255.0, blue: 0x2E / 255.0),
+        // #BFBFBF — matches PickerColors.text
         textPrimary: Color(red: 0xBF / 255.0, green: 0xBF / 255.0, blue: 0xBF / 255.0),
-        textSecondary: Color(red: 0x80 / 255.0, green: 0x80 / 255.0, blue: 0x80 / 255.0),
-        textTertiary: Color(red: 0x5A / 255.0, green: 0x5A / 255.0, blue: 0x5A / 255.0),
-        accent: Color(red: 0xFF / 255.0, green: 0x95 / 255.0, blue: 0x00 / 255.0),
-        accentDim: Color(red: 0xCC / 255.0, green: 0x77 / 255.0, blue: 0x00 / 255.0),
-        urgent: Color(red: 0xFF / 255.0, green: 0x3B / 255.0, blue: 0x30 / 255.0),
-        pinned: Color(red: 0xFF / 255.0, green: 0xD6 / 255.0, blue: 0x0A / 255.0),
-        border: Color(red: 0x33 / 255.0, green: 0x33 / 255.0, blue: 0x33 / 255.0),
+        // #949494 — matches PickerColors.textSecondary
+        textSecondary: Color(red: 0x94 / 255.0, green: 0x94 / 255.0, blue: 0x94 / 255.0),
+        // #7A7A7A — matches PickerColors.textTertiary
+        textTertiary: Color(red: 0x7A / 255.0, green: 0x7A / 255.0, blue: 0x7A / 255.0),
+        // #00BFFF — matches PickerColors.prompt (cyan)
+        accent: Color(red: 0x00 / 255.0, green: 0xBF / 255.0, blue: 0xFF / 255.0),
+        // #006B8F — accent at ~45% brightness
+        accentDim: Color(red: 0x00 / 255.0, green: 0x6B / 255.0, blue: 0x8F / 255.0),
+        // #B85C4A — complement of cyan (~15°), desaturated. Warm = advances.
+        urgent: Color(red: 0xB8 / 255.0, green: 0x5C / 255.0, blue: 0x4A / 255.0),
+        // #BFBFBF — pin is structural (symbol), not chromatic
+        pinned: Color(red: 0xBF / 255.0, green: 0xBF / 255.0, blue: 0xBF / 255.0),
+        // #252525 — barely-there separator
+        border: Color(red: 0x25 / 255.0, green: 0x25 / 255.0, blue: 0x25 / 255.0),
+        // #232323 — matches PickerColors.inputBackground
         filterBackground: Color(red: 0x23 / 255.0, green: 0x23 / 255.0, blue: 0x23 / 255.0),
         windowBackgroundNSColor: NSColor(red: 0x12 / 255.0, green: 0x12 / 255.0, blue: 0x12 / 255.0, alpha: 1.0)
     )

@@ -1,9 +1,28 @@
 import SwiftUI
 
+// MARK: - Spacing Scale
+
+// Base unit 4px, ×1.5 progression: 4, 6, 8, 12, 16, 24
+private enum Space {
+    static let xs: CGFloat = 4
+    static let sm: CGFloat = 6
+    static let md: CGFloat = 8
+    static let lg: CGFloat = 12
+    static let xl: CGFloat = 16
+    static let xxl: CGFloat = 24
+}
+
+// MARK: - Type Scale
+
+// 3:4 ratio (×0.75): 16, 13, 10. Three tiers, clear jumps.
+private enum TypeSize {
+    static let title: CGFloat = 16
+    static let body: CGFloat = 13
+    static let meta: CGFloat = 10
+}
+
 // MARK: - Main Content View
 
-// Root SwiftUI view for the notification panel. Composed of header, optional
-// filter bar, scrollable notification list (or empty state), and status bar.
 struct NotificationPanelContentView: View {
     @ObservedObject var viewModel: NotificationPanelViewModel
 
@@ -38,24 +57,23 @@ struct NotificationHeaderView: View {
     var body: some View {
         HStack {
             Text("Notifications")
-                .font(berkeleyMono(size: 15, weight: .bold))
+                .font(berkeleyMono(size: TypeSize.title, weight: .bold))
                 .foregroundColor(viewModel.theme.textPrimary)
 
             Spacer()
 
-            // Unread count badge
             if unreadCount > 0 {
                 Text("\(unreadCount)")
-                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .font(berkeleyMono(size: TypeSize.meta, weight: .bold))
                     .foregroundColor(viewModel.theme.background)
-                    .padding(.horizontal, 6)
+                    .padding(.horizontal, Space.sm)
                     .padding(.vertical, 2)
                     .background(viewModel.theme.accent)
                     .clipShape(Capsule())
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
+        .padding(.horizontal, Space.xl)
+        .padding(.vertical, Space.lg)
         .background(viewModel.theme.surface)
     }
 
@@ -70,27 +88,25 @@ struct NotificationFilterBar: View {
     @ObservedObject var viewModel: NotificationPanelViewModel
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: Space.md) {
             Text("/")
-                .font(.system(size: 14, design: .monospaced))
+                .font(berkeleyMono(size: TypeSize.body))
                 .foregroundColor(viewModel.theme.accent)
 
             TextField("filter...", text: filterTextBinding)
                 .textFieldStyle(.plain)
-                .font(.system(size: 14, design: .monospaced))
+                .font(berkeleyMono(size: TypeSize.body))
                 .foregroundColor(viewModel.theme.textPrimary)
                 .onSubmit {
-                    // Enter pressed: exit filter mode, keep filter applied
                     viewModel.exitFilterMode()
                 }
                 .onExitCommand {
-                    // Escape pressed: exit filter mode, clear filter
                     viewModel.clearFilter()
                     viewModel.exitFilterMode()
                 }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
+        .padding(.horizontal, Space.xl)
+        .padding(.vertical, Space.md)
         .background(viewModel.theme.filterBackground)
     }
 
@@ -110,7 +126,7 @@ struct NotificationListView: View {
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(spacing: 2) {
+                LazyVStack(spacing: 0) {
                     ForEach(
                         Array(viewModel.notifications.enumerated()),
                         id: \.element.id
@@ -126,7 +142,6 @@ struct NotificationListView: View {
                 }
             }
             .onChange(of: viewModel.selectedIndex) { _ in
-                // Scroll to keep selected item visible
                 if let notification = viewModel.currentNotification {
                     withAnimation(.easeInOut(duration: 0.1)) {
                         proxy.scrollTo(notification.id, anchor: .center)
@@ -146,90 +161,89 @@ struct NotificationItemView: View {
     let theme: NotificationPanelTheme
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            // Priority indicator (left edge)
-            priorityIndicator
+        HStack(alignment: .top, spacing: Space.md) {
+            // Priority: 2px left-edge bar (full item height) + symbol
+            priorityEdge
 
-            // Content
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: Space.xs) {
                 // Title row
-                HStack {
-                    // Pin indicator
+                HStack(spacing: Space.xs) {
                     if notification.isPinned {
-                        Text(pinSymbol)
-                            .font(.system(size: 12))
+                        Text("+")
+                            .font(berkeleyMono(size: TypeSize.body, weight: .bold))
                             .foregroundColor(theme.pinned)
                     }
 
                     Text(notification.title)
-                        .font(berkeleyMono(size: 14))
+                        .font(berkeleyMono(size: TypeSize.body))
                         .foregroundColor(notification.isRead ? theme.textSecondary : theme.textPrimary)
                         .lineLimit(1)
 
                     Spacer()
 
-                    // Source tag
                     Text(notification.source)
-                        .font(.system(size: 10, design: .monospaced))
+                        .font(berkeleyMono(size: TypeSize.meta))
                         .foregroundColor(theme.textTertiary)
                 }
 
-                // Body (if present)
                 if !notification.body.isEmpty {
                     Text(notification.body)
-                        .font(.system(size: 12, design: .monospaced))
+                        .font(berkeleyMono(size: TypeSize.body))
                         .foregroundColor(theme.textSecondary)
                         .lineLimit(2)
                 }
 
-                // Bottom row: timestamp + action indicator
+                // Metadata row
                 HStack {
                     Text(relativeTime(notification.timestamp))
-                        .font(.system(size: 11, design: .monospaced))
+                        .font(berkeleyMono(size: TypeSize.meta))
                         .foregroundColor(theme.textTertiary)
 
                     if notification.action != nil {
                         Spacer()
-                        Text("Enter")
-                            .font(.system(size: 10, design: .monospaced))
+                        // Simple text hint, no border ornamentation
+                        Text("→")
+                            .font(berkeleyMono(size: TypeSize.meta))
                             .foregroundColor(theme.accentDim)
-                            .padding(.horizontal, 4)
-                            .padding(.vertical, 1)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 3)
-                                    .stroke(theme.accentDim, lineWidth: 0.5)
-                            )
                     }
                 }
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.leading, 0)
+        .padding(.trailing, Space.lg)
+        .padding(.vertical, Space.md)
         .background(backgroundColor)
-        .cornerRadius(4)
     }
 
-    // Background color based on selection state
     private var backgroundColor: Color {
         if isSelected {
             return theme.surfaceSelected
         }
         if isVisualSelected {
-            return theme.surface.opacity(0.8)
+            return theme.surface
         }
         return Color.clear
     }
 
-    // Priority indicator: symbol with color on the left edge
+    // Left-edge colored bar: 2px wide, full item height.
+    // Creates compositional dominance for urgent items without adding noise to normal ones.
     @ViewBuilder
-    private var priorityIndicator: some View {
+    private var priorityEdge: some View {
         let (color, symbol) = priorityVisuals(notification.priority)
-        VStack {
+        VStack(spacing: 2) {
             Text(symbol)
-                .font(.system(size: 10, design: .monospaced))
+                .font(berkeleyMono(size: TypeSize.meta, weight: .bold))
                 .foregroundColor(color)
         }
-        .frame(width: 14)
+        .frame(width: Space.xl)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .overlay(alignment: .leading) {
+            // Colored left bar — visible for urgent/high, invisible for normal/low
+            Rectangle()
+                .fill(color)
+                .frame(width: 2)
+                .opacity(notification.priority >= .high ? 1.0 : 0.0)
+        }
     }
 
     private func priorityVisuals(_ priority: GridNotificationPriority) -> (Color, String) {
@@ -237,16 +251,10 @@ struct NotificationItemView: View {
         case .urgent: return (theme.urgent, "!")
         case .high:   return (theme.accent, "^")
         case .normal: return (.clear, " ")
-        case .low:    return (theme.textTertiary, ".")
+        case .low:    return (theme.textTertiary, "·")
         }
     }
 
-    // Simple text-based pin indicator
-    private var pinSymbol: String {
-        return "+"
-    }
-
-    // Relative time formatting
     private func relativeTime(_ date: Date) -> String {
         let interval = Date().timeIntervalSince(date)
         if interval < 60 { return "now" }
@@ -262,17 +270,17 @@ struct NotificationEmptyView: View {
     let theme: NotificationPanelTheme
 
     var body: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: Space.md) {
             Text("No notifications")
-                .font(.system(size: 15, design: .monospaced))
+                .font(berkeleyMono(size: TypeSize.title))
                 .foregroundColor(theme.textTertiary)
             Text("Notifications from CLI, events, and file watchers appear here")
-                .font(.system(size: 12, design: .monospaced))
+                .font(berkeleyMono(size: TypeSize.body))
                 .foregroundColor(theme.textTertiary)
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(24)
+        .padding(Space.xxl)
     }
 }
 
@@ -284,39 +292,39 @@ struct NotificationStatusBar: View {
     var body: some View {
         HStack {
             Text(viewModel.statusText)
-                .font(.system(size: 11, design: .monospaced))
+                .font(berkeleyMono(size: TypeSize.meta))
                 .foregroundColor(viewModel.theme.textTertiary)
                 .lineLimit(1)
 
             Spacer()
 
-            // Mode indicator
+            // Mode indicator — accent color only when mode is active
             switch viewModel.mode {
             case .normal:
                 Text("NORMAL")
-                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .font(berkeleyMono(size: TypeSize.meta, weight: .medium))
                     .foregroundColor(viewModel.theme.textTertiary)
             case .filter:
                 Text("FILTER")
-                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .font(berkeleyMono(size: TypeSize.meta, weight: .medium))
                     .foregroundColor(viewModel.theme.accent)
             case .visualSelect:
                 Text("VISUAL")
-                    .font(.system(size: 10, weight: .medium, design: .monospaced))
-                    .foregroundColor(viewModel.theme.pinned)
+                    .font(berkeleyMono(size: TypeSize.meta, weight: .medium))
+                    .foregroundColor(viewModel.theme.accent)
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 6)
+        .padding(.horizontal, Space.xl)
+        .padding(.vertical, Space.sm)
         .background(viewModel.theme.surface)
     }
 }
 
 // MARK: - Font Helper
 
-// Returns BerkeleyMono Nerd Font if available, otherwise system monospaced.
+// BerkeleyMono Nerd Font with system monospaced fallback.
+// Used for ALL text in the panel — no mixing.
 private func berkeleyMono(size: CGFloat, weight: Font.Weight = .regular) -> Font {
-    // Try the custom font; fall back to system monospaced
     if NSFont(name: "BerkeleyMono Nerd Font", size: size) != nil {
         return .custom("BerkeleyMono Nerd Font", size: size).weight(weight)
     }
