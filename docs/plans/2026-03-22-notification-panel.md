@@ -1,9 +1,9 @@
 # Plan: Notification Panel
 
 **Created:** 2026-03-22
-**Status:** in-progress
+**Status:** complete
 **Started:** 2026-03-22
-**Current Phase:** 1
+**Completed:** 2026-03-22
 **Complexity:** complex
 
 ---
@@ -250,4 +250,52 @@ The grid server owns the notification window directly as a standard NSWindow wit
 
 ## Execution Log
 
-_To be filled during /code-foundations:building_
+### Phase 1: Notification data model and persistence
+- [x] PRE-GATE: Discovery + pseudocode complete
+- [x] IMPLEMENT: Code written, tests pass
+- [x] POST-GATE: Verification passed, reviewer approved
+- [x] CHECKPOINT: Committed
+Pipeline: full
+Model: sonnet (plan override)
+Commit: 12cc5de
+Summary: GridNotification model, NotificationStore actor with CRUD/filtering/bulk ops, JSON persistence with debounced atomic writes, 20 unit tests.
+
+### Phase 2: NSWindow, SwiftUI views, and vim keybindings
+- [x] PRE-GATE: Discovery + pseudocode complete
+- [x] IMPLEMENT: Code written, build passes
+- [x] POST-GATE: Verification passed on retry (filter focus fix)
+- [x] CHECKPOINT: Committed
+Pipeline: full
+Model: opus (plan override)
+Commit: 0adbb8c
+Summary: NotificationPanelWindow (NSWindow + NSHostingView), SwiftUI views with dark theme, vim key state machine (normal/filter/visualSelect), NotificationPanelManager singleton. @FocusState incompatible with NSHostingView; resolved via AppKit responder chain.
+
+### Phase 3: Grid integration (cell assignment, reconciler, commands)
+- [x] PRE-GATE: Discovery + pseudocode complete. Blacklist assumption invalidated (unnecessary due to .accessory activation policy).
+- [x] IMPLEMENT: Code written, build passes
+- [x] POST-GATE: Verification passed on retry (multi-word push fix)
+- [x] CHECKPOINT: Committed
+Pipeline: full
+Model: opus (plan override)
+Commit: 2865563
+Summary: @notify command domain, 8 RPC handlers (push bypasses command string for multi-word safety), CLI subcommands, action execution (focusWindow/runShellCommand/openURL).
+
+### Phase 4: Notification sources (events, file/pipe watcher)
+- [x] PRE-GATE: Discovery + pseudocode complete. Named pipe assumption verified.
+- [x] IMPLEMENT: Code written, build passes
+- [x] POST-GATE: Verification passed, reviewer approved
+- [x] CHECKPOINT: Committed
+Pipeline: full
+Model: sonnet (plan override)
+Commit: 0208baa
+Summary: NotificationEventHandler (StateEventHandler for grid events), NotificationFileWatcher (file/pipe with EOF/rotation handling), NotificationSourceConfig structs.
+
+### Phase 5: Configuration and polish
+- [x] PRE-GATE: Discovery + pseudocode complete
+- [x] IMPLEMENT: Code written, build passes
+- [x] POST-GATE: Verification passed on retry (trim call fix)
+- [x] CHECKPOINT: Committed
+Pipeline: full
+Model: sonnet (plan override)
+Commit: de520c8
+Summary: YAML notifications: config parsing, hot-reload (theme, event rules, watcher paths, max count), trim enforcement.
