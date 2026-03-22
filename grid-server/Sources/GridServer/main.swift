@@ -108,14 +108,6 @@ struct GridServerCommand: ParsableCommand {
 
             // Initialize GridConfig (replaces ServerConfig)
             let gridConfig = GridConfig()
-            Task {
-                do {
-                    try await gridConfig.load()
-                    jlog("grid.cfg.ready")
-                } catch {
-                    jlog("err.grid.cfg", data: ["err": "\(error)"])
-                }
-            }
 
             // Initialize GridState (load persisted state)
             let gridState = GridState()
@@ -130,23 +122,110 @@ struct GridServerCommand: ParsableCommand {
             }
 
             // Instantiate notification event handler with empty config (no event notifications
-            // by default -- opt-in). Phase 5 will wire config from YAML.
-            let notificationEventConfig = NotificationEventConfig()
-            let notificationEventHandler = NotificationEventHandler(
+            // by default -- opt-in). Replaced when gridConfig loads with YAML-configured rules.
+            var notificationEventHandler = NotificationEventHandler(
                 store: NotificationStore.shared,
-                config: notificationEventConfig
+                config: NotificationEventConfig()
             )
             // NotificationEventHandler self-registers with EventRouter in its init Task
 
             // Instantiate notification file watcher with empty path (disabled by default).
-            // Phase 5 will wire the path from YAML.
-            let notificationWatcherConfig = NotificationWatcherConfig()
-            let notificationFileWatcher = NotificationFileWatcher(
+            // Replaced when gridConfig loads with the YAML-configured path.
+            var notificationFileWatcher = NotificationFileWatcher(
                 store: NotificationStore.shared,
-                config: notificationWatcherConfig
+                config: NotificationWatcherConfig()
             )
             // No-op if path is empty
             notificationFileWatcher.start()
+
+            // Load config and wire notification sources on @MainActor so that:
+            // - gridConfig.onReload (MainActor-isolated) can be assigned safely
+            // - gridConfig.notifications (MainActor-isolated) can be read after load
+            // Declared after handler/watcher vars so the closures can capture them.
+            Task { @MainActor in
+                // Wire hot-reload callback before load() so it fires on subsequent reloads.
+                gridConfig.onReload = {
+                    let notifConfig = gridConfig.notifications
+
+                    // 1. Update panel theme in-place; no window recreation needed
+                    let theme: NotificationPanelTheme = notifConfig.themeColors.isEmpty
+                        ? .default
+                        : NotificationPanelTheme(from: notifConfig.themeColors)
+                    NotificationPanelManager.shared.configure(theme: theme)
+
+                    // 2. Replace event handler with updated config
+                    Task {
+                        await notificationEventHandler.stop()
+                        notificationEventHandler = NotificationEventHandler(
+                            store: NotificationStore.shared,
+                            config: NotificationEventConfig(rules: notifConfig.eventRules)
+                        )
+                    }
+
+                    // 3. Replace file watcher with updated path
+                    notificationFileWatcher.stop()
+                    notificationFileWatcher = NotificationFileWatcher(
+                        store: NotificationStore.shared,
+                        config: NotificationWatcherConfig(
+                            path: notifConfig.watcherPath,
+                            sourceLabel: notifConfig.watcherSourceLabel
+                        )
+                    )
+                    notificationFileWatcher.start()
+
+                    // Enforce max notification count
+                    if notifConfig.maxCount > 0 {
+                        Task {
+                            await NotificationStore.shared.trim(to: notifConfig.maxCount)
+                        }
+                    }
+
+                    jlog("notify.cfg.reloaded")
+                }
+
+                do {
+                    try await gridConfig.load()
+                    jlog("grid.cfg.ready")
+
+                    // Apply initial notification config from the freshly loaded config.
+                    // onReload fires only on subsequent reloads; initial load is applied here.
+                    let notifConfig = gridConfig.notifications
+
+                    if !notifConfig.themeColors.isEmpty {
+                        let theme = NotificationPanelTheme(from: notifConfig.themeColors)
+                        NotificationPanelManager.shared.configure(theme: theme)
+                    }
+
+                    if !notifConfig.eventRules.isEmpty {
+                        await notificationEventHandler.stop()
+                        notificationEventHandler = NotificationEventHandler(
+                            store: NotificationStore.shared,
+                            config: NotificationEventConfig(rules: notifConfig.eventRules)
+                        )
+                    }
+
+                    if !notifConfig.watcherPath.isEmpty {
+                        notificationFileWatcher.stop()
+                        notificationFileWatcher = NotificationFileWatcher(
+                            store: NotificationStore.shared,
+                            config: NotificationWatcherConfig(
+                                path: notifConfig.watcherPath,
+                                sourceLabel: notifConfig.watcherSourceLabel
+                            )
+                        )
+                        notificationFileWatcher.start()
+                    }
+
+                    // Enforce max notification count on startup
+                    if notifConfig.maxCount > 0 {
+                        Task {
+                            await NotificationStore.shared.trim(to: notifConfig.maxCount)
+                        }
+                    }
+                } catch {
+                    jlog("err.grid.cfg", data: ["err": "\(error)"])
+                }
+            }
 
             // Initialize GridReconciler (wired after StateManager starts)
             let gridReconciler = GridReconciler()

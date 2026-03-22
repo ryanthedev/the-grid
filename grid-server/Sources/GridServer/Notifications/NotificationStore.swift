@@ -319,4 +319,34 @@ actor NotificationStore {
         orderedIDs = []
         markDirty()
     }
+
+    // MARK: - Trim
+
+    // Removes the oldest non-pinned notifications beyond maxCount.
+    // Pinned notifications are always preserved.
+    // Called after add() when a maxCount is configured.
+    // Returns count of removed notifications.
+    @discardableResult
+    func trim(to maxCount: Int) -> Int {
+        guard maxCount > 0 else { return 0 }
+
+        // Build ordered list of non-pinned IDs (oldest first = front of orderedIDs)
+        let unpinnedIDs = orderedIDs.filter { byID[$0]?.isPinned == false }
+
+        let excess = unpinnedIDs.count - maxCount
+        guard excess > 0 else { return 0 }
+
+        // Remove oldest unpinned notifications (first in insertion order)
+        let toRemove = Array(unpinnedIDs.prefix(excess))
+        for id in toRemove {
+            byID.removeValue(forKey: id)
+            orderedIDs.removeAll { $0 == id }
+        }
+
+        if !toRemove.isEmpty {
+            markDirty()
+        }
+
+        return toRemove.count
+    }
 }
