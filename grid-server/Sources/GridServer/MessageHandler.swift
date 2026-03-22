@@ -1876,6 +1876,109 @@ completion(Response(id: request.id, result: AnyCodable(["success": true])))
             dispatchAndRespond(request, commandString: cmd, completion: completion)
         }
 
+        // ============================================================
+        // NOTIFICATION RPCs
+        // ============================================================
+
+        // grid.notify.show -- {}
+        register(method: "grid.notify.show") { request, completion in
+            dispatchAndRespond(request, commandString: "@notify show", completion: completion)
+        }
+
+        // grid.notify.hide -- {}
+        register(method: "grid.notify.hide") { request, completion in
+            dispatchAndRespond(request, commandString: "@notify hide", completion: completion)
+        }
+
+        // grid.notify.toggle -- {}
+        register(method: "grid.notify.toggle") { request, completion in
+            dispatchAndRespond(request, commandString: "@notify toggle", completion: completion)
+        }
+
+        // grid.notify.push -- { title: string, body?: string, priority?: string, source?: string, action?: string }
+        // Bypasses command string serialization to preserve multi-word values
+        register(method: "grid.notify.push") { request, completion in
+            guard let title = request.params?["title"]?.value as? String, !title.isEmpty else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "missing required param: title")))
+                return
+            }
+            let body = (request.params?["body"]?.value as? String) ?? ""
+            let source = (request.params?["source"]?.value as? String) ?? "rpc"
+            let priorityStr = (request.params?["priority"]?.value as? String) ?? "normal"
+            let priority = GridNotificationPriority(rawValue: priorityStr) ?? .normal
+
+            // Parse action string: "focus:<wid>", "exec:<cmd>", "url:<url>"
+            var action: GridNotificationAction? = nil
+            if let actionStr = request.params?["action"]?.value as? String, !actionStr.isEmpty {
+                if actionStr.hasPrefix("focus:"), let wid = UInt32(actionStr.dropFirst(6)) {
+                    action = .focusWindow(windowID: wid)
+                } else if actionStr.hasPrefix("exec:") {
+                    action = .runShellCommand(command: String(actionStr.dropFirst(5)))
+                } else if actionStr.hasPrefix("url:") {
+                    action = .openURL(url: String(actionStr.dropFirst(4)))
+                }
+            }
+
+            let notification = GridNotification(
+                source: source,
+                title: title,
+                body: body,
+                priority: priority,
+                action: action
+            )
+
+            Task {
+                let stored = await NotificationStore.shared.add(notification)
+
+                // Refresh panel if visible
+                await MainActor.run {
+                    if NotificationPanelManager.shared.isVisible {
+                        NotificationPanelManager.shared.currentViewModel?.refreshNotifications()
+                    }
+                }
+
+                completion(Response(id: request.id, result: .init(stored.id)))
+            }
+        }
+
+        // grid.notify.list -- { source?: string, priority?: string, all?: bool }
+        register(method: "grid.notify.list") { request, completion in
+            var cmd = "@notify list"
+            if let source = request.params?["source"]?.value as? String, !source.isEmpty {
+                cmd += " --source \(source)"
+            }
+            if let priority = request.params?["priority"]?.value as? String, !priority.isEmpty {
+                cmd += " --priority \(priority)"
+            }
+            if let all = request.params?["all"]?.value as? Bool, all {
+                cmd += " --all"
+            }
+            dispatchAndRespond(request, commandString: cmd, completion: completion)
+        }
+
+        // grid.notify.dismiss -- { id: string }
+        register(method: "grid.notify.dismiss") { request, completion in
+            guard let id = request.params?["id"]?.value as? String, !id.isEmpty else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "missing required param: id")))
+                return
+            }
+            dispatchAndRespond(request, commandString: "@notify dismiss \(id)", completion: completion)
+        }
+
+        // grid.notify.clear -- { purge?: bool }
+        register(method: "grid.notify.clear") { request, completion in
+            var cmd = "@notify clear"
+            if let purge = request.params?["purge"]?.value as? Bool, purge {
+                cmd += " --purge"
+            }
+            dispatchAndRespond(request, commandString: cmd, completion: completion)
+        }
+
+        // grid.notify.count -- {}
+        register(method: "grid.notify.count") { request, completion in
+            dispatchAndRespond(request, commandString: "@notify count", completion: completion)
+        }
+
         jlog("grid.rpc.registered")
     }
 }

@@ -84,8 +84,7 @@ class NotificationPanelWindow: NSWindow {
             // Key was consumed by viewModel
             break
         case .executeAction(let notifAction):
-            // Phase 2: log the action; Phase 3 will wire to ActionExecutor
-            jlog("notify.action", data: ["action": "\(notifAction)"])
+            executeNotificationAction(notifAction)
         case .enterFilterMode:
             // Make the hosting view first responder so the TextField receives focus
             if let hosting = hostingView {
@@ -94,6 +93,48 @@ class NotificationPanelWindow: NSWindow {
         case .exitFilterMode:
             // Return first responder to the window itself
             makeFirstResponder(nil)
+        }
+    }
+
+    // MARK: - Action Execution
+
+    // Executes the action carried by a notification (focus window, run shell command, open URL).
+    // Hides the panel first for focusWindow so the target window gets clean focus.
+    private func executeNotificationAction(_ action: GridNotificationAction) {
+        switch action {
+        case .focusWindow(let windowID):
+            // Hide panel first, then focus target window
+            NotificationPanelManager.shared.hide()
+            Task {
+                let wmState = await StateManager.shared.getState()
+                guard let windowState = wmState.windows[String(windowID)] else {
+                    jlog("notify.action.err", data: ["wid": windowID, "reason": "not_found"])
+                    return
+                }
+                let connectionID = SLSMainConnectionID()
+                let manipulator = WindowManipulator(connectionID: connectionID)
+                let ok = manipulator.focusWindow(pid: windowState.pid, windowID: windowID)
+                jlog("notify.action.focus", data: ["wid": windowID, "ok": ok])
+            }
+
+        case .runShellCommand(let command):
+            // Run via user's shell, fire-and-forget
+            let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+            DispatchQueue.global().async {
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: shell)
+                process.arguments = ["-c", command]
+                process.standardOutput = FileHandle.nullDevice
+                process.standardError = FileHandle.nullDevice
+                try? process.run()
+            }
+            jlog("notify.action.exec", data: ["cmd": command])
+
+        case .openURL(let urlString):
+            if let url = URL(string: urlString) {
+                NSWorkspace.shared.open(url)
+            }
+            jlog("notify.action.url", data: ["url": urlString])
         }
     }
 }

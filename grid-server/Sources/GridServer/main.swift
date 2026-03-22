@@ -123,6 +123,12 @@ struct GridServerCommand: ParsableCommand {
                 await gridState.load()
             }
 
+            // Load notification store (persisted notifications)
+            Task {
+                await NotificationStore.shared.load()
+                jlog("notify.store.ready")
+            }
+
             // Initialize GridReconciler (wired after StateManager starts)
             let gridReconciler = GridReconciler()
 
@@ -192,7 +198,8 @@ struct GridServerCommand: ParsableCommand {
                 gridReconciler: gridReconciler,
                 simpleBorderManager: simpleBorderManager,
                 gridRecorder: gridRecorder,
-                gridTerminalManager: gridTerminalManager
+                gridTerminalManager: gridTerminalManager,
+                notificationStore: NotificationStore.shared
             )
 
             // Register Grid RPC handlers (thin CLI bridge)
@@ -221,6 +228,7 @@ struct GridServerCommand: ParsableCommand {
             signalSource.setEventHandler {
                 jlog("srv.sig.int")
                 Task {
+                    await NotificationStore.shared.flush()
                     await StateManager.shared.shutdown()
                     bfdManager.stop()
                     socketServer.stop()
@@ -231,6 +239,7 @@ struct GridServerCommand: ParsableCommand {
             termSignalSource.setEventHandler {
                 jlog("srv.sig.term")
                 Task {
+                    await NotificationStore.shared.flush()
                     await StateManager.shared.shutdown()
                     bfdManager.stop()
                     socketServer.stop()

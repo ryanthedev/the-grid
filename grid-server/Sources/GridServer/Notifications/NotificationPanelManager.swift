@@ -11,7 +11,7 @@ class NotificationPanelManager {
 
     private var window: NotificationPanelWindow?
     private var viewModel: NotificationPanelViewModel?
-    private var isVisible = false
+    private(set) var isVisible = false
 
     // Theme stored for lazy window creation; can be replaced for hot-reload.
     private var storedTheme: NotificationPanelTheme = .default
@@ -77,12 +77,17 @@ class NotificationPanelManager {
 
     // MARK: - Window Access
 
-    // Expose window number for Phase 3 blacklisting
+    // Expose view model for refresh from command handler
+    var currentViewModel: NotificationPanelViewModel? {
+        return viewModel
+    }
+
+    // Expose window number for identification
     var windowNumber: Int? {
         return window?.windowNumber
     }
 
-    // Expose window for Phase 3 cell assignment
+    // Expose window for cell assignment
     var panelWindow: NSWindow? {
         return window
     }
