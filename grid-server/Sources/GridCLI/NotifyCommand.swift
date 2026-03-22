@@ -15,6 +15,8 @@ struct NotifyCommand: ParsableCommand {
             NotifyDismiss.self,
             NotifyClear.self,
             NotifyCount.self,
+            NotifyAssign.self,
+            NotifyUnassign.self,
         ]
     )
 }
@@ -29,10 +31,15 @@ struct NotifyShow: ParsableCommand {
 
     @OptionGroup var globals: GlobalOptions
 
+    @Option(name: .long, help: "Cell ID to assign the panel to for tiling")
+    var cell: String?
+
     func run() throws {
         let client = makeClient(from: globals)
         defer { client.disconnect() }
-        let result = try client.call("grid.notify.show")
+        var params: [String: Any] = [:]
+        if let cell = cell { params["cell"] = cell }
+        let result = try client.call("grid.notify.show", params: params)
         printOkOrJSON(result, json: globals.json)
     }
 }
@@ -61,10 +68,50 @@ struct NotifyToggle: ParsableCommand {
 
     @OptionGroup var globals: GlobalOptions
 
+    @Option(name: .long, help: "Cell ID to assign the panel to when showing")
+    var cell: String?
+
     func run() throws {
         let client = makeClient(from: globals)
         defer { client.disconnect() }
-        let result = try client.call("grid.notify.toggle")
+        var params: [String: Any] = [:]
+        if let cell = cell { params["cell"] = cell }
+        let result = try client.call("grid.notify.toggle", params: params)
+        printOkOrJSON(result, json: globals.json)
+    }
+}
+
+struct NotifyAssign: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "assign",
+        abstract: "Assign the notification panel to a grid cell for tiling"
+    )
+
+    @OptionGroup var globals: GlobalOptions
+
+    @Argument(help: "Cell ID to assign the panel to")
+    var cell: String
+
+    func run() throws {
+        let client = makeClient(from: globals)
+        defer { client.disconnect() }
+        let result = try client.call("grid.notify.assign", params: ["cell": cell])
+        printOkOrJSON(result, json: globals.json)
+    }
+}
+
+struct NotifyUnassign: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "unassign",
+        abstract: "Remove the notification panel from its grid cell"
+    )
+
+    @OptionGroup var globals: GlobalOptions
+
+    func run() throws {
+        let client = makeClient(from: globals)
+        defer { client.disconnect() }
+        let result = try client.call("grid.notify.unassign")
         printOkOrJSON(result, json: globals.json)
     }
 }

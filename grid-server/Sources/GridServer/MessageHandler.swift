@@ -1880,9 +1880,13 @@ completion(Response(id: request.id, result: AnyCodable(["success": true])))
         // NOTIFICATION RPCs
         // ============================================================
 
-        // grid.notify.show -- {}
+        // grid.notify.show -- { cell?: string }
         register(method: "grid.notify.show") { request, completion in
-            dispatchAndRespond(request, commandString: "@notify show", completion: completion)
+            var cmd = "@notify show"
+            if let cell = request.params?["cell"]?.value as? String, !cell.isEmpty {
+                cmd += " --cell \(cell)"
+            }
+            dispatchAndRespond(request, commandString: cmd, completion: completion)
         }
 
         // grid.notify.hide -- {}
@@ -1890,9 +1894,27 @@ completion(Response(id: request.id, result: AnyCodable(["success": true])))
             dispatchAndRespond(request, commandString: "@notify hide", completion: completion)
         }
 
-        // grid.notify.toggle -- {}
+        // grid.notify.toggle -- { cell?: string }
         register(method: "grid.notify.toggle") { request, completion in
-            dispatchAndRespond(request, commandString: "@notify toggle", completion: completion)
+            var cmd = "@notify toggle"
+            if let cell = request.params?["cell"]?.value as? String, !cell.isEmpty {
+                cmd += " --cell \(cell)"
+            }
+            dispatchAndRespond(request, commandString: cmd, completion: completion)
+        }
+
+        // grid.notify.assign -- { cell: string }
+        register(method: "grid.notify.assign") { request, completion in
+            guard let cell = request.params?["cell"]?.value as? String, !cell.isEmpty else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "missing required param: cell")))
+                return
+            }
+            dispatchAndRespond(request, commandString: "@notify assign \(cell)", completion: completion)
+        }
+
+        // grid.notify.unassign -- {}
+        register(method: "grid.notify.unassign") { request, completion in
+            dispatchAndRespond(request, commandString: "@notify unassign", completion: completion)
         }
 
         // grid.notify.push -- { title: string, body?: string, priority?: string, source?: string, action?: string }
