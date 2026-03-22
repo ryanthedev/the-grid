@@ -15,6 +15,8 @@ struct EnrichmentResult {
     let subtitle: String
     let stableIDSuffix: String
     let kind: EnrichmentKind
+    // True when a Claude Code session in this pane is waiting for user input
+    var claudeWaiting: Bool = false
 }
 
 enum EnrichmentKind {

@@ -63,7 +63,8 @@ struct WindowSource: PickerSource {
 
             if let e = enrichment {
                 // Enriched: use enricher's title (e.g., "user@host" or session name)
-                title = "\(appName) — \(e.title)"
+                let waitingPrefix = e.claudeWaiting ? "? " : ""
+                title = "\(waitingPrefix)\(appName) — \(e.title)"
                 subtitle = e.subtitle.isEmpty ? nil : e.subtitle
             } else {
                 // Non-enriched: existing logic
@@ -113,6 +114,8 @@ struct WindowSource: PickerSource {
                 metadata["bundleID"] = bundleID
             }
 
+            // Boost priority for windows where Claude is waiting for input
+            let isWaiting = enrichment?.claudeWaiting ?? false
             let item = PickerItem(
                 id: stableID,
                 title: title,
@@ -120,8 +123,7 @@ struct WindowSource: PickerSource {
                 icon: icon,
                 searchable: searchable,
                 metadata: metadata,
-                // Windows get high priority so they appear above other sources
-                priority: 1000
+                priority: isWaiting ? 2000 : 1000
             )
 
             items.append(item)
