@@ -43,6 +43,7 @@ class GridReconciler: StateEventHandler {
     private let pendingLaunchTimeout: CFAbsoluteTime = 15.0
 
     // Ref-counted suppression for bulk operations (layout apply, picker, terminal, focus).
+    // Managed exclusively via executeAction/beginAction/endAction -- no direct access.
     // Multiple callers can nest suppress/unsuppress without interfering.
     private var suppressionDepth: Int = 0
     private var suppressReconciliation: Bool { suppressionDepth > 0 }
@@ -59,23 +60,87 @@ class GridReconciler: StateEventHandler {
 
     // MARK: - Public API
 
-    // Increment/decrement suppression depth (called by GridApply, PickerManager,
-    // GridTerminalManager, GridCommandRouter).
-    // syncOnResume: if true, triggers syncBordersForCurrentSpace when depth reaches 0.
-    func setSuppressed(_ suppressed: Bool, syncOnResume: Bool = true) {
-        if suppressed {
-            suppressionDepth += 1
-            jlog("reconcile.suppress.inc", data: ["depth": suppressionDepth])
-        } else {
-            if suppressionDepth <= 0 {
-                jlog("warn.reconcile.suppress.underflow")
-            }
+    // Opaque token returned by beginAction, consumed by endAction.
+    // Records label and start time for logging.
+    struct ActionToken {
+        let label: String
+        let startTime: CFAbsoluteTime
+    }
+
+    // executeAction: unified lifecycle wrapper for short-lived state-mutating actions.
+    //
+    // Lifecycle: suppress -> execute closure -> sync borders -> unsuppress
+    //
+    // Parameters:
+    //   label: string for logging (e.g. "focus.left", "layout.apply")
+    //   syncBorders: whether to sync borders on completion (default: true).
+    //     Callers that do their own border sync inside the closure pass false.
+    //   body: async throwing closure containing the action's work
+    //
+    // Error handling: if body throws, still unsuppress and sync (borders should reflect
+    // whatever partial state change happened).
+    func executeAction<T>(
+        label: String,
+        syncBorders: Bool = true,
+        body: () async throws -> T
+    ) async rethrows -> T {
+        jlog("action.start", data: ["label": label])
+
+        // 1. Suppress reconciler
+        suppressionDepth += 1
+
+        // 2. Execute the caller's work
+        do {
+            let result = try await body()
+
+            // 3. Unsuppress
             suppressionDepth = max(0, suppressionDepth - 1)
-            jlog("reconcile.suppress.dec", data: ["depth": suppressionDepth])
-            if suppressionDepth == 0 && syncOnResume {
-                Task {
-                    await syncBordersForCurrentSpace()
-                }
+
+            // 4. Sync borders if requested and depth reached 0
+            if suppressionDepth == 0 && syncBorders {
+                await syncBordersForCurrentSpace()
+            }
+
+            jlog("action.end", data: ["label": label])
+            return result
+
+        } catch {
+            // Still unsuppress on error
+            suppressionDepth = max(0, suppressionDepth - 1)
+
+            if suppressionDepth == 0 && syncBorders {
+                await syncBordersForCurrentSpace()
+            }
+
+            jlog("action.err", data: ["label": label, "err": "\(error)"])
+            throw error
+        }
+    }
+
+    // beginAction: start a long-lived suppression session.
+    // Returns an ActionToken that must be passed to endAction when the session ends.
+    // Used by nudge mode where suppression spans multiple keystrokes.
+    func beginAction(label: String) -> ActionToken {
+        suppressionDepth += 1
+        jlog("action.begin", data: ["label": label, "depth": suppressionDepth])
+        return ActionToken(label: label, startTime: CFAbsoluteTimeGetCurrent())
+    }
+
+    // endAction: end a long-lived suppression session started by beginAction.
+    // Decrements suppression and optionally syncs borders when depth reaches 0.
+    func endAction(_ token: ActionToken, syncBorders: Bool = true) {
+        if suppressionDepth <= 0 {
+            jlog("warn.action.end.underflow", data: ["label": token.label])
+        }
+        suppressionDepth = max(0, suppressionDepth - 1)
+        jlog("action.end", data: [
+            "label": token.label,
+            "depth": suppressionDepth,
+            "dur_ms": Int((CFAbsoluteTimeGetCurrent() - token.startTime) * 1000),
+        ])
+        if suppressionDepth == 0 && syncBorders {
+            Task {
+                await syncBordersForCurrentSpace()
             }
         }
     }
@@ -439,7 +504,7 @@ class GridReconciler: StateEventHandler {
         try? await gridApply?.applyCellLayout(spaceID: target.spaceID, cellID: target.cellID)
 
         // Focus the new window via accessibility
-        try? await gridFocus?.focusWindowByID(windowID)
+        _ = try? await gridFocus?.focusWindowByID(windowID)
 
         // Sync borders to reflect new assignment
         await syncBordersForCurrentSpace()

@@ -317,8 +317,16 @@ class GridFocus {
         return windowID
     }
 
-    // focusWindowByID: focus a window via WindowManipulator
-    func focusWindowByID(_ windowID: UInt32) async throws {
+    // focusWindowByID: focus a window via WindowManipulator with mismatch retry.
+    //
+    // After the AX focus call, checks metadata.focusedWindowID (cached, no OS call).
+    // If the OS focused a different window, retries AX focus once.
+    // Logs on mismatch. Accepts reality after retry.
+    //
+    // Returns the actual focused window ID (requested ID if successful, or whatever
+    // the OS actually focused if mismatch was accepted after retry).
+    @discardableResult
+    func focusWindowByID(_ windowID: UInt32) async throws -> UInt32 {
         guard let stateManager = stateManager,
               let windowManipulator = windowManipulator else {
             throw GridFocusError.windowNotFound(windowID)
@@ -330,11 +338,43 @@ class GridFocus {
             throw GridFocusError.windowNotFound(windowID)
         }
 
-        // Call WindowManipulator directly (no RPC)
+        // Attempt 1: AX focus
         let success = windowManipulator.focusWindow(pid: windowState.pid, windowID: windowID)
         if !success {
             throw GridFocusError.focusFailed(windowID)
         }
+
+        // Verify: read cached focused window ID (no OS call).
+        // Re-read state after the focus call to see what the OS reports.
+        let postState = await stateManager.getState()
+        let actualFocusedWID = postState.metadata.focusedWindowID
+
+        if let actualWID = actualFocusedWID, actualWID != windowID {
+            // Mismatch: OS focused a different window. Retry once.
+            jlog("focus.mismatch", data: [
+                "requested": Int(windowID),
+                "actual": Int(actualWID),
+                "retry": true,
+            ])
+
+            // Attempt 2: retry AX focus
+            _ = windowManipulator.focusWindow(pid: windowState.pid, windowID: windowID)
+
+            // Check again after retry
+            let retryState = await stateManager.getState()
+            let retryActualWID = retryState.metadata.focusedWindowID
+
+            if let retryWID = retryActualWID, retryWID != windowID {
+                // Still mismatched after retry. Accept OS reality.
+                jlog("focus.mismatch.accept", data: [
+                    "requested": Int(windowID),
+                    "actual": Int(retryWID),
+                ])
+                return retryWID
+            }
+        }
+
+        return windowID
     }
 
     // ============================================================
