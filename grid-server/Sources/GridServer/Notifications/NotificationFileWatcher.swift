@@ -60,8 +60,15 @@ class NotificationFileWatcher {
             JSONLogger.shared.log("notify.watcher.skip", msg: "no path configured", data: [:])
             return
         }
-        guard !isRunning else { return }
-        isRunning = true
+        var alreadyRunning = false
+        queue.sync {
+            if self.isRunning {
+                alreadyRunning = true
+            } else {
+                self.isRunning = true
+            }
+        }
+        guard !alreadyRunning else { return }
         JSONLogger.shared.log("notify.watcher.start", data: ["path": config.path])
         queue.async {
             self.openAndWatch()
@@ -103,7 +110,17 @@ class NotificationFileWatcher {
 
         // Determine if this is a FIFO (named pipe) or a regular file
         var statBuf = stat()
-        fstat(fd, &statBuf)
+        guard fstat(fd, &statBuf) == 0 else {
+            JSONLogger.shared.log("err.notify.watcher.fstat", data: [
+                "path": config.path,
+                "errno": errno
+            ])
+            tearDown()
+            queue.asyncAfter(deadline: .now() + 5) {
+                if self.isRunning { self.openAndWatch() }
+            }
+            return
+        }
         let isFIFO = (statBuf.st_mode & S_IFMT) == S_IFIFO
 
         // Set up read source to fire when data is available

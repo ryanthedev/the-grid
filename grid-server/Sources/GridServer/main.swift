@@ -153,9 +153,12 @@ struct GridServerCommand: ParsableCommand {
                         : NotificationPanelTheme(from: notifConfig.themeColors)
                     NotificationPanelManager.shared.configure(theme: theme)
 
-                    // 2. Replace event handler with updated config
-                    Task {
-                        await notificationEventHandler.stop()
+                    // 2. Replace event handler with updated config.
+                    // Capture old handler; stop it before creating the replacement so
+                    // both handlers are never simultaneously registered in EventRouter.
+                    let oldHandler = notificationEventHandler
+                    Task { @MainActor in
+                        await oldHandler.stop()
                         notificationEventHandler = NotificationEventHandler(
                             store: NotificationStore.shared,
                             config: NotificationEventConfig(rules: notifConfig.eventRules)

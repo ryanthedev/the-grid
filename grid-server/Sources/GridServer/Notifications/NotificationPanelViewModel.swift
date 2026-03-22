@@ -46,6 +46,9 @@ class NotificationPanelViewModel: ObservableObject {
     // Reference to the store (actor, called with await)
     private let store: NotificationStore
 
+    // Tracks the in-flight refresh so concurrent calls can cancel the previous one
+    private var refreshTask: Task<Void, Never>?
+
     init(store: NotificationStore, theme: NotificationPanelTheme = .default) {
         self.store = store
         self.theme = theme
@@ -56,9 +59,11 @@ class NotificationPanelViewModel: ObservableObject {
     // Re-queries the store with the current filter and updates published state.
     // Called after every mutation and on panel show.
     func refreshNotifications() {
+        refreshTask?.cancel()
         let filter = buildFilter()
-        Task {
+        refreshTask = Task {
             let results = await store.notifications(filter: filter)
+            guard !Task.isCancelled else { return }
             self.notifications = results
             self.selectedIndex = min(self.selectedIndex, max(0, results.count - 1))
             self.updateStatusText()

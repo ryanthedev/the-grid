@@ -1943,17 +1943,45 @@ completion(Response(id: request.id, result: AnyCodable(["success": true])))
 
         // grid.notify.list -- { source?: string, priority?: string, all?: bool }
         register(method: "grid.notify.list") { request, completion in
-            var cmd = "@notify list"
-            if let source = request.params?["source"]?.value as? String, !source.isEmpty {
-                cmd += " --source \(source)"
+            let sourceFilter = request.params?["source"]?.value as? String
+            let priorityStr = request.params?["priority"]?.value as? String
+            let includeAll = (request.params?["all"]?.value as? Bool) ?? false
+
+            Task {
+                var filter = includeAll ? GridNotificationFilter.all : GridNotificationFilter.active
+                if let s = sourceFilter, !s.isEmpty {
+                    filter.sources = [s]
+                }
+                if let p = priorityStr, !p.isEmpty {
+                    filter.minPriority = GridNotificationPriority(rawValue: p)
+                }
+                let results = await NotificationStore.shared.notifications(filter: filter)
+                let dicts: [[String: Any]] = results.map { n in
+                    var d: [String: Any] = [
+                        "id": n.id,
+                        "source": n.source,
+                        "title": n.title,
+                        "body": n.body,
+                        "priority": n.priority.rawValue,
+                        "isRead": n.isRead,
+                        "isPinned": n.isPinned,
+                        "isDismissed": n.isDismissed,
+                        "timestamp": ISO8601DateFormatter().string(from: n.timestamp)
+                    ]
+                    if let action = n.action {
+                        switch action {
+                        case .focusWindow(let wid):
+                            d["action"] = ["type": "focusWindow", "windowID": "\(wid)"]
+                        case .runShellCommand(let cmd):
+                            d["action"] = ["type": "runShellCommand", "command": cmd]
+                        case .openURL(let url):
+                            d["action"] = ["type": "openURL", "url": url]
+                        }
+                    }
+                    return d
+                }
+                completion(Response(id: request.id, result: AnyCodable(["notifications": dicts, "count": dicts.count])))
             }
-            if let priority = request.params?["priority"]?.value as? String, !priority.isEmpty {
-                cmd += " --priority \(priority)"
-            }
-            if let all = request.params?["all"]?.value as? Bool, all {
-                cmd += " --all"
-            }
-            dispatchAndRespond(request, commandString: cmd, completion: completion)
         }
 
         // grid.notify.dismiss -- { id: string }
@@ -1962,16 +1990,26 @@ completion(Response(id: request.id, result: AnyCodable(["success": true])))
                 completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "missing required param: id")))
                 return
             }
-            dispatchAndRespond(request, commandString: "@notify dismiss \(id)", completion: completion)
+            Task {
+                let dismissed = await NotificationStore.shared.dismiss(id: id)
+                completion(Response(id: request.id, result: AnyCodable(["success": dismissed, "id": id])))
+            }
         }
 
         // grid.notify.clear -- { purge?: bool }
         register(method: "grid.notify.clear") { request, completion in
-            var cmd = "@notify clear"
-            if let purge = request.params?["purge"]?.value as? Bool, purge {
-                cmd += " --purge"
+            let purge = (request.params?["purge"]?.value as? Bool) ?? false
+            Task {
+                let store = NotificationStore.shared
+                if purge {
+                    let removed = await store.purge()
+                    completion(Response(id: request.id, result: AnyCodable(["success": true, "removed": removed])))
+                } else {
+                    let count = await store.count()
+                    await store.bulkDismiss()
+                    completion(Response(id: request.id, result: AnyCodable(["success": true, "dismissed": count])))
+                }
             }
-            dispatchAndRespond(request, commandString: cmd, completion: completion)
         }
 
         // grid.notify.count -- {}
