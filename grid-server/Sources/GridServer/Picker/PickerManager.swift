@@ -193,9 +193,9 @@ class PickerManager {
         pendingRPCContinuation = nil
         let capturedOnLaunch = onLaunch
 
-        // Suppress reconciler BEFORE hide to catch all stale appActivated events.
-        // Suppression stays active until our Task{} updates GridState and unsuppresses.
-        gridReconciler?.setSuppressed(true, syncOnResume: false)
+        // Begin a suppression session BEFORE hide to catch all stale appActivated events.
+        // endAction will be called at each exit path.
+        let token = gridReconciler?.beginAction(label: "picker.result")
 
         // Hide first (clears UI before action executes)
         hide()
@@ -210,8 +210,10 @@ class PickerManager {
             // Parse action from metadata
             guard let action = PickerAction.from(metadata: item.metadata) else {
                 jlog("pick.err.noaction", data: ["id": item.id])
-                // Unsuppress immediately since no action to track
-                gridReconciler?.setSuppressed(false, syncOnResume: true)
+                // End suppression immediately since no action to track
+                if let token = token {
+                    gridReconciler?.endAction(token, syncBorders: true)
+                }
                 break
             }
 
@@ -228,24 +230,30 @@ class PickerManager {
             // Execute the action
             ActionExecutor.execute(action)
 
-            // For focusWindow: update GridState in Task{} then unsuppress with sync.
+            // For focusWindow: update GridState in Task{} then end suppression.
             // Suppression remains active until Task runs, catching all stale events.
             if case .focusWindow(_, let windowID) = action {
                 let reconciler = gridReconciler
                 Task { [weak self] in
                     await self?.updateGridStateFocus(windowID)
-                    reconciler?.setSuppressed(false, syncOnResume: true)
+                    if let token = token {
+                        reconciler?.endAction(token, syncBorders: true)
+                    }
                 }
             } else {
-                // Non-focus actions (openDir, openApp, exec): unsuppress immediately.
+                // Non-focus actions (openDir, openApp, exec): end suppression immediately.
                 // GridState has pre-picker focus which is correct until new window appears.
-                gridReconciler?.setSuppressed(false, syncOnResume: true)
+                if let token = token {
+                    gridReconciler?.endAction(token, syncBorders: true)
+                }
             }
 
         case .cancelled:
             restorePreviousWindow()
-            // GridState already has correct pre-picker focus. Just unsuppress.
-            gridReconciler?.setSuppressed(false, syncOnResume: true)
+            // GridState already has correct pre-picker focus. Just end suppression.
+            if let token = token {
+                gridReconciler?.endAction(token, syncBorders: true)
+            }
         }
 
         // Resume RPC continuation after action execution

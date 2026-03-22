@@ -84,20 +84,57 @@ class GridApply {
             throw GridApplyError.noLayout
         }
 
+        // syncBorders: false because applyLayout does its own syncBordersForSpace
+        // at the end (step 14) with explicit space/display parameters. The generic
+        // syncBordersForCurrentSpace would be redundant and potentially wrong
+        // (it might sync the wrong display in multi-monitor setups).
+        // If reconciler is nil (shouldn't happen but guard), run body directly.
+        if let reconciler = gridReconciler {
+            try await reconciler.executeAction(label: "layout.apply", syncBorders: false) {
+                try await self.applyLayoutBody(
+                    spaceID: spaceID,
+                    layoutID: layoutID,
+                    strategy: strategy,
+                    gridState: gridState,
+                    gridConfig: gridConfig,
+                    stateManager: stateManager,
+                    gridFocus: gridFocus
+                )
+            }
+        } else {
+            try await applyLayoutBody(
+                spaceID: spaceID,
+                layoutID: layoutID,
+                strategy: strategy,
+                gridState: gridState,
+                gridConfig: gridConfig,
+                stateManager: stateManager,
+                gridFocus: gridFocus
+            )
+        }
+    }
+
+    // applyLayoutBody: the actual layout application work, extracted so executeAction
+    // can wrap it without duplicating the guard-let boilerplate.
+    private func applyLayoutBody(
+        spaceID: String,
+        layoutID: String,
+        strategy: GridAssignmentStrategy,
+        gridState: GridState,
+        gridConfig: GridConfig,
+        stateManager: StateManager,
+        gridFocus: GridFocus
+    ) async throws {
         jlog("layout.apply.start", data: ["lid": layoutID, "sid": spaceID])
 
-        // 1. Suppress reconciler during bulk placement
-        gridReconciler?.setSuppressed(true)
-        defer { gridReconciler?.setSuppressed(false) }
-
-        // 2. Get layout definition
+        // 1. Get layout definition
         let layoutDef = try await MainActor.run { try gridConfig.getLayout(id: layoutID) }
 
-        // 3. Get display bounds for this space
+        // 2. Get display bounds for this space
         let wmState = await stateManager.getState()
         let displayBounds = gridFocus.getDisplayBoundsForSpace(spaceID, wmState: wmState)
 
-        // 4. Get existing track ratios (preserve when reapplying same layout)
+        // 3. Get existing track ratios (preserve when reapplying same layout)
         let existingLayoutID = await gridState.getCurrentLayout(spaceID: spaceID)
         var columnRatios: [Double]? = nil
         var rowRatios: [Double]? = nil
@@ -106,7 +143,7 @@ class GridApply {
             rowRatios = await gridState.getRowRatios(spaceID: spaceID)
         }
 
-        // 5. Calculate grid layout (gap=0, padding handles spacing)
+        // 4. Calculate grid layout (gap=0, padding handles spacing)
         let calculated = GridLayout.calculateLayoutWithRatios(
             layout: layoutDef,
             screenRect: displayBounds,
@@ -115,7 +152,7 @@ class GridApply {
             rowRatios: rowRatios
         )
 
-        // 6. Filter tileable windows from StateManager
+        // 5. Filter tileable windows from StateManager
         let exclusions = await MainActor.run { gridConfig.getWindowExclusions() }
         let tileableWindows = filterTileableFromState(
             wmState: wmState,
@@ -123,10 +160,10 @@ class GridApply {
             exclusions: exclusions
         )
 
-        // 7. Get previous assignments from GridState
+        // 6. Get previous assignments from GridState
         let previousAssignments = await gridState.getWindowAssignments(spaceID: spaceID)
 
-        // 8. Assign windows to cells
+        // 7. Assign windows to cells
         let appRules = await MainActor.run { gridConfig.appRules }
         let assignment = GridAssignment.assignWindows(
             windows: tileableWindows,
@@ -140,7 +177,7 @@ class GridApply {
             }
         )
 
-        // 9. Build cell modes and ratios from config+state
+        // 8. Build cell modes and ratios from config+state
         let allCellIDs = layoutDef.cells.map { $0.id }
         var cellModes: [String: GridStackMode] = [:]
         var cellRatios: [String: [Double]] = [:]
@@ -174,7 +211,7 @@ class GridApply {
             }
         }
 
-        // 10. Calculate window placements
+        // 9. Calculate window placements
         let baseSpacing = await MainActor.run { gridConfig.getBaseSpacing() }
         let settingsPadding = await MainActor.run { gridConfig.getSettingsPadding() }
         let settingsWindowSpacing = await MainActor.run { gridConfig.getSettingsWindowSpacing() }
@@ -192,7 +229,7 @@ class GridApply {
             settingsWindowSpacing: settingsWindowSpacing
         )
 
-        // 11. Apply display offset
+        // 10. Apply display offset
         let displayUUID = gridFocus.findCurrentDisplayUUID(wmState, spaceID)
         let displayName = findDisplayName(displayUUID, wmState: wmState)
         let offset = await MainActor.run { gridConfig.getDisplayOffset(uuid: displayUUID, name: displayName) }
@@ -205,10 +242,10 @@ class GridApply {
             }
         }
 
-        // 12. Apply placements via WindowManipulator (parallel via TaskGroup)
+        // 11. Apply placements via WindowManipulator (parallel via TaskGroup)
         await applyPlacementsViaAX(placements)
 
-        // 13. Update GridState
+        // 12. Update GridState
         if existingLayoutID != layoutID {
             // Switching layouts: reset state
             let layoutIndex = await MainActor.run { gridConfig.getLayoutIDs().firstIndex(of: layoutID) ?? 0 }
@@ -217,7 +254,7 @@ class GridApply {
 
         await gridState.setWindowAssignments(spaceID: spaceID, assignments: assignment.assignments)
 
-        // 14. Sync borders
+        // 13. Sync borders (explicit space/display -- not generic "current space")
         await gridReconciler?.syncBordersForSpace(spaceID, displayUUID: displayUUID)
 
         jlog("layout.apply.done", data: ["lid": layoutID, "placements": placements.count])

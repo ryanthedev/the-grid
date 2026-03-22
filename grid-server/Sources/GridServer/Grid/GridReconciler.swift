@@ -27,64 +27,150 @@ class GridReconciler: StateEventHandler {
     private weak var gridApply: GridApply?
     private weak var gridFocus: GridFocus?
 
+    // Strong reference to StateValidator — GridReconciler is the owning reference
+    // that keeps the validator (and its periodic timer) alive for process lifetime
+    private var stateValidator: StateValidator?
+
+    // Guards user commands during sleep/wake recovery.
+    // Non-nil only while handleSystemWake is in progress.
+    // Commands call awaitWakeCompletion() to wait for this to finish.
+    private var wakeValidationTask: Task<Void, Never>? = nil
+
     // One-shot target: next tileable window created on target space claims this cell
     private var pendingLaunchTarget: PendingLaunchTarget?
 
     // Timeout for pending launch target (app may take time to launch)
     private let pendingLaunchTimeout: CFAbsoluteTime = 15.0
 
-    // Ref-counted suppression for bulk operations (layout apply, picker, moves).
+    // Ref-counted suppression for bulk operations (layout apply, picker, terminal, focus).
+    // Managed exclusively via executeAction/beginAction/endAction -- no direct access.
     // Multiple callers can nest suppress/unsuppress without interfering.
     private var suppressionDepth: Int = 0
     private var suppressReconciliation: Bool { suppressionDepth > 0 }
 
-    // Move cooldown: after a cross-display move, ignore OS focus events
-    // for non-target windows to prevent delayed appActivated from
-    // bouncing borders to wrong windows.
-    private var moveTargetWindowID: UInt32 = 0
-    private var moveEndTime: CFAbsoluteTime = 0
-    private let moveCooldownSeconds: CFAbsoluteTime = 1.0
+    // Per-window fencing: OS focus events for fenced windows are dropped
+    // until released or expired. Replaces the old move cooldown model.
+    // Map from window ID to fence expiry time (CFAbsoluteTime).
+    private var fencedWindows: [UInt32: CFAbsoluteTime] = [:]
+
+    // Safety timeout: fences auto-expire after this duration to prevent deadlocks
+    private let fenceTimeoutSeconds: CFAbsoluteTime = 5.0
 
     init() {}
 
     // MARK: - Public API
 
-    // Increment/decrement suppression depth (called by GridApply, GridWindowMove, PickerManager).
-    // syncOnResume: if true, triggers syncBordersForCurrentSpace when depth reaches 0.
-    func setSuppressed(_ suppressed: Bool, syncOnResume: Bool = true) {
-        if suppressed {
-            suppressionDepth += 1
-            jlog("reconcile.suppress.inc", data: ["depth": suppressionDepth])
-        } else {
-            if suppressionDepth <= 0 {
-                jlog("warn.reconcile.suppress.underflow")
-            }
+    // Opaque token returned by beginAction, consumed by endAction.
+    // Records label and start time for logging.
+    struct ActionToken {
+        let label: String
+        let startTime: CFAbsoluteTime
+    }
+
+    // executeAction: unified lifecycle wrapper for short-lived state-mutating actions.
+    //
+    // Lifecycle: suppress -> execute closure -> sync borders -> unsuppress
+    //
+    // Parameters:
+    //   label: string for logging (e.g. "focus.left", "layout.apply")
+    //   syncBorders: whether to sync borders on completion (default: true).
+    //     Callers that do their own border sync inside the closure pass false.
+    //   body: async throwing closure containing the action's work
+    //
+    // Error handling: if body throws, still unsuppress and sync (borders should reflect
+    // whatever partial state change happened).
+    func executeAction<T>(
+        label: String,
+        syncBorders: Bool = true,
+        body: () async throws -> T
+    ) async rethrows -> T {
+        jlog("action.start", data: ["label": label])
+
+        // 1. Suppress reconciler
+        suppressionDepth += 1
+
+        // 2. Execute the caller's work
+        do {
+            let result = try await body()
+
+            // 3. Unsuppress
             suppressionDepth = max(0, suppressionDepth - 1)
-            jlog("reconcile.suppress.dec", data: ["depth": suppressionDepth])
-            if suppressionDepth == 0 && syncOnResume {
-                Task {
-                    await syncBordersForCurrentSpace()
-                }
+
+            // 4. Sync borders if requested and depth reached 0
+            if suppressionDepth == 0 && syncBorders {
+                await syncBordersForCurrentSpace()
+            }
+
+            jlog("action.end", data: ["label": label])
+            return result
+
+        } catch {
+            // Still unsuppress on error
+            suppressionDepth = max(0, suppressionDepth - 1)
+
+            if suppressionDepth == 0 && syncBorders {
+                await syncBordersForCurrentSpace()
+            }
+
+            jlog("action.err", data: ["label": label, "err": "\(error)"])
+            throw error
+        }
+    }
+
+    // beginAction: start a long-lived suppression session.
+    // Returns an ActionToken that must be passed to endAction when the session ends.
+    // Used by nudge mode where suppression spans multiple keystrokes.
+    func beginAction(label: String) -> ActionToken {
+        suppressionDepth += 1
+        jlog("action.begin", data: ["label": label, "depth": suppressionDepth])
+        return ActionToken(label: label, startTime: CFAbsoluteTimeGetCurrent())
+    }
+
+    // endAction: end a long-lived suppression session started by beginAction.
+    // Decrements suppression and optionally syncs borders when depth reaches 0.
+    func endAction(_ token: ActionToken, syncBorders: Bool = true) {
+        if suppressionDepth <= 0 {
+            jlog("warn.action.end.underflow", data: ["label": token.label])
+        }
+        suppressionDepth = max(0, suppressionDepth - 1)
+        jlog("action.end", data: [
+            "label": token.label,
+            "depth": suppressionDepth,
+            "dur_ms": Int((CFAbsoluteTimeGetCurrent() - token.startTime) * 1000),
+        ])
+        if suppressionDepth == 0 && syncBorders {
+            Task {
+                await syncBordersForCurrentSpace()
             }
         }
     }
 
-    // Track cross-display move target so we can ignore spurious OS focus events.
-    // Call beginMove before the move, endMove after explicit border syncs.
-    func beginMove(targetWindowID: UInt32) {
-        moveTargetWindowID = targetWindowID
-        suppressionDepth += 1
+    // Fence one or more windows so OS focus events for them are dropped.
+    // Called by move commands before they begin mutating state.
+    // reason: logging context only (not stored).
+    func acquireFence(windowIDs: Set<UInt32>, reason: String) {
+        guard !windowIDs.isEmpty else {
+            jlog("warn.fence.empty", msg: "acquireFence called with empty set")
+            return
+        }
+        let expiresAt = CFAbsoluteTimeGetCurrent() + fenceTimeoutSeconds
+        for windowID in windowIDs {
+            fencedWindows[windowID] = expiresAt
+        }
+        jlog("fence.acquire", data: [
+            "wids": windowIDs.sorted().map { Int($0) },
+            "reason": reason,
+        ])
     }
 
-    func endMove() {
-        suppressionDepth = max(0, suppressionDepth - 1)
-        moveEndTime = CFAbsoluteTimeGetCurrent()
-    }
-
-    // Clear move cooldown so explicit user actions (focus commands)
-    // aren't suppressed by stale move tracking
-    func clearMoveCooldown() {
-        moveTargetWindowID = 0
+    // Release fence for specific windows. Called after border sync completes.
+    func releaseFence(windowIDs: Set<UInt32>) {
+        for windowID in windowIDs {
+            fencedWindows.removeValue(forKey: windowID)
+        }
+        jlog("fence.release", data: [
+            "wids": windowIDs.sorted().map { Int($0) },
+        ])
     }
 
     func setPendingLaunchTarget(_ target: PendingLaunchTarget?) {
@@ -102,9 +188,81 @@ class GridReconciler: StateEventHandler {
         self.gridFocus = focus
     }
 
-    private var isInMoveCooldown: Bool {
-        moveTargetWindowID != 0
-            && (CFAbsoluteTimeGetCurrent() - moveEndTime) < moveCooldownSeconds
+    func setValidator(_ validator: StateValidator) {
+        self.stateValidator = validator
+    }
+
+    // awaitWakeCompletion
+    //
+    // Called by GridCommandRouter before processing any command.
+    // If wake validation is in progress, suspends the caller until it finishes.
+    // Fast path (common case): wakeValidationTask is nil, returns immediately.
+    func awaitWakeCompletion() async {
+        await wakeValidationTask?.value
+    }
+
+    // Check if a window is currently fenced (not expired).
+    // Lazily cleans up expired entries.
+    private func isWindowFenced(_ windowID: UInt32) -> Bool {
+        guard let expiresAt = fencedWindows[windowID] else {
+            return false
+        }
+
+        if CFAbsoluteTimeGetCurrent() > expiresAt {
+            // Fence expired -- safety timeout hit
+            fencedWindows.removeValue(forKey: windowID)
+            jlog("fence.expired", data: ["wid": Int(windowID)])
+            return false
+        }
+
+        return true
+    }
+
+    // isCellMateOfFencedWindow: returns true if windowID shares a cell (in any
+    // space) with at least one currently-active fenced window.
+    // Called only after isWindowFenced returns false, so windowID itself is not
+    // fenced. Performs lazy expiry cleanup on fencedWindows during iteration.
+    // Returns false immediately when fencedWindows is empty (the common case).
+    private func isCellMateOfFencedWindow(_ windowID: UInt32) async -> Bool {
+        guard let gridState else { return false }
+
+        // Collect active fenced window IDs, expiring stale entries as we go.
+        let now = CFAbsoluteTimeGetCurrent()
+        var activeFencedIDs: Set<UInt32> = []
+        var expiredIDs: [UInt32] = []
+
+        for (fencedWID, expiresAt) in fencedWindows {
+            if now > expiresAt {
+                expiredIDs.append(fencedWID)
+            } else {
+                activeFencedIDs.insert(fencedWID)
+            }
+        }
+
+        for expiredID in expiredIDs {
+            fencedWindows.removeValue(forKey: expiredID)
+            jlog("fence.expired", data: ["wid": Int(expiredID)])
+        }
+
+        // Fast path: no active fences (normal operation outside of moves).
+        if activeFencedIDs.isEmpty { return false }
+
+        // For each space, check whether windowID and any fenced window share a cell.
+        let spaceIDs = await gridState.getSpaceIDs()
+
+        for spaceID in spaceIDs {
+            guard let cellID = await gridState.getWindowCell(windowID: windowID, inSpace: spaceID) else {
+                continue
+            }
+
+            let cellWindows = await gridState.getCellWindows(spaceID: spaceID, cellID: cellID)
+
+            for cellWID in cellWindows where activeFencedIDs.contains(cellWID) {
+                return true
+            }
+        }
+
+        return false
     }
 
     // Store references, register with EventRouter
@@ -129,7 +287,7 @@ class GridReconciler: StateEventHandler {
     // MARK: - StateEventHandler
 
     func handle(_ event: StateEvent, context: EventContext) async throws {
-        // Focus events handle suppression/cooldown internally
+        // Focus events handle suppression/fencing internally
         if case .focusChanged(let focusState) = event {
             await handleFocusChanged(focusState)
             return
@@ -168,8 +326,11 @@ class GridReconciler: StateEventHandler {
         case .windowDeminimized(let windowID):
             await handleWindowDeminimized(windowID)
 
+        case .displayConnected(let displayUUID):
+            await handleDisplayConnected(displayUUID)
+
         case .displayDisconnected(let displayUUID):
-            handleDisplayDisconnected(displayUUID)
+            await handleDisplayDisconnected(displayUUID)
 
         default:
             // Ignore other events (app lifecycle, title changes, etc.)
@@ -343,7 +504,7 @@ class GridReconciler: StateEventHandler {
         try? await gridApply?.applyCellLayout(spaceID: target.spaceID, cellID: target.cellID)
 
         // Focus the new window via accessibility
-        try? await gridFocus?.focusWindowByID(windowID)
+        _ = try? await gridFocus?.focusWindowByID(windowID)
 
         // Sync borders to reflect new assignment
         await syncBordersForCurrentSpace()
@@ -354,22 +515,26 @@ class GridReconciler: StateEventHandler {
     private func handleFocusChanged(_ focusState: FocusState) async {
         guard let gridState, let stateManager, let windowID = focusState.windowID else { return }
 
-        // During suppression (active move), skip entirely — our move code
-        // sets GridState focus explicitly, and OS events would overwrite it.
+        // During suppression (bulk ops: layout apply, picker, terminal, focus),
+        // skip entirely -- the caller sets GridState focus explicitly.
         if suppressReconciliation {
             jlog("reconcile.focus.suppressed", data: ["wid": windowID])
             return
         }
 
-        // During cooldown after a cross-display move, skip ALL focus events.
-        // The explicit border syncs already set correct state. OS fires delayed
-        // appActivated events for 1-3 seconds that would undo our work.
-        if isInMoveCooldown {
-            jlog("reconcile.focus.cooldown", data: [
-                "ignored": windowID,
-                "expected": moveTargetWindowID,
-                "age_ms": Int((CFAbsoluteTimeGetCurrent() - moveEndTime) * 1000),
-            ])
+        // Check fence: if this window is fenced, drop the OS event.
+        // Fences are per-window: other windows' events pass through normally.
+        if isWindowFenced(windowID) {
+            jlog("reconcile.focus.fenced", data: ["wid": windowID])
+            return
+        }
+
+        // Cell-level fence guard: if this window is NOT directly fenced but shares a
+        // cell with a fenced window, drop the event. This prevents collateral OS focus
+        // events (e.g., a previously-focused co-cell window surfacing briefly) from
+        // overwriting the lastFocusedWid that a move command set intentionally.
+        if await isCellMateOfFencedWindow(windowID) {
+            jlog("reconcile.focus.fenced.cell", data: ["wid": windowID])
             return
         }
 
@@ -443,30 +608,55 @@ class GridReconciler: StateEventHandler {
     }
 
     private func handleSystemWake() async {
-        // Migrate space IDs (macOS may reassign them after sleep)
         guard let stateManager, let gridState else { return }
+
+        jlog("reconcile.wake.start")
+
+        // Capture wmState once for consistency across all steps
         let wmState = await stateManager.getState()
 
-        // Build display -> space ID list map
-        var displaySpaces: [String: [String]] = [:]
-        for display in wmState.displays {
-            var spaceIDs: [String] = []
-            for (spaceKey, space) in wmState.spaces {
-                if space.displayUUID == display.uuid {
-                    spaceIDs.append(spaceKey)
+        // Store the validation work as a tracked task so commands can await completion
+        // via awaitWakeCompletion(). The task reference is cleared on completion.
+        let task = Task { [weak self] in
+            guard let self else { return }
+
+            // Step 1: Migrate space IDs (macOS may reassign after sleep)
+            var displaySpaces: [String: [String]] = [:]
+            for display in wmState.displays {
+                var spaceIDs: [String] = []
+                for (spaceKey, space) in wmState.spaces {
+                    if space.displayUUID == display.uuid {
+                        spaceIDs.append(spaceKey)
+                    }
                 }
+                // Sort by space ID for positional matching
+                displaySpaces[display.uuid] = spaceIDs.sorted()
             }
-            // Sort by space ID for positional matching
-            displaySpaces[display.uuid] = spaceIDs.sorted()
-        }
 
-        let migrated = await gridState.migrateSpaceIDs(currentDisplaySpaces: displaySpaces)
-        if migrated {
-            jlog("reconcile.wake.migrated")
-        }
+            let migrated = await gridState.migrateSpaceIDs(currentDisplaySpaces: displaySpaces)
+            if migrated {
+                jlog("reconcile.wake.migrated")
+            }
 
-        // After migration, sync borders for current space
-        await syncBordersForCurrentSpace()
+            // Step 2: Full state validation after migration.
+            // Re-fetch wmState so validator sees correct space IDs post-migration.
+            let freshWmState = await stateManager.getState()
+            await self.stateValidator?.validate(wmState: freshWmState)
+
+            // Step 3: Sync borders for current space
+            await self.syncBordersForCurrentSpace()
+
+            jlog("reconcile.wake.done")
+
+            // Clear the task reference so subsequent commands pass through immediately
+            self.wakeValidationTask = nil
+        }
+        wakeValidationTask = task
+
+        // Await the task so handleSystemWake() itself doesn't return until
+        // everything is done. This preserves the existing guarantee that wake
+        // handling is synchronous from the event handler's perspective.
+        await task.value
     }
 
     private func handleWindowMoved(_ windowID: UInt32, _ frame: CGRect) {
@@ -499,8 +689,73 @@ class GridReconciler: StateEventHandler {
         jlog("reconcile.win.unmin", data: ["wid": windowID])
     }
 
-    private func handleDisplayDisconnected(_ displayUUID: String) {
+    // handleDisplayConnected
+    //
+    // Triggered when a display is reconnected (e.g., external monitor plugged back in).
+    // GridState retains the layout and window assignments from before disconnect.
+    // Re-syncs borders and reapplies layouts for the reconnected display.
+    private func handleDisplayConnected(_ displayUUID: String) async {
+        jlog("reconcile.display.connect", data: ["display": displayUUID])
+
+        // Short delay allows macOS to stabilize space/window state after reconnect
+        // before we query it. Without this, wmState may not yet reflect new spaces.
+        // 500ms is enough for display negotiation; short enough to feel instant.
+        try? await Task.sleep(for: .milliseconds(500))
+
+        // Reapply layouts and sync borders for the reconnected display.
+        // refreshAllDisplays handles: find active space, check layout,
+        // reapply window positions, sync borders.
+        let errors = await gridApply?.refreshAllDisplays(displayFilter: displayUUID) ?? []
+
+        if !errors.isEmpty {
+            jlog("warn.reconcile.display.connect.errors",
+                 data: ["display": displayUUID, "errorCount": errors.count])
+        }
+    }
+
+    // handleDisplayDisconnected
+    //
+    // Enhanced disconnect handler. Previous behavior only cleaned up borders.
+    // New behavior also prunes GridState window assignments for spaces on the
+    // disconnected display, preventing zombies from accumulating.
+    //
+    // Why windows but not spaces: macOS may keep space IDs alive for disconnected
+    // displays. pruneDeadSpaces() (StateValidator) handles space cleanup when the
+    // IDs are actually gone. Removing windows eagerly prevents zombie assignments
+    // in cells while preserving layout config for reconnect.
+    private func handleDisplayDisconnected(_ displayUUID: String) async {
+        jlog("reconcile.display.disconnect", data: ["display": displayUUID])
+
+        // Existing: clean up border state for this display
         simpleBorderManager?.handleDisplayDisconnected(displayUUID: displayUUID)
+
+        // New: prune GridState window assignments for spaces on this display
+        guard let gridState, let stateManager else { return }
+        let wmState = await stateManager.getState()
+
+        // Find all space IDs that belong to this display in the current wmState
+        let affectedSpaceIDs = wmState.spaces.compactMap { (spaceID, space) -> String? in
+            space.displayUUID == displayUUID ? spaceID : nil
+        }
+
+        if affectedSpaceIDs.isEmpty {
+            jlog("reconcile.display.disconnect.no_spaces", data: ["display": displayUUID])
+            return
+        }
+
+        // For each affected space, remove all window assignments.
+        // Windows will reappear via windowCreated events when the display reconnects
+        // and the user's apps are still running.
+        for spaceID in affectedSpaceIDs {
+            let assignments = await gridState.getWindowAssignments(spaceID: spaceID)
+            for (_, windowIDs) in assignments {
+                for windowID in windowIDs {
+                    await gridState.removeWindow(windowID, fromSpace: spaceID)
+                    jlog("reconcile.display.disconnect.prune",
+                         data: ["wid": Int(windowID), "space": spaceID, "display": displayUUID])
+                }
+            }
+        }
     }
 
     // MARK: - Border Sync
@@ -525,7 +780,11 @@ class GridReconciler: StateEventHandler {
         let layoutID = await gridState.getCurrentLayout(spaceID: spaceID)
         guard !layoutID.isEmpty else {
             // No layout -- clear borders by sending empty assignments
-            simpleBorderManager?.setCellAssignments([:], forDisplay: displayUUID)
+            if let borderManager = simpleBorderManager {
+                await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                    borderManager.setCellAssignments([:], forDisplay: displayUUID, completion: { continuation.resume() })
+                }
+            }
             return
         }
 
@@ -577,15 +836,22 @@ class GridReconciler: StateEventHandler {
         // Get focused window
         let focusedWID = await gridState.getFocusedWindow(spaceID: spaceID)
 
-        // Send to SimpleBorderManager (atomic update with focus)
-        simpleBorderManager?.setCellAssignments(
-            windowToCellMap,
-            forDisplay: displayUUID,
-            focusedWindowID: focusedWID != 0 ? focusedWID : nil,
-            cellStackModes: cellStackModes,
-            windowOrder: windowOrder,
-            displayFrame: bounds
-        )
+        // Send to SimpleBorderManager and await completion on main queue.
+        // withCheckedContinuation bridges the DispatchQueue.main.async boundary
+        // so that fence releases in GridWindowMove wait for border work to finish.
+        if let borderManager = simpleBorderManager {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                borderManager.setCellAssignments(
+                    windowToCellMap,
+                    forDisplay: displayUUID,
+                    focusedWindowID: focusedWID != 0 ? focusedWID : nil,
+                    cellStackModes: cellStackModes,
+                    windowOrder: windowOrder,
+                    displayFrame: bounds,
+                    completion: { continuation.resume() }
+                )
+            }
+        }
     }
 
     // MARK: - Helpers

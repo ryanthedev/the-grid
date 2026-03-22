@@ -241,6 +241,12 @@ actor GridState {
         return spaces[spaceID]
     }
 
+    // MARK: - Space Enumeration (for StateValidator)
+
+    func getSpaceIDs() -> [String] {
+        return Array(spaces.keys)
+    }
+
     func removeSpace(_ spaceID: String) {
         spaces.removeValue(forKey: spaceID)
         markDirty()
@@ -511,15 +517,45 @@ actor GridState {
         return nil
     }
 
-    // Find which space contains a window (searches all spaces)
+    // Find which space contains a window (searches all spaces in sorted order
+    // for deterministic results when a window exists in multiple spaces)
     func findSpaceContaining(windowID: UInt32) -> String? {
-        for (spaceID, space) in spaces {
+        for spaceID in spaces.keys.sorted() {
+            guard let space = spaces[spaceID] else { continue }
             for (_, cell) in space.cells {
                 if cell.windows.contains(windowID) {
                     return spaceID
                 }
             }
         }
+        return nil
+    }
+
+    // Find which space contains a window, preferring spaces in the given list.
+    // preferredSpaceIDs: ordered list of space IDs for the current display.
+    // Searches preferred spaces first (in order), then remaining spaces sorted.
+    func findSpaceContaining(windowID: UInt32, preferredSpaceIDs: [String]) -> String? {
+        // First pass: search preferred spaces in order
+        for spaceID in preferredSpaceIDs {
+            guard let space = spaces[spaceID] else { continue }
+            for (_, cell) in space.cells {
+                if cell.windows.contains(windowID) {
+                    return spaceID
+                }
+            }
+        }
+
+        // Second pass: search remaining spaces in sorted order
+        let preferredSet = Set(preferredSpaceIDs)
+        for spaceID in spaces.keys.sorted() where !preferredSet.contains(spaceID) {
+            guard let space = spaces[spaceID] else { continue }
+            for (_, cell) in space.cells {
+                if cell.windows.contains(windowID) {
+                    return spaceID
+                }
+            }
+        }
+
         return nil
     }
 
