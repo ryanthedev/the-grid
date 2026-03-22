@@ -121,46 +121,46 @@ actor GridTerminalManager {
         toggling = true
         defer { toggling = false }
 
-        // Suppress reconciler for entire toggle to prevent border/assignment side effects
-        gridReconciler.setSuppressed(true, syncOnResume: false)
-        defer { gridReconciler.setSuppressed(false, syncOnResume: true) }
-
-        // Tier 1: Saved PID alive + saved WID valid in StateManager
-        if let pid = savedPID, let wid = savedWindowID {
-            if isPIDAlive(pid) {
-                if await windowExistsInState(wid) {
-                    if isHidden {
-                        await show(wid: wid, pid: pid)
-                    } else {
-                        await hide(wid: wid, pid: pid)
+        // Wrap the toggle logic in executeAction to suppress reconciler for the
+        // entire toggle, preventing border/assignment side effects from OS events.
+        return await gridReconciler.executeAction(label: "terminal.toggle") {
+            // Tier 1: Saved PID alive + saved WID valid in StateManager
+            if let pid = savedPID, let wid = savedWindowID {
+                if isPIDAlive(pid) {
+                    if await windowExistsInState(wid) {
+                        if isHidden {
+                            await show(wid: wid, pid: pid)
+                        } else {
+                            await hide(wid: wid, pid: pid)
+                        }
+                        return .ok(isHidden ? "hidden" : "shown")
                     }
-                    return .ok(isHidden ? "hidden" : "shown")
                 }
             }
-        }
 
-        // Tier 2: PID alive, WID stale -- re-query StateManager for matching window
-        if let pid = savedPID, isPIDAlive(pid) {
-            if let wid = await findGhosttyWindow(byPID: pid) {
+            // Tier 2: PID alive, WID stale -- re-query StateManager for matching window
+            if let pid = savedPID, isPIDAlive(pid) {
+                if let wid = await findGhosttyWindow(byPID: pid) {
+                    savedWindowID = wid
+                    // Found via re-query; window is visible (we did not hide it), so hide
+                    await hide(wid: wid, pid: pid)
+                    return .ok("hidden")
+                }
+            }
+
+            // Tier 3: No saved state -- search for orphaned Ghostty window
+            if let (wid, pid) = await findAnyGhosttyWindow() {
                 savedWindowID = wid
-                // Found via re-query; window is visible (we did not hide it), so hide
+                savedPID = pid
+                // Orphaned window found; treat as currently shown, hide it
                 await hide(wid: wid, pid: pid)
                 return .ok("hidden")
             }
-        }
 
-        // Tier 3: No saved state -- search for orphaned Ghostty window
-        if let (wid, pid) = await findAnyGhosttyWindow() {
-            savedWindowID = wid
-            savedPID = pid
-            // Orphaned window found; treat as currently shown, hide it
-            await hide(wid: wid, pid: pid)
-            return .ok("hidden")
+            // Tier 4: No Ghostty window exists -- launch one
+            let result = await launchGhostty()
+            return result
         }
-
-        // Tier 4: No Ghostty window exists -- launch one
-        let result = await launchGhostty()
-        return result
     }
 
     // MARK: - Hide / Show

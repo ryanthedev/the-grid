@@ -50,6 +50,7 @@ class GridFocus {
     private weak var gridConfig: GridConfig?
     private weak var stateManager: StateManager?
     private weak var windowManipulator: WindowManipulator?
+    private weak var gridReconciler: GridReconciler?
 
     init() {}
 
@@ -64,6 +65,11 @@ class GridFocus {
         self.stateManager = stateManager
         self.windowManipulator = windowManipulator
         jlog("focus.init")
+    }
+
+    // Set reconciler after creation (circular dependency resolution)
+    func setReconciler(_ reconciler: GridReconciler) {
+        self.gridReconciler = reconciler
     }
 
     // ============================================================
@@ -283,9 +289,19 @@ class GridFocus {
             if cellState.lastFocusedWid != 0 {
                 if let foundIdx = cellWindows.firstIndex(of: cellState.lastFocusedWid) {
                     idx = foundIdx
+                } else {
+                    // lastFocusedWid is not in this cell's window list --
+                    // window moved to another cell/space or was pruned above.
+                    // Log for diagnostics, then fall back to lastFocusedIdx.
+                    jlog("focus.restore.stale", data: [
+                        "wid": cellState.lastFocusedWid,
+                        "cell": cellID,
+                        "spaceID": spaceID,
+                    ])
+                    idx = max(0, min(cellState.lastFocusedIdx, cellWindows.count - 1))
                 }
             } else {
-                // Fall back to lastFocusedIdx
+                // No lastFocusedWid recorded -- use lastFocusedIdx
                 idx = max(0, min(cellState.lastFocusedIdx, cellWindows.count - 1))
             }
         }
@@ -301,8 +317,16 @@ class GridFocus {
         return windowID
     }
 
-    // focusWindowByID: focus a window via WindowManipulator
-    func focusWindowByID(_ windowID: UInt32) async throws {
+    // focusWindowByID: focus a window via WindowManipulator with mismatch retry.
+    //
+    // After the AX focus call, checks metadata.focusedWindowID (cached, no OS call).
+    // If the OS focused a different window, retries AX focus once.
+    // Logs on mismatch. Accepts reality after retry.
+    //
+    // Returns the actual focused window ID (requested ID if successful, or whatever
+    // the OS actually focused if mismatch was accepted after retry).
+    @discardableResult
+    func focusWindowByID(_ windowID: UInt32) async throws -> UInt32 {
         guard let stateManager = stateManager,
               let windowManipulator = windowManipulator else {
             throw GridFocusError.windowNotFound(windowID)
@@ -314,11 +338,43 @@ class GridFocus {
             throw GridFocusError.windowNotFound(windowID)
         }
 
-        // Call WindowManipulator directly (no RPC)
+        // Attempt 1: AX focus
         let success = windowManipulator.focusWindow(pid: windowState.pid, windowID: windowID)
         if !success {
             throw GridFocusError.focusFailed(windowID)
         }
+
+        // Verify: read cached focused window ID (no OS call).
+        // Re-read state after the focus call to see what the OS reports.
+        let postState = await stateManager.getState()
+        let actualFocusedWID = postState.metadata.focusedWindowID
+
+        if let actualWID = actualFocusedWID, actualWID != windowID {
+            // Mismatch: OS focused a different window. Retry once.
+            jlog("focus.mismatch", data: [
+                "requested": Int(windowID),
+                "actual": Int(actualWID),
+                "retry": true,
+            ])
+
+            // Attempt 2: retry AX focus
+            _ = windowManipulator.focusWindow(pid: windowState.pid, windowID: windowID)
+
+            // Check again after retry
+            let retryState = await stateManager.getState()
+            let retryActualWID = retryState.metadata.focusedWindowID
+
+            if let retryWID = retryActualWID, retryWID != windowID {
+                // Still mismatched after retry. Accept OS reality.
+                jlog("focus.mismatch.accept", data: [
+                    "requested": Int(windowID),
+                    "actual": Int(retryWID),
+                ])
+                return retryWID
+            }
+        }
+
+        return windowID
     }
 
     // ============================================================
@@ -404,9 +460,35 @@ class GridFocus {
         }
 
         // Focus the cell on the target space
-        let windowID = try await focusCellByID(spaceID: targetSpaceIDStr, cellID: targetCell)
+        var windowID = try await focusCellByID(spaceID: targetSpaceIDStr, cellID: targetCell)
 
-        // NOTE: Border sync handled automatically by GridReconciler's focusChanged handler
+        // Tell StateManager the target space is now active so subsequent
+        // syncBordersForCurrentSpace calls (from suppression release) use
+        // the correct display. Without this, macOS metadata still reports
+        // the source display as active (appActivated doesn't fire for
+        // same-app cross-display focus).
+        await stateManager?.overrideActiveSpace(UInt64(targetSpaceID))
+
+        // Check what the OS actually focused — AX may raise a different
+        // window of the same app. Update GridState to match reality.
+        let postState = await stateManager?.getState()
+        if let actualWID = postState?.metadata.focusedWindowID,
+           actualWID != windowID {
+            // OS focused a different window. Find it in the target cell
+            // and update GridState to match.
+            let cellWindows = await gridState.getCellWindows(spaceID: targetSpaceIDStr, cellID: targetCell)
+            if let actualIdx = cellWindows.firstIndex(of: actualWID) {
+                await gridState.setFocus(spaceID: targetSpaceIDStr, cellID: targetCell, windowIndex: actualIdx)
+                windowID = actualWID
+                jlog("focus.cross.corrected", data: [
+                    "requested": windowID,
+                    "actual": actualWID,
+                ])
+            }
+        }
+
+        // Explicitly sync borders for the target display.
+        await gridReconciler?.syncBordersForSpace(targetSpaceIDStr, displayUUID: adjacentDisplay.uuid)
 
         return windowID
     }

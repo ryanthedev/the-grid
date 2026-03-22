@@ -249,6 +249,10 @@ class GridWindowMove {
             throw GridWindowMoveError.noLayout
         }
 
+        // Fence the moved window before any state mutation
+        let fencedIDs: Set<UInt32> = [windowID]
+        gridReconciler.acquireFence(windowIDs: fencedIDs, reason: "move.same")
+
         // 1. Update state: prepend window to target cell (removes from source)
         await gridState.prependWindow(windowID, toCellID: targetCell, inSpace: spaceID)
 
@@ -330,11 +334,12 @@ class GridWindowMove {
             CGWarpMouseCursorPosition(CGPoint(x: targetBounds.midX, y: targetBounds.midY))
         }
 
-        // 11. Defer border sync (user-invisible decoration, don't block return)
+        // 11. Await border sync (fenced: OS events for this window are blocked)
         let displayUUIDForBorders = gridFocus.findCurrentDisplayUUID(wmState, spaceID)
-        Task {
-            await gridReconciler.syncBordersForSpace(spaceID, displayUUID: displayUUIDForBorders)
-        }
+        await gridReconciler.syncBordersForSpace(spaceID, displayUUID: displayUUIDForBorders)
+
+        // Release fence after border sync completes
+        gridReconciler.releaseFence(windowIDs: fencedIDs)
 
         // Track for rapid-move detection
         lastMovedWindowID = windowID
@@ -417,7 +422,11 @@ class GridWindowMove {
             throw GridWindowMoveError.noCellsOnAdjacentDisplay
         }
 
-        // 6. Move window to target space via WindowManipulator
+        // 6. Fence the moved window before SLS move and state mutation
+        let fencedIDs: Set<UInt32> = [windowID]
+        gridReconciler.acquireFence(windowIDs: fencedIDs, reason: "move.cross")
+
+        // 6b. Move window to target space via WindowManipulator
         let t3 = CFAbsoluteTimeGetCurrent()
         let _ = windowManipulator.moveWindowToSpace(windowID: windowID, spaceID: targetSpaceID)
         let t4 = CFAbsoluteTimeGetCurrent()
@@ -446,9 +455,7 @@ class GridWindowMove {
         await gridState.setFocus(spaceID: targetSpaceIDStr, cellID: targetCell, windowIndex: 0)
         let t5 = CFAbsoluteTimeGetCurrent()
 
-        // 8. Begin move: suppresses reconciler AND starts cooldown tracking
-        // so delayed OS focus events don't bounce borders to wrong windows
-        gridReconciler.beginMove(targetWindowID: windowID)
+        // 8. (Fence acquired above at step 6 -- replaces beginMove)
 
         // 9. Apply layouts on target and source displays in parallel
         let sourceCellWindows = await gridState.getCellWindows(spaceID: spaceID, cellID: sourceCell)
@@ -495,12 +502,14 @@ class GridWindowMove {
             CGWarpMouseCursorPosition(CGPoint(x: targetBounds.midX, y: targetBounds.midY))
         }
 
-        // 12. Sync borders while still suppressed (no race with OS events).
-        // Source FIRST, target LAST — SimpleBorderManager dispatches to main
+        // 12. Sync borders while fenced (no race with OS events).
+        // Source FIRST, target LAST -- SimpleBorderManager dispatches to main
         // queue async, so the last setCellAssignments wins the global focus.
         await gridReconciler.syncBordersForSpace(spaceID, displayUUID: currentDisplayUUID)
         await gridReconciler.syncBordersForSpace(targetSpaceIDStr, displayUUID: adjacentDisplay.uuid)
-        gridReconciler.endMove()
+
+        // Release fence after both border syncs complete
+        gridReconciler.releaseFence(windowIDs: fencedIDs)
 
         let tTotal = CFAbsoluteTimeGetCurrent()
         jlog("winmove.cross.timing", data: [

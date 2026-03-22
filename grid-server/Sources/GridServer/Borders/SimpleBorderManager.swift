@@ -130,11 +130,12 @@ class SimpleBorderManager {
     ///   - cellStackModes: Optional - cellID → stackMode ("tabs", "vertical", "horizontal")
     ///   - windowOrder: Optional - cellID → [windowID] ordered array for focus cycling
     ///   - displayFrame: Optional - display frame for layout context
-    func setCellAssignments(_ assignments: [UInt32: String], forDisplay displayUUID: String, focusedWindowID: UInt32? = nil, cellStackModes: [String: String] = [:], windowOrder: [String: [UInt32]]? = nil, displayFrame: CGRect? = nil) {
+    func setCellAssignments(_ assignments: [UInt32: String], forDisplay displayUUID: String, focusedWindowID: UInt32? = nil, cellStackModes: [String: String] = [:], windowOrder: [String: [UInt32]]? = nil, displayFrame: CGRect? = nil, completion: (() -> Void)? = nil) {
         let span = CurrentSpan.current
         DispatchQueue.main.async { [weak self, span] in
             CurrentSpan.$current.withValue(span) {
                 self?.setCellAssignmentsImpl(assignments, forDisplay: displayUUID, focusedWindowID: focusedWindowID, cellStackModes: cellStackModes, windowOrder: windowOrder, displayFrame: displayFrame)
+                completion?()
             }
         }
     }
@@ -180,9 +181,10 @@ class SimpleBorderManager {
                 isActiveCellTabbed = (stackMode == "tabs")
                 reassignBorders(previousFocused: previousFocusedWindow)
             } else {
-                // Same cell, same window: refresh positions (windows may have moved
-                // during suppressed operations like layout apply or swap)
-                rebuildBorderPool(source: "atomic-positionRefresh")
+                // Same cell, same window: position-only refresh (windows may have moved
+                // during suppressed operations like layout apply or swap).
+                // Avoids the expensive release-reacquire cycle of a full rebuild.
+                refreshBorderPositions()
             }
         } else if displayUUID == currentDisplayUUID {
             // No focus update requested - existing behavior for current display
@@ -557,37 +559,55 @@ class SimpleBorderManager {
         inactiveBorders.removeAll()
     }
 
-    /// Reassign borders when focus changes within the same cell (no destroy/recreate)
+    /// Reassign borders when focus changes within the same cell (no destroy/recreate).
+    /// Tabbed mode: retarget the single active border to the new window.
+    /// Split mode: promote/demote active/inactive borders.
     private func reassignBorders(previousFocused: UInt32?) {
         guard let newFocused = focusedWindowID else { return }
         let config = BorderConfigManager.shared
 
-        // Step 1: Demote previous active border to inactive
-        if let prevWindow = previousFocused, let border = activeBorder {
-            updateBorderStyle(border, style: config.inactiveStyle)
-            inactiveBorders[prevWindow] = border
-            activeBorder = nil
-        }
-
-        // Step 2: Promote border for newly focused window
-        if let border = inactiveBorders.removeValue(forKey: newFocused) {
-            // Border exists in inactive pool - promote it
-            activeBorder = border
-            applyActiveStyle(to: border)
+        if isActiveCellTabbed {
+            // Tabbed mode: retarget the single active border (no inactive borders exist)
+            if let border = activeBorder {
+                border.retarget(to: newFocused)
+                // Reapply active style (updates stack indicator for new index)
+                applyActiveStyle(to: border)
+            } else {
+                // Edge case: no active border -- acquire one
+                if let border = acquireBorder(for: newFocused) {
+                    activeBorder = border
+                    applyActiveStyle(to: border)
+                }
+            }
+            // No inactive borders to manage in tabbed mode
         } else {
-            // No border for this window (edge case: window appeared and auto-focused
-            // before CLI sent assignments, then assignments arrived)
-            if let border = acquireBorder(for: newFocused) {
+            // Split mode: demote previous active, promote new active
+            if let prevWindow = previousFocused, let border = activeBorder {
+                updateBorderStyle(border, style: config.inactiveStyle)
+                inactiveBorders[prevWindow] = border
+                activeBorder = nil
+            }
+
+            if let border = inactiveBorders.removeValue(forKey: newFocused) {
+                // Border exists in inactive pool -- promote it
                 activeBorder = border
                 applyActiveStyle(to: border)
-                Task {
-                    JSONLogger.shared.log("warn.bdr.missing", data: ["wid": newFocused])
+            } else {
+                // Edge case: window appeared without a border
+                if let border = acquireBorder(for: newFocused) {
+                    activeBorder = border
+                    applyActiveStyle(to: border)
+                    Task {
+                        JSONLogger.shared.log("warn.bdr.missing", data: ["wid": newFocused])
+                    }
                 }
             }
         }
     }
 
-    /// Rebuild the entire border pool (called on cell change or layout apply)
+    /// Rebuild borders for the active cell (called on cell change or layout apply).
+    /// Mode-aware: tabbed cells get exactly 1 border (for focused window),
+    /// split cells get 1 border per visible window.
     private func rebuildBorderPool(source: String = "unknown") {
         // Release existing borders to pool (hide, don't destroy)
         releaseAllBordersToPool()
@@ -602,23 +622,40 @@ class SimpleBorderManager {
         let windowsInCell = assignments.filter { $0.value == cellID }.map { $0.key }
         let config = BorderConfigManager.shared
 
-        // Track stack mode for cell
+        // Determine stack mode for cell
         let stackModes = cellStackModesPerDisplay[displayUUID] ?? [:]
         let stackMode = stackModes[cellID] ?? "tabs"
         isActiveCellTabbed = (stackMode == "tabs")
 
-        // Acquire borders for all windows in cell (active + inactive)
-        for windowID in windowsInCell {
-            let isFocused = (windowID == focusedWindowID)
+        if isActiveCellTabbed {
+            // Tabbed mode: only the focused window gets a border
+            let targetWindow: UInt32?
+            if let focused = focusedWindowID, windowsInCell.contains(focused) {
+                targetWindow = focused
+            } else if let firstWindow = windowsInCell.first {
+                // No focused window known yet -- use first window in cell
+                targetWindow = firstWindow
+            } else {
+                targetWindow = nil
+            }
 
-            guard let border = acquireBorder(for: windowID) else { continue }
-
-            if isFocused {
+            if let targetWindow, let border = acquireBorder(for: targetWindow) {
                 activeBorder = border
                 applyActiveStyle(to: border)
-            } else {
-                inactiveBorders[windowID] = border
-                updateBorderStyle(border, style: config.inactiveStyle, isActive: false)
+            }
+            // No inactive borders in tabbed mode
+        } else {
+            // Split mode (vertical or horizontal): all windows visible, each gets a border
+            for windowID in windowsInCell {
+                guard let border = acquireBorder(for: windowID) else { continue }
+
+                if windowID == focusedWindowID {
+                    activeBorder = border
+                    applyActiveStyle(to: border)
+                } else {
+                    inactiveBorders[windowID] = border
+                    updateBorderStyle(border, style: config.inactiveStyle, isActive: false)
+                }
             }
         }
 
@@ -626,10 +663,42 @@ class SimpleBorderManager {
             JSONLogger.shared.log("bdr.rebuild", data: [
                 "source": source,
                 "cell": cellID,
-                "count": windowsInCell.count,
+                "count": isActiveCellTabbed ? (activeBorder != nil ? 1 : 0) : windowsInCell.count,
                 "focused": focusedWindowID ?? 0,
                 "tabbed": isActiveCellTabbed,
                 "poolSize": freePool.count
+            ])
+        }
+    }
+
+    /// Update positions of all active borders without release/reacquire cycle.
+    /// Called when the same cell and same focused window are re-sent (e.g., after
+    /// layout apply or window swap repositions windows within the same cell).
+    private func refreshBorderPositions() {
+        var refreshCount = 0
+
+        // Refresh active border position
+        if let border = activeBorder {
+            var frame = CGRect.zero
+            if SLSGetWindowBounds(connectionID, border.targetWindowID, &frame) == .success {
+                border.update(targetFrame: frame)
+                refreshCount += 1
+            }
+        }
+
+        // Refresh inactive border positions
+        for (_, border) in inactiveBorders {
+            var frame = CGRect.zero
+            if SLSGetWindowBounds(connectionID, border.targetWindowID, &frame) == .success {
+                border.update(targetFrame: frame)
+                refreshCount += 1
+            }
+        }
+
+        Task {
+            JSONLogger.shared.log("bdr.refresh", data: [
+                "cell": activeCellID ?? "nil",
+                "count": refreshCount
             ])
         }
     }

@@ -48,6 +48,10 @@ class GridCommandRouter {
     // Non-nil while a nudge session is active — owns the CGEventTap for that session
     private var nudgeKeyHandler: NudgeKeyHandler?
 
+    // Suppression token held for the duration of a nudge session.
+    // beginAction increments suppression, endAction decrements and syncs.
+    private var nudgeActionToken: GridReconciler.ActionToken?
+
     // Short flag -> long flag mapping for BFD commands
     private static let shortFlagMap: [Character: String] = [
         "m": "mouse",
@@ -93,6 +97,7 @@ class GridCommandRouter {
             stateManager: stateManager,
             windowManipulator: windowManipulator
         )
+        gridFocus.setReconciler(gridReconciler)
 
         gridCellOps.setup(
             gridState: gridState,
@@ -153,22 +158,21 @@ class GridCommandRouter {
             return .error("invalid command format")
         }
 
-        // 2. Log the dispatch
+        // 2. Wait for any in-progress wake validation to finish.
+        // Fast path during normal operation: returns immediately (task is nil).
+        // This ensures commands see post-migration, post-validation state.
+        await gridReconciler.awaitWakeCompletion()
+
+        // 3. Log the dispatch
         jlog("cmd.dispatch", data: ["domain": parsed.domain, "action": parsed.action])
 
-        // 3. Switch on domain
+        // 4. Switch on domain
         do {
             switch parsed.domain {
             case "focus":
-                // Clear move cooldown so the reconciler doesn't suppress
-                // the border update triggered by this explicit focus change
-                gridReconciler.clearMoveCooldown()
-                // Suppress reconciler during focus to prevent intermediate OS
-                // events (e.g. appActivated for same-app windows) from
-                // contaminating cell lastFocusedWid tracking
-                gridReconciler.setSuppressed(true, syncOnResume: false)
-                defer { gridReconciler.setSuppressed(false, syncOnResume: true) }
-                return try await handleFocus(parsed)
+                return try await gridReconciler.executeAction(label: "focus.\(parsed.action)") {
+                    try await handleFocus(parsed)
+                }
             case "layout":
                 return try await handleLayout(parsed)
             case "cell":
@@ -188,8 +192,8 @@ class GridCommandRouter {
             case "terminal":
                 return await gridTerminalManager.toggle()
             case "nudge":
-                // Suppression is managed inside handleNudge for the session duration —
-                // enter sets it, exit clears it. No defer here.
+                // Suppression managed via beginAction/endAction inside handleNudge --
+                // enter starts the session, exit ends it. No executeAction wrapper here.
                 return await handleNudge(parsed)
             default:
                 return .error("unknown domain: \(parsed.domain)")
@@ -740,16 +744,14 @@ class GridCommandRouter {
                 return .ok("already in nudge mode")
             }
 
-            // Resolve spaceID once — NudgeKeyHandler.onNudge fires synchronously on the
+            // Resolve spaceID once -- NudgeKeyHandler.onNudge fires synchronously on the
             // main thread, so spaceID must be captured here (not fetched per-keypress)
             guard let spaceID = await resolveActiveSpaceID() else {
                 return .error("no active space")
             }
 
-            // Suppress the reconciler for the full nudge session.
-            // syncOnResume: false here because no layout change has occurred yet.
-            // exit will call setSuppressed(false, syncOnResume: true) to snap borders.
-            gridReconciler.setSuppressed(true, syncOnResume: false)
+            // Begin a long-lived suppression session for the nudge duration
+            let token = gridReconciler.beginAction(label: "nudge")
 
             // Suspend BFD event tap so nudge keys are not also processed as hotkeys
             BFDManager.shared?.suspendEventTap()
@@ -782,14 +784,15 @@ class GridCommandRouter {
                 }
             }
 
-            // Install the event tap — may fail if Accessibility permission is absent
+            // Install the event tap -- may fail if Accessibility permission is absent
             guard handler.start() else {
                 BFDManager.shared?.resumeEventTap()
-                gridReconciler.setSuppressed(false, syncOnResume: false)
+                gridReconciler.endAction(token, syncBorders: false)
                 return .error("nudge tap failed (accessibility permission?)")
             }
 
             nudgeKeyHandler = handler
+            nudgeActionToken = token
 
             // Activate amber border feedback on the active border
             await MainActor.run {
@@ -817,8 +820,11 @@ class GridCommandRouter {
                 simpleBorderManager.setNudgeMode(active: false)
             }
 
-            // Unsuppress with syncOnResume: true so borders snap to final window positions
-            gridReconciler.setSuppressed(false, syncOnResume: true)
+            // End the suppression session -- syncs borders to final window positions
+            if let token = nudgeActionToken {
+                gridReconciler.endAction(token, syncBorders: true)
+                nudgeActionToken = nil
+            }
 
             jlog("nudge.exit")
             return .ok("nudge mode exited")

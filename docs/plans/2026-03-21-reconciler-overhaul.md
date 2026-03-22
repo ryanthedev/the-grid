@@ -1,7 +1,9 @@
 # Plan: Reconciler & Border System Overhaul
 
 **Created:** 2026-03-21
-**Status:** ready
+**Status:** complete
+**Started:** 2026-03-21 04:45
+**Completed:** 2026-03-21 06:30
 **Complexity:** complex
 
 ---
@@ -217,6 +219,53 @@ Eliminates timing-based race conditions structurally. Commands acquire fences th
 
 ---
 
+### Phase 6: Unified Action Execution Model
+**Model:** opus
+**Skills:** `code-foundations:aposd-designing-deep-modules`, `code-foundations:aposd-simplifying-complexity`
+
+**Goal:** Create a centralized `executeAction` wrapper on GridReconciler that enforces the suppress -> execute -> verify -> retry -> sync -> unsuppress lifecycle for all state-mutating user actions. Refactor all callers of `setSuppressed` to use it.
+
+**Scope:**
+- IN: `executeAction` method on GridReconciler with closure-based API, retry logic in `focusWindowByID` (check OS-reported focus, retry once if mismatch), `overrideActiveSpace` called automatically for cross-display operations, refactoring all callers (GridCommandRouter focus/nudge, GridApply, PickerManager, GridTerminalManager, GridReconciler picker launch), removing ad-hoc verify logic from GridFocus cross-display
+- OUT: Border allocation (Phase 4), fence logic (Phase 2), StateValidator (Phase 1)
+
+**Constraints:**
+- Nudge mode is long-lived (suppress held across multiple keystrokes) -- wrapper must support this
+- `executeAction` must handle both sync and async closures
+- Retry on focus mismatch: log error, retry AX focus once, accept reality after retry
+- All callers must use the wrapper -- no direct `setSuppressed` calls remain for user actions
+- Verify step must be fast: read `metadata.focusedWindowID` (already cached in StateManager, no OS call) — only do a full `getState()` call when the cached value doesn't match intent
+- Retry path is the exception, not the norm — most actions focus the correct window on the first try. The fast path (no mismatch) should add negligible latency
+- Border sync is already awaitable (Phase 4 `withCheckedContinuation`) — no new async overhead
+
+**Approach notes:**
+- User chose centralized wrapper over verify-on-unsuppress for architectural cleanliness
+- User principle: commands update state directly, never wait for OS events
+- Accept OS as ground truth after retry
+
+**File hints:**
+- `grid-server/Sources/GridServer/Grid/GridReconciler.swift` -- `executeAction` method
+- `grid-server/Sources/GridServer/Grid/GridCommandRouter.swift` -- focus, nudge callers
+- `grid-server/Sources/GridServer/Grid/GridFocus.swift` -- retry in `focusWindowByID`, remove ad-hoc cross-display verify
+- `grid-server/Sources/GridServer/Grid/GridApply.swift` -- layout apply caller
+- `grid-server/Sources/GridServer/Picker/PickerManager.swift` -- picker caller
+- `grid-server/Sources/GridServer/Grid/GridTerminalManager.swift` -- terminal caller
+
+**Depends on:** Phase 5 | **Unlocks:** None
+
+**Done when:**
+- [ ] `executeAction` wrapper exists on GridReconciler with suppress/verify/sync/unsuppress lifecycle
+- [ ] All callers of `setSuppressed` use `executeAction` instead
+- [ ] No direct `setSuppressed` calls remain for user-initiated actions
+- [ ] `focusWindowByID` retries once on OS focus mismatch with error logging
+- [ ] Cross-display focus to same-app window shows correct border
+- [ ] State always reflects OS reality after every action
+
+**Difficulty:** HIGH
+**Uncertainty:** Nudge mode's long-lived suppression may not fit the wrapper pattern cleanly
+
+---
+
 ## Test Coverage
 
 **Level:** Minimal validation
@@ -228,6 +277,8 @@ Eliminates timing-based race conditions structurally. Commands acquire fences th
 - [ ] Unit: Fence lifecycle (acquire, check, release, timeout expiry)
 - [ ] Unit: `findSpaceContaining` determinism (returns consistent results with duplicates)
 - [ ] Manual: Move window cross-display, verify no snap-back after 1-3 seconds
+- [ ] Manual: Cross-display focus to same-app window, verify border follows
+- [ ] Manual: Focus left/right on same display, verify correct window restored
 
 ---
 
@@ -249,6 +300,8 @@ Eliminates timing-based race conditions structurally. Commands acquire fences th
 | 1 border per tabbed cell | N borders per cell, global pool | User confirmed only visible window needs border | 4 |
 | Per-cell border allocation | Global pool (current), per-display pool | Eliminates pool churn; cell is natural allocation unit | 4 |
 | Auto-manage spaces | Manual cleanup, keep all | User chose auto-manage; reduces stale state accumulation | 1 |
+| Centralized wrapper over verify-on-unsuppress | Verify-on-unsuppress (zero caller changes) | User chose cleaner architecture despite refactor cost | 6 |
+| Accept OS reality after retry | Trust AX intent, ignore OS | User: log errors, retry once, accept reality | 6 |
 
 ---
 
@@ -264,4 +317,52 @@ Eliminates timing-based race conditions structurally. Commands acquire fences th
 
 ## Execution Log
 
-_To be filled during /code-foundations:building_
+### Phase 1: State Validator
+- [x] PRE-GATE: Discovery + pseudocode complete
+- [x] IMPLEMENT: Code written, build passes
+- [x] POST-GATE: Verification passed (retry 1: fixed weak->strong reference for StateValidator lifetime)
+- [x] CHECKPOINT: Committed
+Pipeline: full
+Model: sonnet (plan override)
+Commit: c1fcc56
+Summary: Added StateValidator actor with periodic (~30s) and on-wake validation. Three passes: prune dead windows via SLSGetWindowBounds, deduplicate cross-space windows, prune dead spaces. Wired into GridReconciler with strong reference.
+
+### Phase 2: Command Fencing
+- [x] PRE-GATE: Discovery + pseudocode complete (per-window timestamp model chosen via design-it-twice)
+- [x] IMPLEMENT: Code written, build passes
+- [x] POST-GATE: Verification passed
+- [x] CHECKPOINT: Committed
+Pipeline: full
+Model: opus (plan override)
+Commit: 77a4309
+Summary: Replaced move cooldown with per-window fence model. OS focus events for fenced windows are dropped until fence released (after border sync) or expired (5s safety). Same-display moves now await border sync. findSpaceContaining made deterministic. setSuppressed retained for non-move callers.
+
+### Phase 3: Focus Tracking Hardening
+- [x] PRE-GATE: Discovery + pseudocode complete (snap-back mechanism identified: unfenced cell-mates overwrite move focus)
+- [x] IMPLEMENT: Code written, build passes
+- [x] POST-GATE: Verification passed
+- [x] CHECKPOINT: Committed
+Pipeline: full
+Model: sonnet (plan override)
+Commit: e53232c
+Summary: Added guard 3 in handleFocusChanged to drop OS focus events for cell-mates of fenced windows. Added focus.restore.stale logging in focusCellByID for moved-away lastFocusedWid.
+
+### Phase 4: Border-Per-Cell Model
+- [x] PRE-GATE: Discovery + pseudocode complete (mode-aware rebuild approach chosen via design-it-twice)
+- [x] IMPLEMENT: Code written, build passes
+- [x] POST-GATE: Verification passed
+- [x] CHECKPOINT: Committed
+Pipeline: full
+Model: opus (plan override)
+Commit: 56ae782
+Summary: Tabbed cells now allocate exactly 1 border (retarget on focus change). Replaced atomic-positionRefresh full rebuild with lightweight refreshBorderPositions(). Added completion signaling to setCellAssignments and awaitable syncBordersForSpace via withCheckedContinuation.
+
+### Phase 5: Resilience
+- [x] PRE-GATE: Discovery + pseudocode complete (scope reduced: 2/5 criteria already met by Phases 1 and existing code)
+- [x] IMPLEMENT: Code written, build passes
+- [x] POST-GATE: Verification passed
+- [x] CHECKPOINT: Committed
+Pipeline: full
+Model: sonnet (plan override)
+Commit: 576186a
+Summary: Added wake gate (commands await validation before processing). Enhanced wake handler with full validation pipeline. Display disconnect prunes window assignments. Display reconnect with 500ms stabilization delay.

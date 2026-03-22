@@ -139,6 +139,19 @@ struct GridServerCommand: ParsableCommand {
                     stateManager: StateManager.shared,
                     simpleBorderManager: simpleBorderManager
                 )
+
+                // Instantiate StateValidator and wire into reconciler for on-wake calls
+                let stateValidator = StateValidator(
+                    gridState: gridState,
+                    stateManager: StateManager.shared,
+                    connectionID: connectionID
+                )
+                gridReconciler.setValidator(stateValidator)
+
+                // Start periodic 30-second validation timer
+                await stateValidator.start()
+
+                jlog("validate.init")
             }
 
             // Initialize Grid feature modules + command router
