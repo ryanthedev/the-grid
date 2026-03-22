@@ -17,17 +17,23 @@ class NotificationPanelWindow: NSWindow {
     init(viewModel: NotificationPanelViewModel) {
         self.viewModel = viewModel
 
-        // Calculate initial window rect, centered on main screen
-        let screen = NSScreen.main ?? NSScreen.screens.first!
+        // Calculate initial window rect, centered on main screen.
+        // Fall back to a safe default rect if no screen is available (headless/test).
         let width: CGFloat = 400
         let height: CGFloat = 600
-        let origin = NSPoint(
-            x: screen.frame.midX - width / 2,
-            y: screen.frame.midY - height / 2
-        )
+        let contentRect: NSRect
+        if let screen = NSScreen.main ?? NSScreen.screens.first {
+            let origin = NSPoint(
+                x: screen.frame.midX - width / 2,
+                y: screen.frame.midY - height / 2
+            )
+            contentRect = NSRect(origin: origin, size: CGSize(width: width, height: height))
+        } else {
+            contentRect = NSRect(x: 0, y: 0, width: width, height: height)
+        }
 
         super.init(
-            contentRect: NSRect(origin: origin, size: CGSize(width: width, height: height)),
+            contentRect: contentRect,
             // .titled + .closable so it appears as a real window in CGWindowListCopyWindowInfo
             // .fullSizeContentView to draw over the entire frame including hidden title bar
             styleMask: [.titled, .closable, .resizable, .fullSizeContentView],
@@ -126,9 +132,13 @@ class NotificationPanelWindow: NSWindow {
                 process.arguments = ["-c", command]
                 process.standardOutput = FileHandle.nullDevice
                 process.standardError = FileHandle.nullDevice
-                try? process.run()
+                do {
+                    try process.run()
+                    jlog("notify.action.exec", data: ["cmd": command])
+                } catch {
+                    jlog("err.notify.action.exec", data: ["cmd": command, "err": "\(error)"])
+                }
             }
-            jlog("notify.action.exec", data: ["cmd": command])
 
         case .openURL(let urlString):
             if let url = URL(string: urlString) {

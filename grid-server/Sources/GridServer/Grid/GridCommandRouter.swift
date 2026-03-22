@@ -985,8 +985,12 @@ class GridCommandRouter {
             guard let windowID = UInt32(payload) else { return nil }
             return .focusWindow(windowID: windowID)
         case "exec":
+            // Empty command payload produces a nonsensical action; reject it.
+            guard !payload.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
             return .runShellCommand(command: payload)
         case "url":
+            // Empty URL payload produces a nonsensical action; reject it.
+            guard !payload.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
             return .openURL(url: payload)
         default:
             return nil

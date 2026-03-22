@@ -39,7 +39,6 @@ class NotificationPanelManager {
         if isVisible {
             return
         }
-        isVisible = true
 
         // Create window lazily
         if window == nil {
@@ -54,9 +53,10 @@ class NotificationPanelManager {
         // Refresh notifications before showing
         viewModel?.refreshNotifications()
 
-        // Activate and show
+        // Activate and show; mark visible only after the window is actually ordered in
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
+        isVisible = true
         jlog("notify.panel.show")
     }
 

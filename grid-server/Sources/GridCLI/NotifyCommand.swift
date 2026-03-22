@@ -201,9 +201,13 @@ struct NotifyCount: ParsableCommand {
         let client = makeClient(from: globals)
         defer { client.disconnect() }
         let result = try client.call("grid.notify.count")
-        // Print just the count number for scripting
+        // Print just the count number for scripting.
+        // If the response is unexpected (not a String), print "0" so callers
+        // always receive a numeric string rather than silent empty output.
         if let msg = result["message"] as? String {
             print(msg)
+        } else {
+            print("0")
         }
     }
 }

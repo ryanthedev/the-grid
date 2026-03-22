@@ -1908,14 +1908,21 @@ completion(Response(id: request.id, result: AnyCodable(["success": true])))
             let priority = GridNotificationPriority(rawValue: priorityStr) ?? .normal
 
             // Parse action string: "focus:<wid>", "exec:<cmd>", "url:<url>"
+            // Payloads with empty or whitespace-only content after the prefix are rejected.
             var action: GridNotificationAction? = nil
             if let actionStr = request.params?["action"]?.value as? String, !actionStr.isEmpty {
                 if actionStr.hasPrefix("focus:"), let wid = UInt32(actionStr.dropFirst(6)) {
                     action = .focusWindow(windowID: wid)
                 } else if actionStr.hasPrefix("exec:") {
-                    action = .runShellCommand(command: String(actionStr.dropFirst(5)))
+                    let cmd = String(actionStr.dropFirst(5))
+                    if !cmd.trimmingCharacters(in: .whitespaces).isEmpty {
+                        action = .runShellCommand(command: cmd)
+                    }
                 } else if actionStr.hasPrefix("url:") {
-                    action = .openURL(url: String(actionStr.dropFirst(4)))
+                    let url = String(actionStr.dropFirst(4))
+                    if !url.trimmingCharacters(in: .whitespaces).isEmpty {
+                        action = .openURL(url: url)
+                    }
                 }
             }
 
@@ -1928,6 +1935,10 @@ completion(Response(id: request.id, result: AnyCodable(["success": true])))
             )
 
             Task {
+                // NotificationStore.shared is the same singleton instance injected into
+                // GridCommandRouter as self.notificationStore. Both paths write to the same
+                // actor, so there is no divergence. The push handler here bypasses command
+                // string serialization to preserve multi-word values (title, body, exec payloads).
                 let stored = await NotificationStore.shared.add(notification)
 
                 // Refresh panel if visible

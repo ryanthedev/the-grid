@@ -217,9 +217,11 @@ class NotificationPanelViewModel: ObservableObject {
             for id in idsToDismiss {
                 await store.dismiss(id: id)
             }
+            // Exit visual select mode before refresh so mode change and
+            // subsequent UI update are sequenced atomically from the UI's perspective.
+            exitVisualSelect()
             refreshNotifications()
         }
-        exitVisualSelect()
     }
 
     func bulkPinVisualSelection() {
@@ -229,9 +231,11 @@ class NotificationPanelViewModel: ObservableObject {
             for id in idsToPin {
                 await store.pin(id: id)
             }
+            // Exit visual select mode before refresh so mode change and
+            // subsequent UI update are sequenced atomically from the UI's perspective.
+            exitVisualSelect()
             refreshNotifications()
         }
-        exitVisualSelect()
     }
 
     // MARK: - Filter Mode
@@ -293,12 +297,14 @@ class NotificationPanelViewModel: ObservableObject {
                 togglePinSelected()
                 return .none
             // + (= key with shift) - increase priority
+            // Bare = (without shift) is intentionally ignored: no binding defined for it.
             case 24:
                 if hasShift {
                     increasePriority()
                 }
                 return .none
             // - (without shift) - decrease priority
+            // shift+- produces _ (underscore) which is intentionally ignored: no binding defined for it.
             case 27:
                 if !hasShift {
                     decreasePriority()

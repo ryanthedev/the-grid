@@ -452,13 +452,26 @@ final class NotificationStoreTests: XCTestCase {
         let storePath = "\(tmpDir)/notifications.json"
         let store = NotificationStore(storePath: storePath)
 
-        // Flush with nothing added -- should produce a valid empty file
+        // Add a notification and dismiss it so the store is dirtied and a file is written.
+        // This exercises the real round-trip: write-then-load rather than load-on-missing-file.
+        let n = makeNotification(title: "To dismiss")
+        await store.add(n)
+        await store.dismiss(id: n.id)
         await store.flush()
 
+        // Load into a fresh store and verify the dismissed notification persisted.
         let store2 = NotificationStore(storePath: storePath)
         await store2.load()
 
-        let count = await store2.count(filter: .all)
-        XCTAssertEqual(count, 0)
+        // Active filter excludes dismissed notifications
+        let activeCount = await store2.count(filter: .active)
+        XCTAssertEqual(activeCount, 0)
+
+        // All-inclusive filter sees the dismissed notification
+        let allCount = await store2.count(filter: .all)
+        XCTAssertEqual(allCount, 1)
+
+        let fetched = await store2.get(id: n.id)
+        XCTAssertEqual(fetched?.isDismissed, true)
     }
 }

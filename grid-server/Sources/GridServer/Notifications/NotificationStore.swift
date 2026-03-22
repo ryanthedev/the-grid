@@ -108,6 +108,9 @@ actor NotificationStore {
             lastUpdated: now
         )
 
+        // Declare tmpPath before the do block so the catch block can reference it
+        // for cleanup if the rename fails.
+        let tmpPath = storePath + ".tmp"
         do {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -118,7 +121,6 @@ actor NotificationStore {
             let dir = (storePath as NSString).deletingLastPathComponent
             try fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
 
-            let tmpPath = storePath + ".tmp"
             try data.write(to: URL(fileURLWithPath: tmpPath))
 
             // POSIX rename atomically replaces destination
@@ -128,7 +130,10 @@ actor NotificationStore {
 
             jlog("notify.store.save", data: ["count": byID.count])
         } catch {
-            // Re-mark dirty so the next mutation retries the write
+            // Re-mark dirty so the next mutation retries the write.
+            // Remove the .tmp file if it was created before the failure. If it
+            // was never written, removeItem is a no-op.
+            try? FileManager.default.removeItem(atPath: tmpPath)
             isDirty = true
             jlog("err.notify.store.save", msg: "\(error)")
         }

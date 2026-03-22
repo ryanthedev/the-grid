@@ -158,19 +158,38 @@ class NotificationFileWatcher {
     // MARK: - Internal: handle readable data
 
     // Called by readSource when data is available (or EOF on pipe).
-    // Reads all available bytes, accumulates into lineBuffer, processes complete lines.
+    // Loops read() to drain all available bytes, accumulates into lineBuffer, processes complete lines.
     private func handleReadable(isFIFO: Bool) {
         let bufSize = 4096
         var buf = [UInt8](repeating: 0, count: bufSize)
-        let bytesRead = read(fd, &buf, bufSize)
+        var gotEOF = false
 
-        if bytesRead > 0 {
-            // Append new bytes to the line buffer
-            let chunk = String(bytes: buf.prefix(bytesRead), encoding: .utf8) ?? ""
-            lineBuffer += chunk
-            processLines()
-        } else if bytesRead == 0 {
-            // EOF: writer closed the pipe (or end of regular file)
+        // Loop until the fd is drained (EAGAIN) or EOF is reached.
+        // A single read() call may not consume all available data on a busy pipe or file.
+        while true {
+            let bytesRead = read(fd, &buf, bufSize)
+
+            if bytesRead > 0 {
+                // Append new bytes to the line buffer
+                let chunk = String(bytes: buf.prefix(bytesRead), encoding: .utf8) ?? ""
+                lineBuffer += chunk
+                processLines()
+            } else if bytesRead == 0 {
+                // EOF: writer closed the pipe (or end of regular file)
+                gotEOF = true
+                break
+            } else {
+                // Read error or no more data available right now
+                if errno == EAGAIN || errno == EINTR {
+                    // EAGAIN: fd drained (non-blocking); EINTR: signal, retry is fine
+                    break
+                }
+                JSONLogger.shared.log("err.notify.watcher.read", data: ["errno": errno])
+                break
+            }
+        }
+
+        if gotEOF {
             // Flush any remaining partial line in the buffer
             if !lineBuffer.isEmpty {
                 processLine(lineBuffer)
@@ -190,11 +209,6 @@ class NotificationFileWatcher {
             }
             // Regular file: EOF means we've read to the current end.
             // File rotation is handled by fsSource; nothing to do here.
-        } else {
-            // Read error (EAGAIN on non-blocking fd means no data ready -- ignore)
-            if errno != EAGAIN && errno != EINTR {
-                JSONLogger.shared.log("err.notify.watcher.read", data: ["errno": errno])
-            }
         }
     }
 
@@ -285,6 +299,7 @@ class NotificationFileWatcher {
             guard let url = dict["url"] else { return nil }
             return .openURL(url: url)
         default:
+            JSONLogger.shared.log("warn.notify.watcher.action", msg: "unknown action type", data: ["type": type])
             return nil
         }
     }
