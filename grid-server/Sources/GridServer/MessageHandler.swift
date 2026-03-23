@@ -220,7 +220,9 @@ class MessageHandler {
             }
         }
 
-        // window.find - searches state.windows by criteria, returns immediately
+        // window.find - searches state.windows by criteria, returns immediately.
+        // Accepts: pid (Int), appName (String), title (String). pid branch is mutually
+        // exclusive — walks ancestor chain to find the window that owns the process.
         register(method: "window.find") { request, completion in
             guard let params = request.params else {
                 completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
@@ -229,15 +231,41 @@ class MessageHandler {
 
             let appNameFilter = params["appName"]?.value as? String
             let titleFilter = params["title"]?.value as? String
+            let pidFilter = params["pid"]?.value as? Int
 
-            guard appNameFilter != nil || titleFilter != nil else {
-                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "At least one of appName or title required")))
+            guard appNameFilter != nil || titleFilter != nil || pidFilter != nil else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "At least one of appName, title, or pid required")))
                 return
             }
 
             Task {
                 let state = await StateManager.shared.getState()
 
+                // pid branch: walk ancestor chain, return first window whose PID is an ancestor
+                if let pidFilter {
+                    let tree = await ProcessTree.build()
+                    let ancestors = tree.getAncestors(of: pid_t(pidFilter), maxDepth: 8)
+                    // Include the PID itself — handles case where process directly owns a window
+                    let ancestorSet = Set([pid_t(pidFilter)] + ancestors)
+
+                    for window in state.windows.values {
+                        if window.isHidden { continue }
+                        if window.frame.height < 100 { continue }
+                        if ancestorSet.contains(window.pid) {
+                            completion(Response(id: request.id, result: AnyCodable([
+                                "found": true,
+                                "windowId": String(window.id),
+                                "pid": window.pid
+                            ])))
+                            return
+                        }
+                    }
+
+                    completion(Response(id: request.id, result: AnyCodable(["found": false])))
+                    return
+                }
+
+                // appName/title branch: filter by name and/or title substring
                 for window in state.windows.values {
                     if let appName = appNameFilter, window.appName != appName { continue }
                     if let title = titleFilter, !(window.title?.contains(title) ?? false) { continue }
@@ -1874,180 +1902,6 @@ completion(Response(id: request.id, result: AnyCodable(["success": true])))
         register(method: "grid.terminal") { request, completion in
             let cmd = "@terminal"
             dispatchAndRespond(request, commandString: cmd, completion: completion)
-        }
-
-        // ============================================================
-        // NOTIFICATION RPCs
-        // ============================================================
-
-        // grid.notify.show -- { cell?: string }
-        register(method: "grid.notify.show") { request, completion in
-            var cmd = "@notify show"
-            if let cell = request.params?["cell"]?.value as? String, !cell.isEmpty {
-                cmd += " --cell \(cell)"
-            }
-            dispatchAndRespond(request, commandString: cmd, completion: completion)
-        }
-
-        // grid.notify.hide -- {}
-        register(method: "grid.notify.hide") { request, completion in
-            dispatchAndRespond(request, commandString: "@notify hide", completion: completion)
-        }
-
-        // grid.notify.toggle -- { cell?: string }
-        register(method: "grid.notify.toggle") { request, completion in
-            var cmd = "@notify toggle"
-            if let cell = request.params?["cell"]?.value as? String, !cell.isEmpty {
-                cmd += " --cell \(cell)"
-            }
-            dispatchAndRespond(request, commandString: cmd, completion: completion)
-        }
-
-        // grid.notify.assign -- { cell: string }
-        register(method: "grid.notify.assign") { request, completion in
-            guard let cell = request.params?["cell"]?.value as? String, !cell.isEmpty else {
-                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "missing required param: cell")))
-                return
-            }
-            dispatchAndRespond(request, commandString: "@notify assign \(cell)", completion: completion)
-        }
-
-        // grid.notify.unassign -- {}
-        register(method: "grid.notify.unassign") { request, completion in
-            dispatchAndRespond(request, commandString: "@notify unassign", completion: completion)
-        }
-
-        // grid.notify.push -- { title: string, body?: string, priority?: string, source?: string, action?: string }
-        // Bypasses command string serialization to preserve multi-word values
-        register(method: "grid.notify.push") { request, completion in
-            guard let title = request.params?["title"]?.value as? String, !title.isEmpty else {
-                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "missing required param: title")))
-                return
-            }
-            let body = (request.params?["body"]?.value as? String) ?? ""
-            let source = (request.params?["source"]?.value as? String) ?? "rpc"
-            let priorityStr = (request.params?["priority"]?.value as? String) ?? "normal"
-            let priority = GridNotificationPriority(rawValue: priorityStr) ?? .normal
-
-            // Parse action string: "focus:<wid>", "exec:<cmd>", "url:<url>"
-            // Payloads with empty or whitespace-only content after the prefix are rejected.
-            var action: GridNotificationAction? = nil
-            if let actionStr = request.params?["action"]?.value as? String, !actionStr.isEmpty {
-                if actionStr.hasPrefix("focus:"), let wid = UInt32(actionStr.dropFirst(6)) {
-                    action = .focusWindow(windowID: wid)
-                } else if actionStr.hasPrefix("exec:") {
-                    let cmd = String(actionStr.dropFirst(5))
-                    if !cmd.trimmingCharacters(in: .whitespaces).isEmpty {
-                        action = .runShellCommand(command: cmd)
-                    }
-                } else if actionStr.hasPrefix("url:") {
-                    let url = String(actionStr.dropFirst(4))
-                    if !url.trimmingCharacters(in: .whitespaces).isEmpty {
-                        action = .openURL(url: url)
-                    }
-                }
-            }
-
-            let notification = GridNotification(
-                source: source,
-                title: title,
-                body: body,
-                priority: priority,
-                action: action
-            )
-
-            Task {
-                // NotificationStore.shared is the same singleton instance injected into
-                // GridCommandRouter as self.notificationStore. Both paths write to the same
-                // actor, so there is no divergence. The push handler here bypasses command
-                // string serialization to preserve multi-word values (title, body, exec payloads).
-                let stored = await NotificationStore.shared.add(notification)
-
-                // Refresh panel if visible
-                await MainActor.run {
-                    if NotificationPanelManager.shared.isVisible {
-                        NotificationPanelManager.shared.currentViewModel?.refreshNotifications()
-                    }
-                }
-
-                completion(Response(id: request.id, result: .init(stored.id)))
-            }
-        }
-
-        // grid.notify.list -- { source?: string, priority?: string, all?: bool }
-        register(method: "grid.notify.list") { request, completion in
-            let sourceFilter = request.params?["source"]?.value as? String
-            let priorityStr = request.params?["priority"]?.value as? String
-            let includeAll = (request.params?["all"]?.value as? Bool) ?? false
-
-            Task {
-                var filter = includeAll ? GridNotificationFilter.all : GridNotificationFilter.active
-                if let s = sourceFilter, !s.isEmpty {
-                    filter.sources = [s]
-                }
-                if let p = priorityStr, !p.isEmpty {
-                    filter.minPriority = GridNotificationPriority(rawValue: p)
-                }
-                let results = await NotificationStore.shared.notifications(filter: filter)
-                let dicts: [[String: Any]] = results.map { n in
-                    var d: [String: Any] = [
-                        "id": n.id,
-                        "source": n.source,
-                        "title": n.title,
-                        "body": n.body,
-                        "priority": n.priority.rawValue,
-                        "isRead": n.isRead,
-                        "isPinned": n.isPinned,
-                        "isDismissed": n.isDismissed,
-                        "timestamp": ISO8601DateFormatter().string(from: n.timestamp)
-                    ]
-                    if let action = n.action {
-                        switch action {
-                        case .focusWindow(let wid):
-                            d["action"] = ["type": "focusWindow", "windowID": "\(wid)"]
-                        case .runShellCommand(let cmd):
-                            d["action"] = ["type": "runShellCommand", "command": cmd]
-                        case .openURL(let url):
-                            d["action"] = ["type": "openURL", "url": url]
-                        }
-                    }
-                    return d
-                }
-                completion(Response(id: request.id, result: AnyCodable(["notifications": dicts, "count": dicts.count])))
-            }
-        }
-
-        // grid.notify.dismiss -- { id: string }
-        register(method: "grid.notify.dismiss") { request, completion in
-            guard let id = request.params?["id"]?.value as? String, !id.isEmpty else {
-                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "missing required param: id")))
-                return
-            }
-            Task {
-                let dismissed = await NotificationStore.shared.dismiss(id: id)
-                completion(Response(id: request.id, result: AnyCodable(["success": dismissed, "id": id])))
-            }
-        }
-
-        // grid.notify.clear -- { purge?: bool }
-        register(method: "grid.notify.clear") { request, completion in
-            let purge = (request.params?["purge"]?.value as? Bool) ?? false
-            Task {
-                let store = NotificationStore.shared
-                if purge {
-                    let removed = await store.purge()
-                    completion(Response(id: request.id, result: AnyCodable(["success": true, "removed": removed])))
-                } else {
-                    let count = await store.count()
-                    await store.bulkDismiss()
-                    completion(Response(id: request.id, result: AnyCodable(["success": true, "dismissed": count])))
-                }
-            }
-        }
-
-        // grid.notify.count -- {}
-        register(method: "grid.notify.count") { request, completion in
-            dispatchAndRespond(request, commandString: "@notify count", completion: completion)
         }
 
         jlog("grid.rpc.registered")

@@ -6,6 +6,7 @@ struct WindowCommand: ParsableCommand {
         commandName: "window",
         abstract: "Window operations",
         subcommands: [
+            WindowFind.self,
             WindowMove.self,
             WindowSwap.self,
         ]
@@ -143,4 +144,34 @@ private func windowSwap(_ direction: String, globals: GlobalOptions) throws {
 
     let result = try client.call("grid.window.swap", params: ["direction": direction])
     printOkOrJSON(result, json: globals.json)
+}
+
+// MARK: - Window Find
+
+struct WindowFind: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "find",
+        abstract: "Find window by process ID"
+    )
+
+    @Option(name: .long, help: "Process ID to find owning window for")
+    var pid: Int
+
+    @OptionGroup var globals: GlobalOptions
+
+    func run() throws {
+        let client = makeClient(from: globals)
+        defer { client.disconnect() }
+
+        let result = try client.call("window.find", params: ["pid": pid])
+
+        if globals.json {
+            printResult(result, json: true)
+        } else if result["found"] as? Bool == true {
+            // Plain text: just the window ID for easy shell capture
+            print(result["windowId"] as? String ?? "")
+        } else {
+            throw ValidationError("no window found for pid \(pid)")
+        }
+    }
 }
