@@ -18,6 +18,7 @@ struct TmuxClientInfo {
     let windowIndex: Int
     let paneIndex: Int
     let paneCommand: String
+    let claudeWaiting: Bool
 }
 
 struct TmuxCacheEntry: Codable {
@@ -80,7 +81,7 @@ class TmuxEnricher {
         let output = await runProcess(
             tmuxPath,
             args: ["list-clients", "-F",
-                   "#{client_pid}|#{session_name}|#{window_name}|#{window_index}|#{pane_index}|#{pane_current_command}"]
+                   "#{client_pid}|#{session_name}|#{window_name}|#{window_index}|#{pane_index}|#{pane_current_command}|#{@claude-waiting}"]
         )
 
         guard let output, !output.isEmpty else {
@@ -92,18 +93,21 @@ class TmuxEnricher {
         // Parse output into clients map
         var parsed: [pid_t: TmuxClientInfo] = [:]
         for line in output.split(separator: "\n") {
-            let parts = line.split(separator: "|", maxSplits: 5, omittingEmptySubsequences: false)
-            guard parts.count == 6 else { continue }
+            let parts = line.split(separator: "|", maxSplits: 6, omittingEmptySubsequences: false)
+            guard parts.count >= 6 else { continue }
             guard let clientPID = pid_t(parts[0]) else { continue }
             let windowIndex = Int(parts[3]) ?? 0
             let paneIndex = Int(parts[4]) ?? 0
+            // #{@claude-waiting} returns "1" when set, empty when unset
+            let waiting = parts.count >= 7 && parts[6] == "1"
             parsed[clientPID] = TmuxClientInfo(
                 clientPID: clientPID,
                 sessionName: String(parts[1]),
                 windowName: String(parts[2]),
                 windowIndex: windowIndex,
                 paneIndex: paneIndex,
-                paneCommand: String(parts[5])
+                paneCommand: String(parts[5]),
+                claudeWaiting: waiting
             )
         }
         clients = parsed
@@ -177,7 +181,8 @@ class TmuxEnricher {
             title: info.sessionName,
             subtitle: subtitle,
             stableIDSuffix: "\(info.sessionName):\(info.windowName)",
-            kind: .tmux
+            kind: .tmux,
+            claudeWaiting: info.claudeWaiting
         )
     }
 
