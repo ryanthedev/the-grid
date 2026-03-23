@@ -1,7 +1,9 @@
 # Plan: Claude Waiting Hook
 
 **Created:** 2026-03-22
-**Status:** ready
+**Status:** in-progress
+**Started:** 2026-03-22
+**Current Phase:** 1
 **Complexity:** simple
 
 ---
