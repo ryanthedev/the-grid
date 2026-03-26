@@ -46,6 +46,9 @@ class NotificationPanelViewModel: ObservableObject {
     // Reference to the store (actor, called with await)
     private let store: NotificationStore
 
+    // Callback when notifications refresh (used by window to update title bar)
+    var onRefresh: ((_ unreadCount: Int) -> Void)?
+
     // Tracks the in-flight refresh so concurrent calls can cancel the previous one
     private var refreshTask: Task<Void, Never>?
 
@@ -67,6 +70,8 @@ class NotificationPanelViewModel: ObservableObject {
             self.notifications = results
             self.selectedIndex = min(self.selectedIndex, max(0, results.count - 1))
             self.updateStatusText()
+            let unread = results.filter { !$0.isRead }.count
+            self.onRefresh?(unread)
         }
     }
 

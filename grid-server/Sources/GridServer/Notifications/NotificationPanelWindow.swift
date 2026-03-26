@@ -48,15 +48,22 @@ class NotificationPanelWindow: NSWindow {
     private func setupWindow() {
         // Standard window (not floating, not transient)
         // Must appear in CGWindowListCopyWindowInfo for cell assignment
-        titleVisibility = .hidden
+        titleVisibility = .visible
         titlebarAppearsTransparent = true
         isOpaque = false
         backgroundColor = viewModel.theme.windowBackgroundNSColor
         hasShadow = true
-        // Window title used for identification (Phase 3 blacklisting)
-        title = "Grid Notifications"
+        title = "Notifications"
         // Reuse across show/hide cycles
         isReleasedWhenClosed = false
+    }
+
+    func updateTitle(unreadCount: Int) {
+        if unreadCount > 0 {
+            title = "Notifications (\(unreadCount))"
+        } else {
+            title = "Notifications"
+        }
     }
 
     private func setupContent() {
@@ -65,6 +72,10 @@ class NotificationPanelWindow: NSWindow {
         hosting.translatesAutoresizingMaskIntoConstraints = false
         contentView = hosting
         hostingView = hosting
+
+        viewModel.onRefresh = { [weak self] unreadCount in
+            self?.updateTitle(unreadCount: unreadCount)
+        }
     }
 
     // MARK: - Key Handling

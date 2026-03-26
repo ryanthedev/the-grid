@@ -28,8 +28,6 @@ struct NotificationPanelContentView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            NotificationHeaderView(viewModel: viewModel)
-
             if viewModel.mode == .filter {
                 NotificationFilterBar(viewModel: viewModel)
             }
