@@ -1,7 +1,9 @@
 # Plan: Notification Panel RPC + Double-Fire Fix
 
 **Created:** 2026-03-25
-**Status:** ready
+**Status:** complete
+**Started:** 2026-03-25 23:00
+**Completed:** 2026-03-25 23:45
 **Complexity:** simple
 
 ---
@@ -97,4 +99,18 @@ The notification panel tiles and focuses correctly after the activation policy t
 
 ## Execution Log
 
-_To be filled during /code-foundations:building_
+### Phase 1: Register grid.notify.* RPC methods
+- [x] PRE-GATE: SKIPPED — simplified pipeline
+- [x] IMPLEMENT: 11 RPC methods registered, quote-aware tokenizer added
+- [x] POST-GATE: fail→pass (2 attempts) — fixed multi-word value truncation
+- [x] CHECKPOINT: Committed
+Commit: 65161da
+Summary: All grid.notify.* CLI commands now work through RPC. Added tokenize() to GridCommandRouter for quote-aware command parsing.
+
+### Phase 2: Fix BFD double-fire and simplify toggle
+- [x] PRE-GATE: SKIPPED — simplified pipeline
+- [x] IMPLEMENT: 100ms minimum gap, simplified handlers, moved trackSelf
+- [x] POST-GATE: pass
+- [x] CHECKPOINT: Committed
+Commit: fdf8662
+Summary: BFD enforces 100ms minimum for repeat:false. Toggle handlers are simple show/hide calls. Reconciler handles cell assignment. trackSelf/untrackSelf live in NotificationPanelManager.
