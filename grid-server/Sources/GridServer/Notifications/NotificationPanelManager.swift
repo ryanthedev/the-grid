@@ -53,7 +53,9 @@ class NotificationPanelManager {
         // Refresh notifications before showing
         viewModel?.refreshNotifications()
 
-        // Activate and show; mark visible only after the window is actually ordered in
+        // Switch to .regular so macOS treats our window like any 3rd-party app window.
+        // This makes AX, focus, borders, picker, and tiling all work natively.
+        NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
         isVisible = true
@@ -67,6 +69,8 @@ class NotificationPanelManager {
         isVisible = false
 
         window?.orderOut(nil)
+        // Revert to .accessory so the server disappears from Cmd+Tab / Dock
+        NSApp.setActivationPolicy(.accessory)
         jlog("notify.panel.hide")
     }
 

@@ -805,6 +805,32 @@ actor StateManager: StateEventHandler {
         state.metadata.update()
     }
 
+    /// Register the server's own process as a tracked application so its
+    /// windows are discovered by the tiling pipeline. Call after switching
+    /// to .regular activation policy.
+    func trackSelf() {
+        let app = NSRunningApplication.current
+        let pidKey = String(app.processIdentifier)
+        guard state.applications[pidKey] == nil else { return }
+        state.applications[pidKey] = ApplicationState(from: app)
+        createObserver(for: app)
+        state.metadata.update()
+        jlog("state.trackSelf", data: ["pid": app.processIdentifier])
+    }
+
+    /// Stop tracking the server's own process. Call after switching back
+    /// to .accessory activation policy.
+    func untrackSelf() {
+        let pid = NSRunningApplication.current.processIdentifier
+        let pidKey = String(pid)
+        // Remove windows owned by server
+        state.windows = state.windows.filter { $0.value.pid != pid }
+        state.applications.removeValue(forKey: pidKey)
+        removeObserver(for: pid)
+        state.metadata.update()
+        jlog("state.untrackSelf", data: ["pid": pid])
+    }
+
     /// Re-query and update space assignment for a specific window
     /// Uses geometric derivation from displayUUID, with macOS API as fallback
     private func updateWindowSpaces(_ windowID: UInt32) {
