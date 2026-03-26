@@ -210,6 +210,34 @@ class GridCommandRouter {
     }
 
     // ============================================================
+    // PRIVATE: tokenize -- split a command string into tokens,
+    //          respecting double-quoted strings as single tokens
+    // ============================================================
+
+    private func tokenize(_ input: String) -> [String] {
+        var tokens: [String] = []
+        var current = ""
+        var inQuotes = false
+
+        for ch in input {
+            if ch == "\"" {
+                inQuotes.toggle()
+            } else if ch == " " && !inQuotes {
+                if !current.isEmpty {
+                    tokens.append(current)
+                    current = ""
+                }
+            } else {
+                current.append(ch)
+            }
+        }
+        if !current.isEmpty {
+            tokens.append(current)
+        }
+        return tokens
+    }
+
+    // ============================================================
     // PRIVATE: parse -- split command string into ParsedCommand
     // ============================================================
 
@@ -221,8 +249,8 @@ class GridCommandRouter {
         }
         stripped = stripped.trimmingCharacters(in: .whitespaces)
 
-        // Split on whitespace
-        let tokens = stripped.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+        // Split on whitespace, respecting double-quoted strings
+        let tokens = tokenize(stripped)
 
         // Need at least a domain
         guard !tokens.isEmpty else { return nil }
