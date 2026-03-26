@@ -875,56 +875,27 @@ class GridCommandRouter {
         switch cmd.action {
 
         case "show":
-            // @notify show [--cell <cellID>]
-            // Shows the panel and assigns it to a cell for tiling.
-            let cellID = cmd.flagValues["cell"]
-            let resolved = cellID == nil ? await self.leastPopulatedCell() : nil
-            let targetCell = cellID ?? resolved?.cell
-            let targetSpace = resolved?.space
+            // @notify show
+            // Shows the panel; reconciler handles cell assignment.
             return await gridReconciler.executeAction(label: "notify.show") {
                 await MainActor.run {
                     NotificationPanelManager.shared.show()
-                }
-                await self.stateManager.trackSelf()
-                if let targetCell = targetCell {
-                    return await self.assignNotifyPanel(toCellID: targetCell, inSpace: targetSpace)
                 }
                 return .ok("notification panel shown")
             }
 
         case "hide":
             return await gridReconciler.executeAction(label: "notify.hide") {
-                await self.unassignNotifyPanel()
                 await MainActor.run {
                     NotificationPanelManager.shared.hide()
                 }
-                await self.stateManager.untrackSelf()
                 return .ok("notification panel hidden")
             }
 
         case "toggle":
-            let cellID = cmd.flagValues["cell"]
-            // Resolve state BEFORE entering executeAction/show to avoid
-            // actor contention with events triggered by window activation.
-            let wasVisible = await MainActor.run { NotificationPanelManager.shared.isVisible }
-            let resolved = (!wasVisible && cellID == nil) ? await self.leastPopulatedCell() : nil
-            let targetCell = cellID ?? resolved?.cell
-            let targetSpace = resolved?.space
             return await gridReconciler.executeAction(label: "notify.toggle") {
-                if wasVisible {
-                    await self.unassignNotifyPanel()
-                    await MainActor.run {
-                        NotificationPanelManager.shared.hide()
-                    }
-                    await self.stateManager.untrackSelf()
-                } else {
-                    await MainActor.run {
-                        NotificationPanelManager.shared.show()
-                    }
-                    await self.stateManager.trackSelf()
-                    if let targetCell = targetCell {
-                        return await self.assignNotifyPanel(toCellID: targetCell, inSpace: targetSpace)
-                    }
+                await MainActor.run {
+                    NotificationPanelManager.shared.toggle()
                 }
                 return .ok("notification panel toggled")
             }
@@ -935,13 +906,37 @@ class GridCommandRouter {
                 return .error("missing cell ID")
             }
             return await gridReconciler.executeAction(label: "notify.assign") {
-                return await self.assignNotifyPanel(toCellID: cellID)
+                guard let windowNumber = await MainActor.run(body: { NotificationPanelManager.shared.windowNumber }) else {
+                    return .error("notification panel not visible")
+                }
+                let windowID = UInt32(windowNumber)
+                guard let spaceID = await self.resolveActiveSpaceID() else {
+                    return .error("no active space")
+                }
+                await self.gridState.assignWindow(windowID, toCellID: cellID, inSpace: spaceID)
+                let layoutID = await self.gridState.getCurrentLayout(spaceID: spaceID)
+                if !layoutID.isEmpty {
+                    try? await self.gridApply.applyLayout(spaceID: spaceID, layoutID: layoutID)
+                }
+                jlog("notify.panel.assign", data: ["cell": cellID, "wid": windowID, "sid": spaceID])
+                return .ok("assigned to cell \(cellID)")
             }
 
         case "unassign":
             // @notify unassign
             return await gridReconciler.executeAction(label: "notify.unassign") {
-                await self.unassignNotifyPanel()
+                guard let windowNumber = await MainActor.run(body: { NotificationPanelManager.shared.windowNumber }) else {
+                    return .ok("notification panel unassigned")
+                }
+                let windowID = UInt32(windowNumber)
+                await self.gridState.removeWindowFromAllSpaces(windowID)
+                if let spaceID = await self.resolveActiveSpaceID() {
+                    let layoutID = await self.gridState.getCurrentLayout(spaceID: spaceID)
+                    if !layoutID.isEmpty {
+                        try? await self.gridApply.applyLayout(spaceID: spaceID, layoutID: layoutID)
+                    }
+                }
+                jlog("notify.panel.unassign")
                 return .ok("notification panel unassigned")
             }
 
@@ -1040,68 +1035,6 @@ class GridCommandRouter {
         default:
             return .error("unknown notify action: \(cmd.action)")
         }
-    }
-
-    // MARK: - Notify Panel Cell Assignment
-
-    // Assigns the notification panel's window to a cell in the current space.
-    // The server switches to .regular policy when the panel is shown, so
-    // StateManager discovers it naturally — no special registration needed.
-    private func assignNotifyPanel(toCellID cellID: String, inSpace explicitSpace: String? = nil) async -> CommandResult {
-        guard let windowNumber = await MainActor.run(body: { NotificationPanelManager.shared.windowNumber }) else {
-            return .error("notification panel not visible")
-        }
-        let windowID = UInt32(windowNumber)
-
-        let spaceID: String
-        if let explicit = explicitSpace {
-            spaceID = explicit
-        } else {
-            guard let resolved = await resolveActiveSpaceID() else {
-                return .error("no active space")
-            }
-            spaceID = resolved
-        }
-
-        await gridState.assignWindow(windowID, toCellID: cellID, inSpace: spaceID)
-
-        let layoutID = await gridState.getCurrentLayout(spaceID: spaceID)
-        if !layoutID.isEmpty {
-            try? await gridApply.applyLayout(spaceID: spaceID, layoutID: layoutID)
-        }
-
-        jlog("notify.panel.assign", data: ["cell": cellID, "wid": windowID, "sid": spaceID])
-        return .ok("assigned to cell \(cellID)")
-    }
-
-    // Removes the notification panel's window from all grid cells.
-    private func unassignNotifyPanel() async {
-        guard let windowNumber = await MainActor.run(body: { NotificationPanelManager.shared.windowNumber }) else {
-            return
-        }
-        let windowID = UInt32(windowNumber)
-        await gridState.removeWindowFromAllSpaces(windowID)
-
-        // Refresh layout so remaining windows fill the freed space
-        if let spaceID = await resolveActiveSpaceID() {
-            let layoutID = await gridState.getCurrentLayout(spaceID: spaceID)
-            if !layoutID.isEmpty {
-                try? await gridApply.applyLayout(spaceID: spaceID, layoutID: layoutID)
-            }
-        }
-
-        jlog("notify.panel.unassign")
-    }
-
-    // Returns (cellID, spaceID) with fewest windows in the current space, or nil.
-    private func leastPopulatedCell() async -> (cell: String, space: String)? {
-        guard let spaceID = await resolveActiveSpaceID() else { return nil }
-        let assignments = await gridState.getWindowAssignments(spaceID: spaceID)
-        guard !assignments.isEmpty else { return nil }
-        guard let cell = assignments.keys.sorted().min(by: { a, b in
-            (assignments[a]?.count ?? 0) < (assignments[b]?.count ?? 0)
-        }) else { return nil }
-        return (cell, spaceID)
     }
 
     // Parses action string "focus:<wid>", "exec:<cmd>", "url:<url>"

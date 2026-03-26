@@ -56,6 +56,9 @@ class NotificationPanelManager {
         // Switch to .regular so macOS treats our window like any 3rd-party app window.
         // This makes AX, focus, borders, picker, and tiling all work natively.
         NSApp.setActivationPolicy(.regular)
+        // trackSelf after policy switch so StateManager discovers us before the
+        // window becomes visible and the reconciler runs.
+        Task { await StateManager.shared.trackSelf() }
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
         isVisible = true
@@ -69,6 +72,9 @@ class NotificationPanelManager {
         isVisible = false
 
         window?.orderOut(nil)
+        // untrackSelf after window is hidden but before reverting policy,
+        // so StateManager removes our windows cleanly.
+        Task { await StateManager.shared.untrackSelf() }
         // Revert to .accessory so the server disappears from Cmd+Tab / Dock
         NSApp.setActivationPolicy(.accessory)
         jlog("notify.panel.hide")
