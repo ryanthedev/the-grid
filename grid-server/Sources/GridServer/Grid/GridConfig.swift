@@ -72,6 +72,7 @@ struct GridAppRuleYAML: Codable {
     var preferredCell: String?
     var layouts: [String]?
     var float: Bool?
+    var locked: Bool?
     var preferredStackMode: String?
 }
 
@@ -144,6 +145,7 @@ struct GridAppRule: Sendable {
     var preferredCell: String?
     var layouts: [String]?
     var float: Bool
+    var locked: Bool
     var preferredStackMode: GridStackMode?
 }
 
@@ -862,20 +864,45 @@ final class GridConfig {
     }
 
     private func parseAppRules(from dict: [String: Any]) throws {
-        guard let rulesRaw = dict["appRules"] else {
+        if let rulesRaw = dict["appRules"] {
+            let yamlStr = try Yams.dump(object: rulesRaw)
+            let rulesYAML = try YAMLDecoder().decode([GridAppRuleYAML].self, from: yamlStr)
+            appRules = rulesYAML.map { r in
+                GridAppRule(
+                    app: r.app,
+                    preferredCell: r.preferredCell,
+                    layouts: r.layouts,
+                    float: r.float ?? false,
+                    locked: r.locked ?? false,
+                    preferredStackMode: r.preferredStackMode.flatMap { GridStackMode(rawValue: $0) }
+                )
+            }
+        } else {
             appRules = []
-            return
         }
-        let yamlStr = try Yams.dump(object: rulesRaw)
-        let rulesYAML = try YAMLDecoder().decode([GridAppRuleYAML].self, from: yamlStr)
-        appRules = rulesYAML.map { r in
+
+        // Append built-in rules that aren't overridden by user config
+        appendBuiltinAppRules()
+    }
+
+    // Built-in app rules appended after user config parsing.
+    // User rules take precedence: if a rule with the same `app` already exists, the builtin is skipped.
+    private func appendBuiltinAppRules() {
+        let builtinRules: [GridAppRule] = [
             GridAppRule(
-                app: r.app,
-                preferredCell: r.preferredCell,
-                layouts: r.layouts,
-                float: r.float ?? false,
-                preferredStackMode: r.preferredStackMode.flatMap { GridStackMode(rawValue: $0) }
-            )
+                app: "com.thegrid.notify",
+                preferredCell: "notify",
+                float: false,
+                locked: true,
+                preferredStackMode: nil
+            ),
+        ]
+
+        let existingApps = Set(appRules.map { $0.app })
+        for builtin in builtinRules {
+            if !existingApps.contains(builtin.app) {
+                appRules.append(builtin)
+            }
         }
     }
 

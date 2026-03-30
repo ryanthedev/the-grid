@@ -31,6 +31,11 @@ class GridReconciler: StateEventHandler {
     // that keeps the validator (and its periodic timer) alive for process lifetime
     private var stateValidator: StateValidator?
 
+    // Focus sweep: periodic timer that compares OS focus against GridState
+    // and corrects drift from late/stale events.
+    private var sweepTimer: DispatchSourceTimer?
+    private let sweepInterval: TimeInterval = 0.3
+
     // Guards user commands during sleep/wake recovery.
     // Non-nil only while handleSystemWake is in progress.
     // Commands call awaitWakeCompletion() to wait for this to finish.
@@ -281,7 +286,74 @@ class GridReconciler: StateEventHandler {
             await EventRouter.shared.register(self)
         }
 
+        startSweepTimer()
         jlog("reconcile.init")
+    }
+
+    // MARK: - Focus Sweep
+
+    // Start the periodic focus sweep timer.
+    // Fires every 300ms on a utility queue; the actual work hops to the
+    // reconciler's context via Task.
+    private func startSweepTimer() {
+        let queue = DispatchQueue(label: "com.thegrid.focussweep", qos: .userInteractive)
+        let source = DispatchSource.makeTimerSource(queue: queue)
+        source.schedule(
+            deadline: .now() + sweepInterval,
+            repeating: sweepInterval,
+            leeway: .milliseconds(50)
+        )
+        source.setEventHandler { [weak self] in
+            guard let self else { return }
+            Task { await self.focusSweep() }
+        }
+        sweepTimer = source
+        source.resume()
+        jlog("sweep.timer.start", data: ["intervalMs": Int(sweepInterval * 1000)])
+    }
+
+    // Compare OS-level focused window against GridState focus.
+    // If they diverge, correct GridState and sync borders.
+    private func focusSweep() async {
+        // Skip during suppressed actions — the action owns focus
+        guard !suppressReconciliation else { return }
+        guard let gridState, let stateManager else { return }
+
+        let wmState = await stateManager.getState()
+        guard let osWindowID = wmState.metadata.focusedWindowID, osWindowID != 0 else { return }
+
+        // Resolve which display/space the OS-focused window is on
+        guard let spaceID = await gridState.findSpaceContaining(windowID: osWindowID) else { return }
+
+        // Compare against GridState's focused window for that space
+        let gridFocusedWID = await gridState.getFocusedWindow(spaceID: spaceID)
+        guard gridFocusedWID != osWindowID else { return }
+
+        // Mismatch — correct GridState
+        let cellID = await gridState.getWindowCell(windowID: osWindowID, inSpace: spaceID)
+        guard let cellID else { return }
+
+        let cellWindows = await gridState.getCellWindows(spaceID: spaceID, cellID: cellID)
+        let windowIndex = cellWindows.firstIndex(of: osWindowID) ?? 0
+        await gridState.setFocus(spaceID: spaceID, cellID: cellID, windowIndex: windowIndex)
+
+        // Find display for this space and sync borders
+        let displayUUID = findDisplayUUIDForSpace(spaceID, from: wmState)
+            ?? findCurrentDisplayUUID(from: wmState)
+        guard let displayUUID else { return }
+
+        simpleBorderManager?.updateFocus(
+            newFocusedWindow: osWindowID,
+            displayUUID: displayUUID
+        )
+        await syncBordersForSpace(spaceID, displayUUID: displayUUID)
+
+        jlog("sweep.correct", data: [
+            "osWid": osWindowID,
+            "gridWid": gridFocusedWID,
+            "cell": cellID,
+            "space": spaceID,
+        ])
     }
 
     // MARK: - StateEventHandler
@@ -424,17 +496,38 @@ class GridReconciler: StateEventHandler {
             }
         }
 
-        // Auto-assign: find least-populated cell
-        let leastPopulatedCell = findLeastPopulatedCell(assignments)
+        // Check locked rules: if window matches a locked app rule, assign to its reserved cell
+        let appRules = await MainActor.run { gridConfig?.appRules ?? [] }
+        let bundleID = wmState.applications[String(windowState.pid)]?.bundleIdentifier
+        let lockedCell = getLockedCell(
+            appName: appName,
+            bundleID: bundleID,
+            appRules: appRules
+        )
 
-        if !leastPopulatedCell.isEmpty {
-            await gridState.assignWindow(windowID, toCellID: leastPopulatedCell, inSpace: spaceID)
+        if let lockedCell, assignments[lockedCell] != nil {
+            await gridState.assignWindow(windowID, toCellID: lockedCell, inSpace: spaceID)
+            await syncBordersForCurrentSpace()
+            jlog("reconcile.win.create.locked", data: [
+                "wid": windowID,
+                "cell": lockedCell,
+                "app": appName,
+            ])
+            return
+        }
+
+        // Auto-assign: find least-populated cell, skipping locked cells
+        let locked = lockedCellIDs(appRules: appRules)
+        let targetCell = findLeastPopulatedCell(assignments, excludeCells: locked)
+
+        if !targetCell.isEmpty {
+            await gridState.assignWindow(windowID, toCellID: targetCell, inSpace: spaceID)
 
             // Sync borders after assignment
             await syncBordersForCurrentSpace()
         }
 
-        jlog("reconcile.win.create", data: ["wid": windowID, "cell": leastPopulatedCell])
+        jlog("reconcile.win.create", data: ["wid": windowID, "cell": targetCell])
     }
 
     private func handlePendingLaunchWindow(_ windowID: UInt32, _ pid: pid_t) async {
@@ -901,8 +994,12 @@ class GridReconciler: StateEventHandler {
         return nil
     }
 
-    private func findLeastPopulatedCell(_ assignments: [String: [UInt32]]) -> String {
-        return assignments.keys.sorted().min { a, b in
+    private func findLeastPopulatedCell(
+        _ assignments: [String: [UInt32]],
+        excludeCells: Set<String> = []
+    ) -> String {
+        let candidates = assignments.keys.filter { !excludeCells.contains($0) }
+        return candidates.sorted().min { a, b in
             (assignments[a]?.count ?? 0) < (assignments[b]?.count ?? 0)
         } ?? ""
     }

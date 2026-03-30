@@ -195,6 +195,35 @@ private func getPreferredCell(
     return nil
 }
 
+/// Get locked cell for a window (locked rule = preferredCell + exclusive).
+/// Returns the cell ID if the window matches a locked rule, nil otherwise.
+func getLockedCell(
+    appName: String,
+    bundleID: String?,
+    appRules: [GridAppRule]
+) -> String? {
+    for rule in appRules {
+        if rule.locked,
+           let cell = rule.preferredCell, !cell.isEmpty,
+           matchesAppRule(appName: appName, bundleID: bundleID, rule: rule) {
+            return cell
+        }
+    }
+    return nil
+}
+
+/// Collect all cell IDs reserved by locked rules.
+/// Non-matching windows must never be assigned to these cells.
+func lockedCellIDs(appRules: [GridAppRule]) -> Set<String> {
+    var result = Set<String>()
+    for rule in appRules {
+        if rule.locked, let cell = rule.preferredCell, !cell.isEmpty {
+            result.insert(cell)
+        }
+    }
+    return result
+}
+
 // MARK: - Main Assignment Entry Point
 
 enum GridAssignment {
@@ -253,33 +282,60 @@ enum GridAssignment {
             tileable.append(window)
         }
 
-        // Phase 2: Apply assignment strategy to tileable windows
+        // Phase 1.5: Handle locked cells before strategy assignment.
+        // Windows matching a locked rule go directly to their reserved cell.
+        // Remaining windows proceed to the strategy, which skips locked cells.
+        let locked = lockedCellIDs(appRules: appRules)
+        var tileableAfterLocked: [WindowState] = []
+
+        for window in tileable {
+            let appName = window.appName ?? ""
+            let bundleID = bundleIDLookup(window.pid)
+            let lockedCell = getLockedCell(
+                appName: appName,
+                bundleID: bundleID,
+                appRules: appRules
+            )
+
+            if let lockedCell, result.assignments[lockedCell] != nil {
+                // Window matches a locked rule and the cell exists in this layout
+                result.assignments[lockedCell]!.append(window.id)
+            } else {
+                tileableAfterLocked.append(window)
+            }
+        }
+
+        // Phase 2: Apply assignment strategy to remaining (non-locked) windows
         switch strategy {
         case .pinned:
             assignPinned(
-                windows: tileable,
+                windows: tileableAfterLocked,
                 layout: layout,
                 appRules: appRules,
+                lockedCells: locked,
                 bundleIDLookup: bundleIDLookup,
                 result: &result
             )
         case .preserve:
             assignPreserve(
-                windows: tileable,
+                windows: tileableAfterLocked,
                 layout: layout,
+                lockedCells: locked,
                 previousAssignments: previousAssignments,
                 result: &result
             )
         case .autoFlow:
             assignAutoFlow(
-                windows: tileable,
+                windows: tileableAfterLocked,
                 layout: layout,
+                lockedCells: locked,
                 cellBounds: cellBounds,
                 result: &result
             )
         case .position:
             assignByPosition(
-                windows: tileable,
+                windows: tileableAfterLocked,
+                lockedCells: locked,
                 cellBounds: cellBounds,
                 result: &result
             )
@@ -294,6 +350,7 @@ enum GridAssignment {
     private static func assignAutoFlow(
         windows: [WindowState],
         layout: GridLayoutDef,
+        lockedCells: Set<String>,
         cellBounds: [String: CGRect],
         result: inout GridAssignmentResult
     ) {
@@ -309,6 +366,11 @@ enum GridAssignment {
             sortedCells = layout.cells.map { $0.id }
         }
 
+        // Skip locked cells — non-matching windows must not land there
+        sortedCells = sortedCells.filter { !lockedCells.contains($0) }
+
+        guard !sortedCells.isEmpty else { return }
+
         // Round-robin: window[i] goes to cell[i % cellCount]
         for (i, window) in windows.enumerated() {
             let cellID = sortedCells[i % sortedCells.count]
@@ -321,6 +383,7 @@ enum GridAssignment {
         windows: [WindowState],
         layout: GridLayoutDef,
         appRules: [GridAppRule],
+        lockedCells: Set<String>,
         bundleIDLookup: (pid_t) -> String?,
         result: inout GridAssignmentResult
     ) {
@@ -344,16 +407,20 @@ enum GridAssignment {
         }
 
         // Second pass: distribute unpinned to empty cells first, then least-populated
+        // Skip locked cells — they are reserved for their matching app
         if !unpinned.isEmpty {
             let emptyCells = result.assignments.keys
-                .filter { result.assignments[$0]?.isEmpty == true }
+                .filter { result.assignments[$0]?.isEmpty == true && !lockedCells.contains($0) }
                 .sorted()
 
             for (i, window) in unpinned.enumerated() {
                 if i < emptyCells.count {
                     result.assignments[emptyCells[i]]!.append(window.id)
                 } else {
-                    let cellID = findLeastPopulatedCell(assignments: result.assignments)
+                    let cellID = findLeastPopulatedCell(
+                        assignments: result.assignments,
+                        excludeCells: lockedCells
+                    )
                     result.assignments[cellID, default: []].append(window.id)
                 }
             }
@@ -364,6 +431,7 @@ enum GridAssignment {
     private static func assignPreserve(
         windows: [WindowState],
         layout: GridLayoutDef,
+        lockedCells: Set<String>,
         previousAssignments: [String: [UInt32]],
         result: inout GridAssignmentResult
     ) {
@@ -388,8 +456,12 @@ enum GridAssignment {
         }
 
         // Second pass: auto-flow unassigned to least-populated cells
+        // Skip locked cells — they are reserved for their matching app
         for window in unassigned {
-            let cellID = findLeastPopulatedCell(assignments: result.assignments)
+            let cellID = findLeastPopulatedCell(
+                assignments: result.assignments,
+                excludeCells: lockedCells
+            )
             result.assignments[cellID, default: []].append(window.id)
         }
 
@@ -427,6 +499,7 @@ enum GridAssignment {
     /// Assign each window to the cell with maximum frame overlap.
     private static func assignByPosition(
         windows: [WindowState],
+        lockedCells: Set<String>,
         cellBounds: [String: CGRect],
         result: inout GridAssignmentResult
     ) {
@@ -440,7 +513,8 @@ enum GridAssignment {
             var bestCell = ""
             var bestOverlap = 0.0
 
-            for (cellID, bounds) in cellBounds {
+            // Skip locked cells when computing overlap
+            for (cellID, bounds) in cellBounds where !lockedCells.contains(cellID) {
                 let overlap = window.frame.overlapArea(with: bounds)
                 if overlap > bestOverlap {
                     bestOverlap = overlap
@@ -451,8 +525,11 @@ enum GridAssignment {
             if !bestCell.isEmpty {
                 result.assignments[bestCell, default: []].append(window.id)
             } else {
-                // No overlap with any cell -- assign to least populated
-                let cellID = findLeastPopulatedCell(assignments: result.assignments)
+                // No overlap with any non-locked cell -- assign to least populated
+                let cellID = findLeastPopulatedCell(
+                    assignments: result.assignments,
+                    excludeCells: lockedCells
+                )
                 result.assignments[cellID, default: []].append(window.id)
             }
         }
@@ -475,10 +552,13 @@ enum GridAssignment {
 
     /// Return cellID with fewest assigned windows.
     /// Alphabetical tiebreaker for determinism.
+    /// Optionally excludes specific cells (e.g., locked cells).
     private static func findLeastPopulatedCell(
-        assignments: [String: [UInt32]]
+        assignments: [String: [UInt32]],
+        excludeCells: Set<String> = []
     ) -> String {
-        return assignments.keys.sorted().min { a, b in
+        let candidates = assignments.keys.filter { !excludeCells.contains($0) }
+        return candidates.sorted().min { a, b in
             (assignments[a]?.count ?? 0) < (assignments[b]?.count ?? 0)
         } ?? ""
     }
