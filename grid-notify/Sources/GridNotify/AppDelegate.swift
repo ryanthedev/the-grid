@@ -17,8 +17,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             "ver": GridNotifyVersion,
             "commit": GridNotifyCommit
         ])
-        print("logging to \(JSONLogger.shared.getLogPath())")
-
         // Set activation policy to .regular (visible app)
         NSApp.setActivationPolicy(.regular)
 
