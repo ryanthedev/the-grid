@@ -233,76 +233,6 @@ func parseSpan(_ span: String) throws -> (start: Int, end: Int) {
     return (start, end)
 }
 
-// MARK: - Notifications Config (YAML decode structs, private to this file)
-
-// Private Codable structs used only inside parseNotifications(from:).
-// All YAML key names match config.yaml exactly.
-private struct NotificationsYAML: Codable {
-    // notifications:
-    //   theme:
-    //     background: "#121212"
-    //     ... (all NotificationPanelTheme field names, by their Swift camelCase names)
-    var theme: [String: String]?
-
-    // notifications:
-    //   max_count: 200
-    var maxCount: Int?
-
-    // notifications:
-    //   event_rules:
-    //     "ev.win.create":
-    //       title: "Window Created"
-    //       body: "{event}"
-    //       priority: "normal"
-    var eventRules: [String: EventRuleYAML]?
-
-    // notifications:
-    //   file_watcher:
-    //     path: "~/.local/state/thegrid/notify.pipe"
-    //     source_label: "pipe"
-    var fileWatcher: FileWatcherYAML?
-
-    enum CodingKeys: String, CodingKey {
-        case theme
-        case maxCount = "max_count"
-        case eventRules = "event_rules"
-        case fileWatcher = "file_watcher"
-    }
-}
-
-private struct EventRuleYAML: Codable {
-    var title: String
-    var body: String?
-    var priority: String?
-}
-
-private struct FileWatcherYAML: Codable {
-    var path: String?
-    var sourceLabel: String?
-
-    enum CodingKeys: String, CodingKey {
-        case path
-        case sourceLabel = "source_label"
-    }
-}
-
-// MARK: - GridNotificationsConfig
-
-// Runtime representation of the notifications: config section.
-// Callers access via gridConfig.notifications; no YAML details leak out.
-struct GridNotificationsConfig: Sendable {
-    // Keyed by event logInfo name (e.g. "ev.win.create"). Empty = no event notifications.
-    var eventRules: [String: EventNotificationRule] = [:]
-    // Path to watch for pipe/file notifications. Empty string = watcher disabled.
-    var watcherPath: String = ""
-    // Source label written into GridNotification.source for notifications from this watcher.
-    var watcherSourceLabel: String = "pipe"
-    // Maximum stored non-pinned notifications; 0 = unlimited.
-    var maxCount: Int = 0
-    // Raw hex color dict passed directly to NotificationPanelTheme.init(from:). Empty = use defaults.
-    var themeColors: [String: String] = [:]
-}
-
 // MARK: - GridConfig
 
 @MainActor
@@ -312,7 +242,6 @@ final class GridConfig {
     private(set) var layoutOverrides: [String: GridLayoutOverrideYAML] = [:]
     private(set) var spaces: [String: GridSpaceConfig] = [:]
     private(set) var appRules: [GridAppRule] = []
-    private(set) var notifications: GridNotificationsConfig = GridNotificationsConfig()
 
     // Absorbed from ServerConfig
     private(set) var windowBlacklist: [String] = []
@@ -387,7 +316,6 @@ final class GridConfig {
         try parseSpaces(from: merged)
         try parseAppRules(from: merged)
         parseServerFields(from: merged)
-        parseNotifications(from: merged)
 
         // Bridge border config to BorderConfigManager
         if let borders = merged["borders"] as? [String: Any] {
@@ -936,60 +864,6 @@ final class GridConfig {
         }
     }
 
-    private func parseNotifications(from dict: [String: Any]) {
-        guard let raw = dict["notifications"] as? [String: Any] else {
-            // No notifications section -- reset to defaults (supports removing config)
-            notifications = GridNotificationsConfig()
-            return
-        }
-
-        do {
-            let yamlStr = try Yams.dump(object: raw)
-            let decoded = try YAMLDecoder().decode(NotificationsYAML.self, from: yamlStr)
-
-            var config = GridNotificationsConfig()
-
-            // Theme colors: pass raw [String: String] dict directly to NotificationPanelTheme
-            if let themeDict = decoded.theme {
-                config.themeColors = themeDict
-            }
-
-            // Max count: 0 means unlimited; negative values are ignored
-            if let mc = decoded.maxCount, mc > 0 {
-                config.maxCount = mc
-            }
-
-            // Event rules: map from YAML structs to runtime value types
-            if let rulesRaw = decoded.eventRules {
-                for (eventName, ruleYAML) in rulesRaw {
-                    let priority = GridNotificationPriority(rawValue: ruleYAML.priority ?? "normal")
-                        ?? .normal
-                    config.eventRules[eventName] = EventNotificationRule(
-                        title: ruleYAML.title,
-                        body: ruleYAML.body ?? "",
-                        priority: priority
-                    )
-                }
-            }
-
-            // File watcher path: expand tilde so the watcher receives an absolute path
-            if let fw = decoded.fileWatcher {
-                config.watcherPath = expandTilde(fw.path ?? "")
-                config.watcherSourceLabel = fw.sourceLabel ?? "pipe"
-            }
-
-            notifications = config
-            JSONLogger.shared.log("grid.cfg.notifications", data: [
-                "event_rules": config.eventRules.count,
-                "watcher_path": config.watcherPath,
-                "max_count": config.maxCount
-            ])
-        } catch {
-            // Log and keep defaults -- malformed notifications section should not crash server
-            JSONLogger.shared.log("err.grid.cfg.notifications", msg: "failed to parse", data: ["err": "\(error)"])
-            notifications = GridNotificationsConfig()
-        }
-    }
 
     // MARK: - Layout Conversion
 

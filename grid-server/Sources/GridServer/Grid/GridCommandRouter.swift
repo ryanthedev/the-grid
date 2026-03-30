@@ -44,7 +44,6 @@ class GridCommandRouter {
     private let simpleBorderManager: SimpleBorderManager
     private let gridRecorder: GridRecorder
     private let gridTerminalManager: GridTerminalManager
-    private let notificationStore: NotificationStore
 
     // Non-nil while a nudge session is active — owns the CGEventTap for that session
     private var nudgeKeyHandler: NudgeKeyHandler?
@@ -74,8 +73,7 @@ class GridCommandRouter {
         gridReconciler: GridReconciler,
         simpleBorderManager: SimpleBorderManager,
         gridRecorder: GridRecorder,
-        gridTerminalManager: GridTerminalManager,
-        notificationStore: NotificationStore
+        gridTerminalManager: GridTerminalManager
     ) {
         self.gridFocus = gridFocus
         self.gridCellOps = gridCellOps
@@ -91,7 +89,6 @@ class GridCommandRouter {
         self.simpleBorderManager = simpleBorderManager
         self.gridRecorder = gridRecorder
         self.gridTerminalManager = gridTerminalManager
-        self.notificationStore = notificationStore
 
         // Wire feature modules via their setup() methods
         gridFocus.setup(
@@ -198,8 +195,6 @@ class GridCommandRouter {
                 // Suppression managed via beginAction/endAction inside handleNudge --
                 // enter starts the session, exit ends it. No executeAction wrapper here.
                 return await handleNudge(parsed)
-            case "notify":
-                return await handleNotify(parsed)
             default:
                 return .error("unknown domain: \(parsed.domain)")
             }
@@ -871,200 +866,6 @@ class GridCommandRouter {
     // PRIVATE: handleNotify
     // ============================================================
 
-    private func handleNotify(_ cmd: ParsedCommand) async -> CommandResult {
-        switch cmd.action {
-
-        case "show":
-            // @notify show
-            // Shows the panel; reconciler handles cell assignment.
-            return await gridReconciler.executeAction(label: "notify.show") {
-                await MainActor.run {
-                    NotificationPanelManager.shared.show()
-                }
-                return .ok("notification panel shown")
-            }
-
-        case "hide":
-            return await gridReconciler.executeAction(label: "notify.hide") {
-                await MainActor.run {
-                    NotificationPanelManager.shared.hide()
-                }
-                return .ok("notification panel hidden")
-            }
-
-        case "toggle":
-            return await gridReconciler.executeAction(label: "notify.toggle") {
-                await MainActor.run {
-                    NotificationPanelManager.shared.toggle()
-                }
-                return .ok("notification panel toggled")
-            }
-
-        case "assign":
-            // @notify assign <cellID>
-            guard let cellID = cmd.args.first, !cellID.isEmpty else {
-                return .error("missing cell ID")
-            }
-            return await gridReconciler.executeAction(label: "notify.assign") {
-                guard let windowNumber = await MainActor.run(body: { NotificationPanelManager.shared.windowNumber }) else {
-                    return .error("notification panel not visible")
-                }
-                let windowID = UInt32(windowNumber)
-                guard let spaceID = await self.resolveActiveSpaceID() else {
-                    return .error("no active space")
-                }
-                await self.gridState.assignWindow(windowID, toCellID: cellID, inSpace: spaceID)
-                let layoutID = await self.gridState.getCurrentLayout(spaceID: spaceID)
-                if !layoutID.isEmpty {
-                    try? await self.gridApply.applyLayout(spaceID: spaceID, layoutID: layoutID)
-                }
-                jlog("notify.panel.assign", data: ["cell": cellID, "wid": windowID, "sid": spaceID])
-                return .ok("assigned to cell \(cellID)")
-            }
-
-        case "unassign":
-            // @notify unassign
-            return await gridReconciler.executeAction(label: "notify.unassign") {
-                guard let windowNumber = await MainActor.run(body: { NotificationPanelManager.shared.windowNumber }) else {
-                    return .ok("notification panel unassigned")
-                }
-                let windowID = UInt32(windowNumber)
-                await self.gridState.removeWindowFromAllSpaces(windowID)
-                if let spaceID = await self.resolveActiveSpaceID() {
-                    let layoutID = await self.gridState.getCurrentLayout(spaceID: spaceID)
-                    if !layoutID.isEmpty {
-                        try? await self.gridApply.applyLayout(spaceID: spaceID, layoutID: layoutID)
-                    }
-                }
-                jlog("notify.panel.unassign")
-                return .ok("notification panel unassigned")
-            }
-
-        case "push":
-            // args[0] = title (required)
-            // --body, --priority, --source, --action are optional flags
-            guard let title = cmd.args.first, !title.isEmpty else {
-                return .error("missing title")
-            }
-
-            let body = cmd.flagValues["body"] ?? ""
-            let source = cmd.flagValues["source"] ?? "rpc"
-            let priorityStr = cmd.flagValues["priority"] ?? "normal"
-            let priority = GridNotificationPriority(rawValue: priorityStr) ?? .normal
-
-            // Parse action string: "focus:<wid>", "exec:<cmd>", "url:<url>"
-            let action: GridNotificationAction? = parseNotificationAction(cmd.flagValues["action"])
-
-            let notification = GridNotification(
-                source: source,
-                title: title,
-                body: body,
-                priority: priority,
-                action: action
-            )
-
-            let stored = await notificationStore.add(notification)
-
-            // Refresh panel if visible
-            await MainActor.run {
-                if NotificationPanelManager.shared.isVisible {
-                    NotificationPanelManager.shared.currentViewModel?.refreshNotifications()
-                }
-            }
-
-            return .ok(stored.id)
-
-        case "list":
-            // Build filter from flags
-            var filter = GridNotificationFilter.active
-            if let source = cmd.flagValues["source"] {
-                filter.sources = [source]
-            }
-            if let priorityStr = cmd.flagValues["priority"] {
-                filter.minPriority = GridNotificationPriority(rawValue: priorityStr)
-            }
-            if cmd.flags.contains("all") {
-                filter.includeDismissed = true
-            }
-
-            let notifications = await notificationStore.notifications(filter: filter)
-
-            // Encode as JSON array string
-            let encoder = JSONEncoder()
-            encoder.dateEncodingStrategy = .iso8601
-            if let data = try? encoder.encode(notifications),
-               let jsonString = String(data: data, encoding: .utf8) {
-                return .ok(jsonString)
-            }
-            return .ok("[]")
-
-        case "dismiss":
-            guard let id = cmd.args.first else {
-                return .error("missing notification id")
-            }
-            let ok = await notificationStore.dismiss(id: id)
-            if ok {
-                await MainActor.run {
-                    if NotificationPanelManager.shared.isVisible {
-                        NotificationPanelManager.shared.currentViewModel?.refreshNotifications()
-                    }
-                }
-                return .ok("dismissed")
-            } else {
-                return .error("notification not found or already dismissed")
-            }
-
-        case "clear":
-            if cmd.flags.contains("purge") {
-                let count = await notificationStore.purge()
-                return .ok("purged \(count)")
-            } else {
-                let count = await notificationStore.bulkDismiss()
-                await MainActor.run {
-                    if NotificationPanelManager.shared.isVisible {
-                        NotificationPanelManager.shared.currentViewModel?.refreshNotifications()
-                    }
-                }
-                return .ok("dismissed \(count)")
-            }
-
-        case "count":
-            let count = await notificationStore.count()
-            return .ok("\(count)")
-
-        default:
-            return .error("unknown notify action: \(cmd.action)")
-        }
-    }
-
-    // Parses action string "focus:<wid>", "exec:<cmd>", "url:<url>"
-    // Split on first ":" only (payload may contain colons).
-    private func parseNotificationAction(_ actionString: String?) -> GridNotificationAction? {
-        guard let actionString = actionString, !actionString.isEmpty else {
-            return nil
-        }
-        guard let colonIndex = actionString.firstIndex(of: ":") else {
-            return nil
-        }
-        let type = String(actionString[actionString.startIndex..<colonIndex])
-        let payload = String(actionString[actionString.index(after: colonIndex)...])
-
-        switch type {
-        case "focus":
-            guard let windowID = UInt32(payload) else { return nil }
-            return .focusWindow(windowID: windowID)
-        case "exec":
-            // Empty command payload produces a nonsensical action; reject it.
-            guard !payload.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
-            return .runShellCommand(command: payload)
-        case "url":
-            // Empty URL payload produces a nonsensical action; reject it.
-            guard !payload.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
-            return .openURL(url: payload)
-        default:
-            return nil
-        }
-    }
 
     private func parseRecordingTarget(action: String, args: [String]) -> RecordingTarget {
         let targetStr = args.first ?? "cell"
