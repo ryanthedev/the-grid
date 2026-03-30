@@ -46,3 +46,8 @@ dist/
 *.local.yaml
 config.local.yaml
 bfd.local.yaml
+
+# GridNotify
+grid-notify/.build/
+grid-notify/.swiftpm/
+grid-notify/Package.resolved
