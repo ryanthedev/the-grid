@@ -310,12 +310,15 @@ def poll_new_messages(db, last_rowid, whitelist):
 def format_notification(msg, config):
     """Build a JSON notification payload for the GridNotify pipe."""
     handle = msg["handle_id"]
+    # Absolute path to this script for detail_cmd
+    script_path = os.path.abspath(__file__)
     notification = {
         "id": f"imsg-{handle}",
         "title": handle,
         "body": msg["body"],
         "ttl": config["ttl"],
         "warn_before": config["warn_before"],
+        "detail_cmd": f"python3 {script_path} --history {handle}",
     }
     return json.dumps(notification, ensure_ascii=False)
 

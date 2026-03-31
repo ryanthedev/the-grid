@@ -104,6 +104,12 @@ class NotificationPanelWindow: NSWindow {
             break
         case .executeAction(let notifAction):
             executeNotificationAction(notifAction)
+        case .openDetail(let command, let title):
+            DetailWindowController.shared.openDetail(
+                command: command,
+                title: title,
+                theme: viewModel.theme
+            )
         case .enterFilterMode:
             // Make the hosting view first responder so the TextField receives focus
             if let hosting = hostingView {

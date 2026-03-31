@@ -95,6 +95,11 @@ struct GridNotification: Codable, Identifiable {
     var isDismissed: Bool
     // nil means no action associated with this notification
     var action: GridNotificationAction?
+    // Shell command that returns detail content (JSON) when executed.
+    // Populated by notification sources (e.g., iMessage watcher sets this
+    // to "python3 imessage-watch.py --history <handle>").
+    // nil means no detail view available.
+    var detailCmd: String?
 
     // Time-to-live in seconds. 0 = permanent (default).
     // After ttl seconds, the notification is auto-dismissed.
@@ -120,6 +125,7 @@ struct GridNotification: Codable, Identifiable {
         isPinned: Bool = false,
         isDismissed: Bool = false,
         action: GridNotificationAction? = nil,
+        detailCmd: String? = nil,
         ttl: TimeInterval = 0,
         warnBefore: TimeInterval = 0,
         groupCount: Int = 1,
@@ -135,6 +141,7 @@ struct GridNotification: Codable, Identifiable {
         self.isPinned = isPinned
         self.isDismissed = isDismissed
         self.action = action
+        self.detailCmd = detailCmd
         self.ttl = ttl
         self.warnBefore = warnBefore
         self.groupCount = groupCount

@@ -168,6 +168,7 @@ actor NotificationStore {
             existing.ttl = notification.ttl
             existing.warnBefore = notification.warnBefore
             existing.action = notification.action
+            existing.detailCmd = notification.detailCmd
             existing.priority = notification.priority
             // Reset TTL countdown to now
             existing.ttlResetDate = Date()

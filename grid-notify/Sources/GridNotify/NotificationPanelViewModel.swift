@@ -18,6 +18,8 @@ enum NotificationPanelMode {
 enum NotificationPanelAction {
     case none
     case executeAction(GridNotificationAction)
+    // Opens a detail pop-out window with content from a shell command
+    case openDetail(command: String, title: String)
     case enterFilterMode
     case exitFilterMode
 }
@@ -225,6 +227,11 @@ class NotificationPanelViewModel: ObservableObject {
         guard let notification = currentNotification else { return .none }
         // Mark as read
         Task { await store.markRead(id: notification.id) }
+        // Check detailCmd first -- takes priority over action (DW-3.1)
+        if let detailCmd = notification.detailCmd {
+            return .openDetail(command: detailCmd, title: notification.title)
+        }
+        // Fall through to existing action behavior
         if let action = notification.action {
             return .executeAction(action)
         }

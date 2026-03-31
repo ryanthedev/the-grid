@@ -17,6 +17,8 @@ private struct NotificationLineDescriptor: Codable {
     // { "type": "runShellCommand", "command": "echo hi" }
     // { "type": "openURL", "url": "https://..." }
     let action: [String: String]?
+    // Shell command that returns detail content (JSON) for pop-out window.
+    let detail_cmd: String?
     // Time-to-live in seconds. 0 or absent = permanent.
     let ttl: TimeInterval?
     // Seconds before expiry to start warning animation.
@@ -279,6 +281,7 @@ class NotificationFileWatcher {
                 body: desc.body ?? "",
                 priority: GridNotificationPriority(rawValue: desc.priority ?? "normal") ?? .normal,
                 action: action,
+                detailCmd: desc.detail_cmd,
                 ttl: desc.ttl ?? 0,
                 warnBefore: desc.warn_before ?? 0
             )
