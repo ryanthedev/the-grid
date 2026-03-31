@@ -96,6 +96,13 @@ struct GridNotification: Codable, Identifiable {
     // nil means no action associated with this notification
     var action: GridNotificationAction?
 
+    // Time-to-live in seconds. 0 = permanent (default).
+    // After ttl seconds, the notification is auto-dismissed.
+    var ttl: TimeInterval
+    // Seconds before expiry to start warning animation. 0 = no warning.
+    // The warning phase runs from (timestamp + ttl - warnBefore) until expiry.
+    var warnBefore: TimeInterval
+
     init(
         id: String = UUID().uuidString,
         source: String,
@@ -106,7 +113,9 @@ struct GridNotification: Codable, Identifiable {
         isRead: Bool = false,
         isPinned: Bool = false,
         isDismissed: Bool = false,
-        action: GridNotificationAction? = nil
+        action: GridNotificationAction? = nil,
+        ttl: TimeInterval = 0,
+        warnBefore: TimeInterval = 0
     ) {
         self.id = id
         self.source = source
@@ -118,6 +127,29 @@ struct GridNotification: Codable, Identifiable {
         self.isPinned = isPinned
         self.isDismissed = isDismissed
         self.action = action
+        self.ttl = ttl
+        self.warnBefore = warnBefore
+    }
+
+    // Lifecycle phase of the notification based on current time.
+    enum LifecyclePhase {
+        case normal
+        case warning
+        case expired
+    }
+
+    func lifecyclePhase(at now: Date = Date()) -> LifecyclePhase {
+        guard ttl > 0 else { return .normal }
+        let age = now.timeIntervalSince(timestamp)
+        if age >= ttl { return .expired }
+        if warnBefore > 0 && age >= (ttl - warnBefore) { return .warning }
+        return .normal
+    }
+
+    // Seconds remaining until expiry. nil if permanent.
+    func secondsRemaining(at now: Date = Date()) -> TimeInterval? {
+        guard ttl > 0 else { return nil }
+        return max(0, ttl - now.timeIntervalSince(timestamp))
     }
 }
 

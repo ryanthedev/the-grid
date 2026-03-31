@@ -72,10 +72,37 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             self.fileWatcher = watcher
         }
 
+        // Listen for toggle notification from grid-server / BFD
+        DistributedNotificationCenter.default().addObserver(
+            self,
+            selector: #selector(handleToggle),
+            name: NSNotification.Name("com.thegrid.notify.toggle"),
+            object: nil
+        )
+
         // Set up signal handling for graceful shutdown
         setupSignalHandlers()
 
         jlog("notify.ready")
+    }
+
+    @objc private func handleToggle(_ notification: Notification) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            if self.window?.isVisible == true, NSApp.isActive {
+                // Hide: order out and switch to accessory
+                self.window?.orderOut(nil)
+                NSApp.setActivationPolicy(.accessory)
+                jlog("notify.toggle.hide")
+            } else {
+                // Show: switch to regular and bring forward
+                NSApp.setActivationPolicy(.regular)
+                self.window?.makeKeyAndOrderFront(nil)
+                NSApp.activate(ignoringOtherApps: true)
+                self.viewModel?.refreshNotifications()
+                jlog("notify.toggle.show")
+            }
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {

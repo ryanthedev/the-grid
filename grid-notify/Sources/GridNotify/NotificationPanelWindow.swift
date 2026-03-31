@@ -56,6 +56,8 @@ class NotificationPanelWindow: NSWindow {
         title = "Notifications"
         // Reuse across show/hide cycles
         isReleasedWhenClosed = false
+        // Persist window frame across launches
+        setFrameAutosaveName("GridNotifyPanel")
     }
 
     func updateTitle(unreadCount: Int) {

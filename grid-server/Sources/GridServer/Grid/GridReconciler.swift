@@ -496,7 +496,8 @@ class GridReconciler: StateEventHandler {
             }
         }
 
-        // Check locked rules: if window matches a locked app rule, assign to its reserved cell
+        // Check locked rules: if window matches a locked app rule, assign to its reserved cell.
+        // Search current space first, then all spaces (the locked cell may be on another display).
         let appRules = await MainActor.run { gridConfig?.appRules ?? [] }
         let bundleID = wmState.applications[String(windowState.pid)]?.bundleIdentifier
         let lockedCell = getLockedCell(
@@ -505,15 +506,44 @@ class GridReconciler: StateEventHandler {
             appRules: appRules
         )
 
-        if let lockedCell, assignments[lockedCell] != nil {
-            await gridState.assignWindow(windowID, toCellID: lockedCell, inSpace: spaceID)
-            await syncBordersForCurrentSpace()
-            jlog("reconcile.win.create.locked", data: [
-                "wid": windowID,
-                "cell": lockedCell,
-                "app": appName,
-            ])
-            return
+        if let lockedCell {
+            // Try current space first
+            if assignments[lockedCell] != nil {
+                await gridState.assignWindow(windowID, toCellID: lockedCell, inSpace: spaceID)
+                try? await gridApply?.applyCellLayout(spaceID: spaceID, cellID: lockedCell)
+                await syncBordersForCurrentSpace()
+                jlog("reconcile.win.create.locked", data: [
+                    "wid": windowID,
+                    "cell": lockedCell,
+                    "space": spaceID,
+                    "app": appName,
+                ])
+                return
+            }
+
+            // Current space doesn't have the locked cell — search other spaces
+            let allSpaceIDs = await gridState.getSpaceIDs()
+            for otherSpaceID in allSpaceIDs where otherSpaceID != spaceID {
+                let otherLayout = await gridState.getCurrentLayout(spaceID: otherSpaceID)
+                guard !otherLayout.isEmpty else { continue }
+                let otherAssignments = await gridState.getWindowAssignments(spaceID: otherSpaceID)
+                if otherAssignments[lockedCell] != nil {
+                    await gridState.assignWindow(windowID, toCellID: lockedCell, inSpace: otherSpaceID)
+                    let displayUUID = findDisplayUUIDForSpace(otherSpaceID, from: wmState)
+                    if let displayUUID {
+                        try? await gridApply?.applyCellLayout(spaceID: otherSpaceID, cellID: lockedCell)
+                        await syncBordersForSpace(otherSpaceID, displayUUID: displayUUID)
+                    }
+                    jlog("reconcile.win.create.locked", data: [
+                        "wid": windowID,
+                        "cell": lockedCell,
+                        "space": otherSpaceID,
+                        "crossDisplay": true,
+                        "app": appName,
+                    ])
+                    return
+                }
+            }
         }
 
         // Auto-assign: find least-populated cell, skipping locked cells

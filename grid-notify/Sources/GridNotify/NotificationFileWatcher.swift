@@ -13,6 +13,10 @@ private struct NotificationLineDescriptor: Codable {
     // { "type": "runShellCommand", "command": "echo hi" }
     // { "type": "openURL", "url": "https://..." }
     let action: [String: String]?
+    // Time-to-live in seconds. 0 or absent = permanent.
+    let ttl: TimeInterval?
+    // Seconds before expiry to start warning animation.
+    let warn_before: TimeInterval?
 }
 
 // MARK: - NotificationFileWatcher
@@ -266,7 +270,9 @@ class NotificationFileWatcher {
                 title: desc.title,
                 body: desc.body ?? "",
                 priority: GridNotificationPriority(rawValue: desc.priority ?? "normal") ?? .normal,
-                action: action
+                action: action,
+                ttl: desc.ttl ?? 0,
+                warnBefore: desc.warn_before ?? 0
             )
 
             // Add to store and notify callback

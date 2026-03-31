@@ -191,6 +191,15 @@ class GridCommandRouter {
                 return try await handleRecord(parsed)
             case "terminal":
                 return await gridTerminalManager.toggle()
+            case "notify":
+                // Relay to standalone GridNotify.app via distributed notification
+                DistributedNotificationCenter.default().postNotificationName(
+                    NSNotification.Name("com.thegrid.notify.toggle"),
+                    object: nil,
+                    userInfo: nil,
+                    deliverImmediately: true
+                )
+                return .ok("toggled")
             case "nudge":
                 // Suppression managed via beginAction/endAction inside handleNudge --
                 // enter starts the session, exit ends it. No executeAction wrapper here.

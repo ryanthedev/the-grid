@@ -9,6 +9,7 @@ enum NotificationPanelMode {
     case normal
     case filter
     case visualSelect
+    case help
 }
 
 // MARK: - NotificationPanelAction
@@ -52,9 +53,47 @@ class NotificationPanelViewModel: ObservableObject {
     // Tracks the in-flight refresh so concurrent calls can cancel the previous one
     private var refreshTask: Task<Void, Never>?
 
+    // Lifecycle tick timer — checks for escalation and expiry every second
+    private var lifecycleTimer: Timer?
+
+    // Published tick counter — views observe this to update warning animations
+    @Published var lifecycleTick: UInt = 0
+
     init(store: NotificationStore, theme: NotificationPanelTheme = .default) {
         self.store = store
         self.theme = theme
+        startLifecycleTimer()
+    }
+
+    private func startLifecycleTimer() {
+        lifecycleTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            DispatchQueue.main.async {
+                self?.lifecycleTick &+= 1
+                self?.processLifecycle()
+            }
+        }
+    }
+
+    private func processLifecycle() {
+        let now = Date()
+        var expiredIDs: [String] = []
+
+        for notification in notifications {
+            if notification.ttl > 0 && notification.lifecyclePhase(at: now) == .expired {
+                expiredIDs.append(notification.id)
+            }
+        }
+
+        guard !expiredIDs.isEmpty else { return }
+
+        // Auto-dismiss expired notifications
+        Task {
+            for id in expiredIDs {
+                await store.dismiss(id: id)
+            }
+            refreshNotifications()
+            jlog("notify.lifecycle.expire", data: ["count": expiredIDs.count])
+        }
     }
 
     // MARK: - Data Loading
@@ -68,7 +107,8 @@ class NotificationPanelViewModel: ObservableObject {
             let results = await store.notifications(filter: filter)
             guard !Task.isCancelled else { return }
             self.notifications = results
-            self.selectedIndex = min(self.selectedIndex, max(0, results.count - 1))
+            // Select newest notification (index 0, visually at bottom in flipped scroll)
+            self.selectedIndex = 0
             self.updateStatusText()
             let unread = results.filter { !$0.isRead }.count
             self.onRefresh?(unread)
@@ -107,6 +147,9 @@ class NotificationPanelViewModel: ObservableObject {
             } else {
                 statusText = "VISUAL: move j/k to select range"
             }
+
+        case .help:
+            statusText = "HELP | ? or Esc to close"
         }
     }
 
@@ -274,13 +317,13 @@ class NotificationPanelViewModel: ObservableObject {
         switch mode {
         case .normal:
             switch keyCode {
-            // j - select next
+            // j - select previous (visually down in flipped scroll)
             case 38:
-                selectNext()
-                return .none
-            // k - select previous
-            case 40:
                 selectPrevious()
+                return .none
+            // k - select next (visually up in flipped scroll)
+            case 40:
+                selectNext()
                 return .none
             // d - dismiss selected
             case 2:
@@ -293,8 +336,13 @@ class NotificationPanelViewModel: ObservableObject {
             // Return - execute action
             case 36:
                 return executeSelectedAction()
-            // / - enter filter mode
+            // ? (shift+/) - show help, / - enter filter mode
             case 44:
+                if hasShift {
+                    mode = .help
+                    updateStatusText()
+                    return .none
+                }
                 enterFilterMode()
                 return .enterFilterMode
             // p - toggle pin
@@ -334,6 +382,23 @@ class NotificationPanelViewModel: ObservableObject {
                 return .none
             }
 
+        case .help:
+            switch keyCode {
+            // Escape or ? - exit help
+            case 53:
+                mode = .normal
+                updateStatusText()
+                return .none
+            case 44:
+                if hasShift {
+                    mode = .normal
+                    updateStatusText()
+                }
+                return .none
+            default:
+                return .none
+            }
+
         case .filter:
             // Filter mode keys are handled by the SwiftUI text field.
             // Only Escape reaches the window (to exit filter mode).
@@ -348,14 +413,14 @@ class NotificationPanelViewModel: ObservableObject {
 
         case .visualSelect:
             switch keyCode {
-            // j - extend selection down
+            // j - extend selection down (visually down in flipped scroll)
             case 38:
-                selectNext()
+                selectPrevious()
                 updateStatusText()
                 return .none
-            // k - extend selection up
+            // k - extend selection up (visually up in flipped scroll)
             case 40:
-                selectPrevious()
+                selectNext()
                 updateStatusText()
                 return .none
             // d - bulk dismiss selection

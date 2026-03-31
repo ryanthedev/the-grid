@@ -199,6 +199,7 @@ actor NotificationStore {
         }
 
         // Sort: pinned first, then priority descending, then timestamp descending
+        // (newest first — the flipped ScrollView displays this bottom-up)
         result.sort { a, b in
             if a.isPinned != b.isPinned { return a.isPinned }
             if a.priority != b.priority { return a.priority > b.priority }
