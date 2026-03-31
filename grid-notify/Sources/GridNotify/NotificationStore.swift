@@ -155,6 +155,36 @@ actor NotificationStore {
         return notification
     }
 
+    // Upserts a notification by id. If the id exists: updates body, ttl,
+    // warnBefore, action, priority; resets TTL countdown; increments groupCount;
+    // clears isDismissed and isRead so it surfaces again.
+    // If the id does not exist: inserts as new (delegates to add).
+    // Single actor method — atomic, no flickering between delete+add.
+    @discardableResult
+    func upsert(_ notification: GridNotification) -> GridNotification {
+        if var existing = byID[notification.id] {
+            // Update mutable fields from the incoming notification
+            existing.body = notification.body
+            existing.ttl = notification.ttl
+            existing.warnBefore = notification.warnBefore
+            existing.action = notification.action
+            existing.priority = notification.priority
+            // Reset TTL countdown to now
+            existing.ttlResetDate = Date()
+            // Bump group count
+            existing.groupCount += 1
+            // Un-dismiss and un-read so it surfaces again
+            existing.isDismissed = false
+            existing.isRead = false
+            // Write back
+            byID[notification.id] = existing
+            markDirty()
+            return existing
+        }
+        // New notification — delegate to add
+        return add(notification)
+    }
+
     // Removes a notification by id. Returns true if found and removed.
     @discardableResult
     func remove(id: String) -> Bool {

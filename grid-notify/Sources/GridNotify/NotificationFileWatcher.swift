@@ -5,6 +5,10 @@ import Foundation
 // Codable struct for parsing a single notification line.
 // Defined privately here -- not part of the public interface.
 private struct NotificationLineDescriptor: Codable {
+    // Explicit notification ID for upsert grouping.
+    // When present, the watcher uses upsert instead of add.
+    // When absent, a UUID is generated and add is used (backward compatible).
+    let id: String?
     let title: String
     let body: String?
     let priority: String?
@@ -265,7 +269,11 @@ class NotificationFileWatcher {
 
             let action = parseLineAction(desc.action)
 
+            // If descriptor has an explicit id, use it; otherwise generate UUID
+            let notificationID = desc.id ?? UUID().uuidString
+
             let notification = GridNotification(
+                id: notificationID,
                 source: config.sourceLabel,
                 title: desc.title,
                 body: desc.body ?? "",
@@ -275,11 +283,17 @@ class NotificationFileWatcher {
                 warnBefore: desc.warn_before ?? 0
             )
 
-            // Add to store and notify callback
+            // If explicit id was provided, use upsert (updates existing or inserts new).
+            // If no explicit id, use add (always inserts with generated UUID).
+            let hasExplicitID = desc.id != nil
             let store = self.store
             let callback = self.onNotification
             Task {
-                await store.add(notification)
+                if hasExplicitID {
+                    await store.upsert(notification)
+                } else {
+                    await store.add(notification)
+                }
                 await MainActor.run {
                     callback?()
                 }

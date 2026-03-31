@@ -347,6 +347,14 @@ struct NotificationItemView: View {
         }
     }
 
+    // Display title with group count suffix when > 1 (e.g., "Sarah (3)")
+    private var displayTitle: String {
+        if notification.groupCount > 1 {
+            return "\(notification.title) (\(notification.groupCount))"
+        }
+        return notification.title
+    }
+
     // Title view: adapts based on lifecycle phase
     // Arrival: matrix text (random chars resolve to real title)
     // Normal + unread: wave text (rippling character offsets)
@@ -356,7 +364,7 @@ struct NotificationItemView: View {
         let titleColor = notification.isRead ? theme.textSecondary : theme.textPrimary
         if isArrival {
             MatrixText(
-                text: notification.title,
+                text: displayTitle,
                 font: berkeleyMono(size: TypeSize.body),
                 color: titleColor,
                 duration: 0.8
@@ -364,7 +372,7 @@ struct NotificationItemView: View {
             .lineLimit(1)
         } else if !notification.isRead && phase == .normal {
             WaveText(
-                text: notification.title,
+                text: displayTitle,
                 font: berkeleyMono(size: TypeSize.body),
                 color: titleColor,
                 amplitude: 1.0,
@@ -372,7 +380,7 @@ struct NotificationItemView: View {
             )
             .lineLimit(1)
         } else {
-            Text(notification.title)
+            Text(displayTitle)
                 .font(berkeleyMono(size: TypeSize.body))
                 .foregroundColor(titleColor)
                 .lineLimit(1)

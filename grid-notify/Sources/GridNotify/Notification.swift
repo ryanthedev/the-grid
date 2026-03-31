@@ -103,6 +103,12 @@ struct GridNotification: Codable, Identifiable {
     // The warning phase runs from (timestamp + ttl - warnBefore) until expiry.
     var warnBefore: TimeInterval
 
+    // Number of times this notification has been upserted. Starts at 1.
+    var groupCount: Int
+    // When set, TTL lifecycle uses this date instead of timestamp.
+    // Reset on each upsert to refresh the countdown.
+    var ttlResetDate: Date?
+
     init(
         id: String = UUID().uuidString,
         source: String,
@@ -115,7 +121,9 @@ struct GridNotification: Codable, Identifiable {
         isDismissed: Bool = false,
         action: GridNotificationAction? = nil,
         ttl: TimeInterval = 0,
-        warnBefore: TimeInterval = 0
+        warnBefore: TimeInterval = 0,
+        groupCount: Int = 1,
+        ttlResetDate: Date? = nil
     ) {
         self.id = id
         self.source = source
@@ -129,6 +137,8 @@ struct GridNotification: Codable, Identifiable {
         self.action = action
         self.ttl = ttl
         self.warnBefore = warnBefore
+        self.groupCount = groupCount
+        self.ttlResetDate = ttlResetDate
     }
 
     // Lifecycle phase of the notification based on current time.
@@ -140,7 +150,9 @@ struct GridNotification: Codable, Identifiable {
 
     func lifecyclePhase(at now: Date = Date()) -> LifecyclePhase {
         guard ttl > 0 else { return .normal }
-        let age = now.timeIntervalSince(timestamp)
+        // Use ttlResetDate if set, otherwise fall back to creation timestamp
+        let baseDate = ttlResetDate ?? timestamp
+        let age = now.timeIntervalSince(baseDate)
         if age >= ttl { return .expired }
         if warnBefore > 0 && age >= (ttl - warnBefore) { return .warning }
         return .normal
@@ -149,7 +161,9 @@ struct GridNotification: Codable, Identifiable {
     // Seconds remaining until expiry. nil if permanent.
     func secondsRemaining(at now: Date = Date()) -> TimeInterval? {
         guard ttl > 0 else { return nil }
-        return max(0, ttl - now.timeIntervalSince(timestamp))
+        // Use ttlResetDate if set, otherwise fall back to creation timestamp
+        let baseDate = ttlResetDate ?? timestamp
+        return max(0, ttl - now.timeIntervalSince(baseDate))
     }
 }
 
