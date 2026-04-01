@@ -123,7 +123,11 @@ struct NotificationFilterBar: View {
 struct NotificationListView: View {
     @ObservedObject var viewModel: NotificationPanelViewModel
 
+    // Boot sequence plays once per session (not persisted across launches)
+    @State private var hasBooted: Bool = false
+
     var body: some View {
+        ZStack {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 0) {
@@ -162,6 +166,15 @@ struct NotificationListView: View {
                     }
                 }
             }
+        }
+
+        // Boot sequence overlay (plays once per session)
+        if !hasBooted {
+            BootSequenceOverlay(
+                hasBooted: $hasBooted,
+                theme: viewModel.theme
+            )
+        }
         }
     }
 }
@@ -284,6 +297,12 @@ struct NotificationItemView: View {
 
                     // Show countdown during warning phase, relative time otherwise
                     if phase == .warning, let remaining = notification.secondsRemaining() {
+                        if isActive("pie_countdown") {
+                            PieCountdownView(
+                                progress: remaining / notification.warnBefore,
+                                color: theme.urgent
+                            )
+                        }
                         Text("\(Int(remaining))s")
                             .font(berkeleyMono(size: TypeSize.meta, weight: .bold))
                             .foregroundColor(theme.urgent)
@@ -294,7 +313,14 @@ struct NotificationItemView: View {
                     }
                 }
 
-                if !notification.body.isEmpty {
+                if isActive("stack_trace") && phase == .warning && !notification.body.isEmpty {
+                    StackTraceText(
+                        title: notification.title,
+                        bodyText: notification.body,
+                        font: berkeleyMono(size: TypeSize.meta),
+                        theme: theme
+                    )
+                } else if !notification.body.isEmpty {
                     let bodyColor = (isActive("warning_pulse") && phase == .warning)
                         ? theme.textPrimary : theme.textSecondary
                     if isActive("typing_indicator") && isArrival {
@@ -373,6 +399,19 @@ struct NotificationItemView: View {
         .heatmap(isActive: isActive("heatmap"), age: notificationAge, warmColor: theme.urgent)
         // Neon flicker for urgent notifications
         .neonFlicker(isActive: isActive("neon_flicker") && notification.priority == .urgent, accentColor: theme.accent)
+        // Phase 4: progress + terminal animations
+        // Heartbeat pulse for unread notifications in idle phase
+        .heartbeat(isActive: isActive("heartbeat") && !notification.isRead && animPhase == .idle)
+        // Dissolve: random noise overlay before dismiss in ghost phase
+        .dissolve(
+            isActive: isActive("dissolve") && animPhase == .ghost,
+            fraction: {
+                guard let r = remaining, r < 3.0 else { return 0 }
+                return 1.0 - (r / 3.0)
+            }()
+        )
+        // ASCII border around selected notification
+        .asciiBorder(isActive: isActive("ascii_border") && isSelected, borderColor: theme.accent)
         .onAppear {
             // Flash if notification is less than 2 seconds old
             if isArrival && isActive("arrival_flash") {
@@ -454,6 +493,14 @@ struct NotificationItemView: View {
             )
             .lineLimit(1)
             .parallax(isActive: isActive("parallax"), tick: tick, layer: 0)
+        } else if isActive("cursor_blink") && !notification.isRead {
+            CursorBlinkText(
+                text: displayTitle,
+                font: berkeleyMono(size: TypeSize.body),
+                color: titleColor
+            )
+            .lineLimit(1)
+            .parallax(isActive: isActive("parallax"), tick: tick, layer: 0)
         } else {
             Text(displayTitle)
                 .font(berkeleyMono(size: TypeSize.body))
@@ -479,7 +526,16 @@ struct NotificationItemView: View {
     private var priorityEdge: some View {
         let (color, symbol) = priorityVisuals(notification.priority)
         VStack(spacing: 2) {
-            if isActive("spinner") && phase == .warning {
+            if isActive("hourglass_sprite") && notification.ttl > 0,
+               let r = remaining
+            {
+                // Hourglass sprite cycles frames based on TTL progress
+                let progress = 1.0 - (r / notification.ttl)
+                HourglassSpriteView(
+                    progress: progress,
+                    color: theme.accent
+                )
+            } else if isActive("spinner") && phase == .warning {
                 // Warning phase: fast urgent spinner
                 SpriteView(
                     frames: Self.countdownFrames,

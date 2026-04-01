@@ -33,7 +33,7 @@ final class AnimationEngineTests: XCTestCase {
         registry.registerBuiltins()
 
         let names = registry.registeredNames
-        // 12 Phase 1 + 8 Phase 2 = 20 built-in effects
+        // 12 Phase 1 + 8 Phase 2 + 4 Phase 3 + 8 Phase 4 = 32 built-in effects
         XCTAssertTrue(names.contains("shake"))
         XCTAssertTrue(names.contains("breathing"))
         XCTAssertTrue(names.contains("slide_in"))
@@ -55,7 +55,21 @@ final class AnimationEngineTests: XCTestCase {
         XCTAssertTrue(names.contains("accordion"))
         XCTAssertTrue(names.contains("tilt"))
         XCTAssertTrue(names.contains("parallax"))
-        XCTAssertEqual(names.count, 20)
+        // Phase 3: color + mood effects
+        XCTAssertTrue(names.contains("gradient_sweep"))
+        XCTAssertTrue(names.contains("heatmap"))
+        XCTAssertTrue(names.contains("neon_flicker"))
+        XCTAssertTrue(names.contains("chromatic_aberration"))
+        // Phase 4: progress + terminal effects
+        XCTAssertTrue(names.contains("hourglass_sprite"))
+        XCTAssertTrue(names.contains("pie_countdown"))
+        XCTAssertTrue(names.contains("heartbeat"))
+        XCTAssertTrue(names.contains("dissolve"))
+        XCTAssertTrue(names.contains("cursor_blink"))
+        XCTAssertTrue(names.contains("boot_sequence"))
+        XCTAssertTrue(names.contains("stack_trace"))
+        XCTAssertTrue(names.contains("ascii_border"))
+        XCTAssertEqual(names.count, 32)
     }
 
     // MARK: - AnimationConfig Tests
