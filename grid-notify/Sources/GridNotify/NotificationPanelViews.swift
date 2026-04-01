@@ -631,6 +631,53 @@ struct NotificationHelpView: View {
         ("Esc", "Exit visual mode"),
     ]
 
+    private let textAnimations: [(String, String)] = [
+        ("matrix_title", "Characters resolve from random glyphs"),
+        ("wave_title", "Wavy motion (unread only)"),
+        ("glitch", "Random character corruption"),
+        ("redact", "Text reveals from block characters"),
+        ("typing_indicator", "Character-by-character reveal"),
+        ("cursor_blink", "Blinking cursor at end"),
+        ("chromatic_aberration", "RGB color split effect"),
+    ]
+
+    private let spatialAnimations: [(String, String)] = [
+        ("slide_in", "Slides in from top"),
+        ("bounce", "Elastic bounce on arrival"),
+        ("accordion", "Expands from zero height"),
+        ("tilt", "3D rotation on selection"),
+        ("parallax", "Depth scroll effect"),
+        ("scanline", "Horizontal sweep"),
+    ]
+
+    private let colorAnimations: [(String, String)] = [
+        ("gradient_sweep", "Accent color wash"),
+        ("heatmap", "Background tint by age"),
+        ("neon_flicker", "Border flicker effect"),
+    ]
+
+    private let progressAnimations: [(String, String)] = [
+        ("hourglass_sprite", "Sprite frames by progress"),
+        ("pie_countdown", "Shrinking pie chart"),
+        ("heartbeat", "Scale pulse for unread"),
+        ("progress_bar", "Drain bar during warning"),
+    ]
+
+    private let terminalAnimations: [(String, String)] = [
+        ("shake", "Horizontal shake"),
+        ("grow", "Extra vertical padding"),
+        ("warning_pulse", "Pulsing urgent overlay"),
+        ("border_strobe", "Border strobe effect"),
+        ("spinner", "Animated spinner"),
+        ("breathing", "Breathing pulse on spinner"),
+        ("fade_to_ghost", "Fades in last 3 seconds"),
+        ("dissolve", "Random character noise"),
+        ("ascii_border", "Box-drawing border"),
+        ("boot_sequence", "Terminal boot animation"),
+        ("stack_trace", "Error format with line numbers"),
+        ("arrival_flash", "Accent flash on arrival"),
+    ]
+
     var body: some View {
         ScrollView {
             VStack(spacing: 0) {
@@ -650,6 +697,37 @@ struct NotificationHelpView: View {
                     ForEach(visualBindings, id: \.0) { key, desc in
                         bindingRow(key: key, desc: desc)
                     }
+
+                    Divider()
+                        .background(theme.border)
+                        .padding(.vertical, Space.sm)
+
+                    sectionHeader("Animations")
+
+                    sectionSubheader("Text")
+                    ForEach(textAnimations, id: \.0) { name, desc in
+                        animationRow(name: name, desc: desc)
+                    }
+
+                    sectionSubheader("Spatial")
+                    ForEach(spatialAnimations, id: \.0) { name, desc in
+                        animationRow(name: name, desc: desc)
+                    }
+
+                    sectionSubheader("Color")
+                    ForEach(colorAnimations, id: \.0) { name, desc in
+                        animationRow(name: name, desc: desc)
+                    }
+
+                    sectionSubheader("Progress")
+                    ForEach(progressAnimations, id: \.0) { name, desc in
+                        animationRow(name: name, desc: desc)
+                    }
+
+                    sectionSubheader("Terminal & Lifecycle")
+                    ForEach(terminalAnimations, id: \.0) { name, desc in
+                        animationRow(name: name, desc: desc)
+                    }
                 }
                 .padding(Space.lg)
             }
@@ -664,6 +742,14 @@ struct NotificationHelpView: View {
             .padding(.bottom, Space.xs)
     }
 
+    private func sectionSubheader(_ title: String) -> some View {
+        Text(title)
+            .font(berkeleyMono(size: TypeSize.meta, weight: .bold))
+            .foregroundColor(theme.textSecondary)
+            .padding(.top, Space.md)
+            .padding(.bottom, Space.xs)
+    }
+
     private func bindingRow(key: String, desc: String) -> some View {
         HStack(alignment: .top, spacing: Space.md) {
             Text(key)
@@ -672,6 +758,19 @@ struct NotificationHelpView: View {
                 .frame(width: 80, alignment: .trailing)
             Text(desc)
                 .font(berkeleyMono(size: TypeSize.body))
+                .foregroundColor(theme.textSecondary)
+            Spacer()
+        }
+    }
+
+    private func animationRow(name: String, desc: String) -> some View {
+        HStack(alignment: .top, spacing: Space.md) {
+            Text(name)
+                .font(berkeleyMono(size: TypeSize.meta, weight: .medium))
+                .foregroundColor(theme.accent)
+                .frame(width: 100, alignment: .trailing)
+            Text(desc)
+                .font(berkeleyMono(size: TypeSize.meta))
                 .foregroundColor(theme.textSecondary)
             Spacer()
         }

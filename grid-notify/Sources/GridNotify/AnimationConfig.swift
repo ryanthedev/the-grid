@@ -62,7 +62,32 @@ struct AnimationConfig {
             warning: ["shake", "grow", "border_strobe", "warning_pulse", "progress_bar", "spinner", "fade_to_ghost"],
             ghost: ["fade_to_ghost", "wave_title", "spinner", "breathing"]
         ),
-        sourcePresets: [:]
+        sourcePresets: [
+            "imessage": AnimationPreset(
+                arrival: ["slide_in", "matrix_title", "arrival_flash", "fade_to_ghost", "spinner", "breathing", "bounce"],
+                idle: ["wave_title", "spinner", "breathing", "fade_to_ghost"],
+                warning: ["glitch", "shake", "progress_bar", "spinner", "fade_to_ghost"],
+                ghost: ["fade_to_ghost"]
+            ),
+            "generic": AnimationPreset(
+                arrival: ["slide_in", "matrix_title", "arrival_flash", "fade_to_ghost", "spinner", "breathing"],
+                idle: ["wave_title", "spinner", "breathing", "fade_to_ghost"],
+                warning: ["shake", "grow", "border_strobe", "warning_pulse", "progress_bar", "spinner", "fade_to_ghost"],
+                ghost: ["fade_to_ghost"]
+            ),
+            "ci": AnimationPreset(
+                arrival: ["slide_in", "boot_sequence", "spinner", "breathing"],
+                idle: ["spinner", "breathing"],
+                warning: ["stack_trace", "progress_bar", "shake", "spinner"],
+                ghost: ["fade_to_ghost"]
+            ),
+            "urgent": AnimationPreset(
+                arrival: ["slide_in", "neon_flicker", "spinner", "breathing"],
+                idle: ["heartbeat", "spinner", "breathing", "fade_to_ghost"],
+                warning: ["dissolve", "warning_pulse", "progress_bar", "spinner", "fade_to_ghost"],
+                ghost: ["fade_to_ghost"]
+            )
+        ]
     )
 }
 
