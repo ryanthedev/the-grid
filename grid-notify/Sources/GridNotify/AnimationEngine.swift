@@ -68,8 +68,9 @@ final class AnimationRegistry {
         return effects.keys.sorted()
     }
 
-    // Register all built-in Phase 1 effects.
+    // Register all built-in effects (Phase 1 + Phase 2).
     func registerBuiltins() {
+        // Phase 1: core animations
         register(ShakeEffect())
         register(BreathingEffect())
         register(SlideInEffect())
@@ -82,6 +83,16 @@ final class AnimationRegistry {
         register(WarningPulseEffect())
         register(ArrivalFlashEffect())
         register(SpinnerEffect())
+
+        // Phase 2: text + spatial animations
+        register(GlitchEffect())
+        register(RedactEffect())
+        register(TypingIndicatorEffect())
+        register(ScanlineEffect())
+        register(BounceEffect())
+        register(AccordionEffect())
+        register(TiltEffect())
+        register(ParallaxEffect())
     }
 }
 

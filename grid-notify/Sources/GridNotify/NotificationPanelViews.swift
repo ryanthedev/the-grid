@@ -292,10 +292,22 @@ struct NotificationItemView: View {
                 if !notification.body.isEmpty {
                     let bodyColor = (isActive("warning_pulse") && phase == .warning)
                         ? theme.textPrimary : theme.textSecondary
-                    Text(notification.body)
-                        .font(berkeleyMono(size: TypeSize.body))
-                        .foregroundColor(bodyColor)
+                    if isActive("typing_indicator") && isArrival {
+                        TypingIndicatorText(
+                            text: notification.body,
+                            font: berkeleyMono(size: TypeSize.body),
+                            color: bodyColor,
+                            theme: theme
+                        )
                         .lineLimit(2)
+                        .parallax(isActive: isActive("parallax"), tick: tick, layer: 1)
+                    } else {
+                        Text(notification.body)
+                            .font(berkeleyMono(size: TypeSize.body))
+                            .foregroundColor(bodyColor)
+                            .lineLimit(2)
+                            .parallax(isActive: isActive("parallax"), tick: tick, layer: 1)
+                    }
                 }
 
                 // Progress bar drain during warning phase
@@ -340,6 +352,15 @@ struct NotificationItemView: View {
         .fadeToGhost(secondsRemaining: isActive("fade_to_ghost") ? remaining : nil)
         // Slide in for new arrivals
         .slideIn(isActive: isActive("slide_in") && isArrival)
+        // Phase 2: spatial animations
+        // Bounce on arrival
+        .bounce(isActive: isActive("bounce") && isArrival)
+        // Accordion expand on arrival
+        .accordion(isActive: isActive("accordion") && isArrival)
+        // Tilt on selection
+        .tilt(isActive: isActive("tilt") && isSelected)
+        // Scanline sweep
+        .scanline(isActive: isActive("scanline"), accentColor: theme.accent)
         .onAppear {
             // Flash if notification is less than 2 seconds old
             if isArrival && isActive("arrival_flash") {
@@ -370,11 +391,30 @@ struct NotificationItemView: View {
     }
 
     // Title view: adapts based on animation config.
-    // matrix_title during arrival, wave_title during idle+unread, static otherwise.
+    // Priority: redact > matrix_title on arrival, glitch on warning,
+    // wave_title for unread, static otherwise.
     @ViewBuilder
     private var titleView: some View {
         let titleColor = notification.isRead ? theme.textSecondary : theme.textPrimary
-        if isActive("matrix_title") && isArrival {
+        if isActive("redact") && isArrival {
+            RedactText(
+                text: displayTitle,
+                font: berkeleyMono(size: TypeSize.body),
+                color: titleColor,
+                duration: 1.0
+            )
+            .lineLimit(1)
+            .parallax(isActive: isActive("parallax"), tick: tick, layer: 0)
+        } else if isActive("glitch") && phase == .warning {
+            GlitchText(
+                text: displayTitle,
+                font: berkeleyMono(size: TypeSize.body),
+                color: titleColor,
+                intensity: 0.15
+            )
+            .lineLimit(1)
+            .parallax(isActive: isActive("parallax"), tick: tick, layer: 0)
+        } else if isActive("matrix_title") && isArrival {
             MatrixText(
                 text: displayTitle,
                 font: berkeleyMono(size: TypeSize.body),
@@ -382,6 +422,7 @@ struct NotificationItemView: View {
                 duration: 0.8
             )
             .lineLimit(1)
+            .parallax(isActive: isActive("parallax"), tick: tick, layer: 0)
         } else if isActive("wave_title") && !notification.isRead {
             WaveText(
                 text: displayTitle,
@@ -391,11 +432,13 @@ struct NotificationItemView: View {
                 cycleDuration: 2.0
             )
             .lineLimit(1)
+            .parallax(isActive: isActive("parallax"), tick: tick, layer: 0)
         } else {
             Text(displayTitle)
                 .font(berkeleyMono(size: TypeSize.body))
                 .foregroundColor(titleColor)
                 .lineLimit(1)
+                .parallax(isActive: isActive("parallax"), tick: tick, layer: 0)
         }
     }
 
