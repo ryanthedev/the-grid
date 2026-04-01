@@ -238,6 +238,11 @@ struct NotificationItemView: View {
         computeAnimationPhase(notification: notification, isArrival: isArrival)
     }
 
+    // Notification age in seconds (for heatmap)
+    private var notificationAge: TimeInterval {
+        Date().timeIntervalSince(notification.timestamp)
+    }
+
     // Seconds remaining for warning progress bar
     private var remaining: TimeInterval? {
         notification.secondsRemaining()
@@ -361,6 +366,13 @@ struct NotificationItemView: View {
         .tilt(isActive: isActive("tilt") && isSelected)
         // Scanline sweep
         .scanline(isActive: isActive("scanline"), accentColor: theme.accent)
+        // Phase 3: color + mood animations
+        // Gradient sweep on arrival
+        .gradientSweep(isActive: isActive("gradient_sweep") && isArrival, accentColor: theme.accent)
+        // Heatmap age-based background tint
+        .heatmap(isActive: isActive("heatmap"), age: notificationAge, warmColor: theme.urgent)
+        // Neon flicker for urgent notifications
+        .neonFlicker(isActive: isActive("neon_flicker") && notification.priority == .urgent, accentColor: theme.accent)
         .onAppear {
             // Flash if notification is less than 2 seconds old
             if isArrival && isActive("arrival_flash") {
@@ -411,6 +423,15 @@ struct NotificationItemView: View {
                 font: berkeleyMono(size: TypeSize.body),
                 color: titleColor,
                 intensity: 0.15
+            )
+            .lineLimit(1)
+            .parallax(isActive: isActive("parallax"), tick: tick, layer: 0)
+        } else if isActive("chromatic_aberration") && phase == .warning {
+            ChromaticAberrationText(
+                text: displayTitle,
+                font: berkeleyMono(size: TypeSize.body),
+                baseColor: titleColor,
+                offset: 1.5
             )
             .lineLimit(1)
             .parallax(isActive: isActive("parallax"), tick: tick, layer: 0)

@@ -68,7 +68,7 @@ final class AnimationRegistry {
         return effects.keys.sorted()
     }
 
-    // Register all built-in effects (Phase 1 + Phase 2).
+    // Register all built-in effects (Phase 1 + Phase 2 + Phase 3).
     func registerBuiltins() {
         // Phase 1: core animations
         register(ShakeEffect())
@@ -93,6 +93,12 @@ final class AnimationRegistry {
         register(AccordionEffect())
         register(TiltEffect())
         register(ParallaxEffect())
+
+        // Phase 3: color + mood animations
+        register(GradientSweepEffect())
+        register(HeatmapEffect())
+        register(NeonFlickerEffect())
+        register(ChromaticAberrationEffect())
     }
 }
 
