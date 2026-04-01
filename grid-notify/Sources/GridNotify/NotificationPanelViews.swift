@@ -308,12 +308,6 @@ struct NotificationItemView: View {
                 .fill(theme.accent)
                 .opacity(flashOpacity)
         )
-        // Invert colors during warning phase
-        .invertColors(
-            isActive: phase == .warning,
-            textColor: theme.textPrimary,
-            backgroundColor: theme.background
-        )
         // Border strobe during warning phase
         .borderStrobe(
             isActive: phase == .warning,

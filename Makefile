@@ -169,6 +169,7 @@ notify-app-bundle: notify-universal
 	@mkdir -p dist/GridNotify.app/Contents/Resources
 	@cp grid-notify/.build/apple/Products/Release/GridNotify dist/GridNotify.app/Contents/MacOS/grid-notify
 	@cp grid-notify/Info.plist dist/GridNotify.app/Contents/
+	@cp -R grid-notify/scripts/ dist/GridNotify.app/Contents/Resources/scripts/
 	@sed -i '' "s/VERSION_PLACEHOLDER/$(VERSION)/g" dist/GridNotify.app/Contents/Info.plist
 	@grep -q "$(VERSION)" dist/GridNotify.app/Contents/Info.plist || (echo "ERROR: Version substitution failed" && exit 1)
 	@echo "Signing app bundle with identity '$(CODESIGN_IDENTITY)'..."
@@ -259,6 +260,7 @@ notify-dev: notify
 	@mkdir -p $(NOTIFY_APP_BUNDLE)/Contents/Resources
 	@cp grid-notify/.build/debug/GridNotify $(NOTIFY_APP_BUNDLE)/Contents/MacOS/grid-notify
 	@cp grid-notify/Info.plist $(NOTIFY_APP_BUNDLE)/Contents/
+	@cp -R grid-notify/scripts/ $(NOTIFY_APP_BUNDLE)/Contents/Resources/scripts/
 	@echo "Signing with identity '$(CODESIGN_IDENTITY)'..."
 	@codesign -fs "$(CODESIGN_IDENTITY)" --entitlements $(NOTIFY_ENTITLEMENTS) $(NOTIFY_APP_BUNDLE)/Contents/MacOS/grid-notify
 	@codesign -fs "$(CODESIGN_IDENTITY)" --entitlements $(NOTIFY_ENTITLEMENTS) $(NOTIFY_APP_BUNDLE)

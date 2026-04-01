@@ -6,6 +6,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var viewModel: NotificationPanelViewModel?
     private var store: NotificationStore?
     private var fileWatcher: NotificationFileWatcher?
+    private var scriptManager: ScriptManager?
 
     // Retain signal source references to prevent deallocation
     private var sigintSource: DispatchSourceSignal?
@@ -72,6 +73,23 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             self.fileWatcher = watcher
         }
 
+        // Start managed scripts (e.g., iMessage watcher)
+        let enabledScripts = config.scripts.filter { $0.enabled }
+        if !enabledScripts.isEmpty {
+            let mgr = ScriptManager()
+            for script in enabledScripts {
+                mgr.register(ScriptManager.ScriptConfig(
+                    name: script.name,
+                    path: script.path,
+                    arguments: script.arguments,
+                    restartDelay: script.restartDelay
+                ))
+            }
+            mgr.startAll()
+            self.scriptManager = mgr
+            jlog("notify.scripts.started", data: ["count": enabledScripts.count])
+        }
+
         // Listen for toggle notification from grid-server / BFD
         DistributedNotificationCenter.default().addObserver(
             self,
@@ -106,6 +124,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        scriptManager?.stopAll()
         fileWatcher?.stop()
         // Flush store synchronously.
         // applicationWillTerminate runs on main thread so we use a semaphore
@@ -135,6 +154,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let sigint = DispatchSource.makeSignalSource(signal: SIGINT, queue: signalQueue)
         sigint.setEventHandler { [weak self] in
             jlog("notify.sig.int")
+            self?.scriptManager?.stopAll()
             self?.fileWatcher?.stop()
             let store = self?.store
             Task {
@@ -150,6 +170,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let sigterm = DispatchSource.makeSignalSource(signal: SIGTERM, queue: signalQueue)
         sigterm.setEventHandler { [weak self] in
             jlog("notify.sig.term")
+            self?.scriptManager?.stopAll()
             self?.fileWatcher?.stop()
             let store = self?.store
             Task {

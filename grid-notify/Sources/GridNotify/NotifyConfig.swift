@@ -18,16 +18,30 @@ struct NotifyConfig {
     // Raw hex color dict passed to NotificationPanelTheme.init(from:). Empty = use defaults.
     var themeColors: [String: String]
 
+    // Managed scripts — launched as supervised child processes
+    var scripts: [ScriptEntry]
+
+    struct ScriptEntry {
+        var name: String
+        var path: String
+        var arguments: [String]
+        var enabled: Bool
+        // Restart delay in seconds after crash. 0 = don't restart.
+        var restartDelay: TimeInterval
+    }
+
     init(
         pipePath: String = "\(XDG.stateHome)/thegrid/notify.pipe",
         pipeSourceLabel: String = "pipe",
         maxCount: Int = 0,
-        themeColors: [String: String] = [:]
+        themeColors: [String: String] = [:],
+        scripts: [ScriptEntry] = []
     ) {
         self.pipePath = pipePath
         self.pipeSourceLabel = pipeSourceLabel
         self.maxCount = maxCount
         self.themeColors = themeColors
+        self.scripts = scripts
     }
 }
 
@@ -37,11 +51,13 @@ private struct NotifyConfigYAML: Codable {
     var pipe: PipeYAML?
     var maxCount: Int?
     var theme: [String: String]?
+    var scripts: [ScriptYAML]?
 
     private enum CodingKeys: String, CodingKey {
         case pipe
         case maxCount = "max_count"
         case theme
+        case scripts
     }
 }
 
@@ -52,6 +68,22 @@ private struct PipeYAML: Codable {
     private enum CodingKeys: String, CodingKey {
         case path
         case sourceLabel = "source_label"
+    }
+}
+
+private struct ScriptYAML: Codable {
+    var name: String
+    var path: String
+    var arguments: [String]?
+    var enabled: Bool?
+    var restartDelay: Double?
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case path
+        case arguments
+        case enabled
+        case restartDelay = "restart_delay"
     }
 }
 
@@ -85,6 +117,18 @@ func loadNotifyConfig() -> NotifyConfig {
         }
         if let theme = yaml.theme {
             config.themeColors = theme
+        }
+
+        if let scripts = yaml.scripts {
+            config.scripts = scripts.map { s in
+                NotifyConfig.ScriptEntry(
+                    name: s.name,
+                    path: expandTilde(s.path),
+                    arguments: (s.arguments ?? []).map { expandTilde($0) },
+                    enabled: s.enabled ?? true,
+                    restartDelay: s.restartDelay ?? 5.0
+                )
+            }
         }
 
         return config
