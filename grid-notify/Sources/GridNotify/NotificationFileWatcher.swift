@@ -23,6 +23,8 @@ private struct NotificationLineDescriptor: Codable {
     let ttl: TimeInterval?
     // Seconds before expiry to start warning animation.
     let warn_before: TimeInterval?
+    // Per-notification animation overrides.
+    let animations: NotificationAnimationOverride?
 }
 
 // MARK: - NotificationFileWatcher
@@ -283,7 +285,8 @@ class NotificationFileWatcher {
                 action: action,
                 detailCmd: desc.detail_cmd,
                 ttl: desc.ttl ?? 0,
-                warnBefore: desc.warn_before ?? 0
+                warnBefore: desc.warn_before ?? 0,
+                animationOverride: desc.animations
             )
 
             // If explicit id was provided, use upsert (updates existing or inserts new).

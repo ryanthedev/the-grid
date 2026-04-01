@@ -170,6 +170,7 @@ actor NotificationStore {
             existing.action = notification.action
             existing.detailCmd = notification.detailCmd
             existing.priority = notification.priority
+            existing.animationOverride = notification.animationOverride
             // Reset TTL countdown to now
             existing.ttlResetDate = Date()
             // Bump group count

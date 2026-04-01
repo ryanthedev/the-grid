@@ -136,7 +136,8 @@ struct NotificationListView: View {
                             isSelected: index == viewModel.selectedIndex,
                             isVisualSelected: viewModel.visualSelectedRange?.contains(index) ?? false,
                             theme: viewModel.theme,
-                            tick: viewModel.lifecycleTick
+                            tick: viewModel.lifecycleTick,
+                            animationConfig: viewModel.animationConfig
                         )
                         .id(notification.id)
                         // Flip each item back right-side up
@@ -204,6 +205,8 @@ struct NotificationItemView: View {
     let theme: NotificationPanelTheme
     // Lifecycle tick from ViewModel — triggers re-render for warning phase
     let tick: UInt
+    // Animation config — drives which animations are active per phase
+    let animationConfig: AnimationConfig
 
     // Flash state for new notifications
     @State private var flashOpacity: Double = 0
@@ -230,6 +233,11 @@ struct NotificationItemView: View {
         Date().timeIntervalSince(notification.timestamp) < 2
     }
 
+    // Computed animation phase (replaces scattered conditionals)
+    private var animPhase: AnimationPhase {
+        computeAnimationPhase(notification: notification, isArrival: isArrival)
+    }
+
     // Seconds remaining for warning progress bar
     private var remaining: TimeInterval? {
         notification.secondsRemaining()
@@ -239,6 +247,16 @@ struct NotificationItemView: View {
     private var warningProgress: Double {
         guard let r = remaining, notification.warnBefore > 0 else { return 0 }
         return r / notification.warnBefore
+    }
+
+    // Check if a named animation is active for the current phase
+    private func isActive(_ name: String) -> Bool {
+        isAnimationActive(
+            name,
+            config: animationConfig,
+            notification: notification,
+            animationPhase: animPhase
+        )
     }
 
     var body: some View {
@@ -272,14 +290,16 @@ struct NotificationItemView: View {
                 }
 
                 if !notification.body.isEmpty {
+                    let bodyColor = (isActive("warning_pulse") && phase == .warning)
+                        ? theme.textPrimary : theme.textSecondary
                     Text(notification.body)
                         .font(berkeleyMono(size: TypeSize.body))
-                        .foregroundColor(phase == .warning ? theme.textPrimary : theme.textSecondary)
+                        .foregroundColor(bodyColor)
                         .lineLimit(2)
                 }
 
                 // Progress bar drain during warning phase
-                if phase == .warning {
+                if isActive("progress_bar") && phase == .warning {
                     ProgressBarView(
                         progress: warningProgress,
                         accentColor: theme.accent,
@@ -293,13 +313,13 @@ struct NotificationItemView: View {
         .padding(.trailing, Space.lg)
         .padding(.vertical, Space.md)
         // Grow: extra vertical padding during warning phase
-        .grow(isActive: phase == .warning)
+        .grow(isActive: isActive("grow") && phase == .warning)
         .background(backgroundColor)
         // Warning phase: pulsing urgent overlay
         .overlay(
             Rectangle()
                 .fill(theme.urgent)
-                .opacity(phase == .warning ? (warningPulse ? 0.15 : 0.05) : 0)
+                .opacity(isActive("warning_pulse") && phase == .warning ? (warningPulse ? 0.15 : 0.05) : 0)
                 .animation(.easeInOut(duration: 0.5).repeatForever(autoreverses: true), value: warningPulse)
         )
         // Flash overlay for new notifications
@@ -310,32 +330,32 @@ struct NotificationItemView: View {
         )
         // Border strobe during warning phase
         .borderStrobe(
-            isActive: phase == .warning,
+            isActive: isActive("border_strobe") && phase == .warning,
             urgentColor: theme.urgent,
             accentColor: theme.accent
         )
         // Shake during warning phase
-        .shake(isActive: phase == .warning, tick: tick)
-        // Fade to ghost in last 3 seconds before expiry
-        .fadeToGhost(secondsRemaining: remaining)
+        .shake(isActive: isActive("shake") && phase == .warning, tick: tick)
+        // Fade to ghost in last seconds before expiry
+        .fadeToGhost(secondsRemaining: isActive("fade_to_ghost") ? remaining : nil)
         // Slide in for new arrivals
-        .slideIn(isActive: isArrival)
+        .slideIn(isActive: isActive("slide_in") && isArrival)
         .onAppear {
             // Flash if notification is less than 2 seconds old
-            if isArrival {
+            if isArrival && isActive("arrival_flash") {
                 flashOpacity = 0.3
                 withAnimation(.easeOut(duration: 0.8)) {
                     flashOpacity = 0
                 }
             }
             // Start pulse if already in warning phase
-            if phase == .warning {
+            if phase == .warning && isActive("warning_pulse") {
                 warningPulse = true
             }
         }
         .onChange(of: tick) { _ in
             // Start/stop pulse based on lifecycle phase
-            if phase == .warning && !warningPulse {
+            if phase == .warning && isActive("warning_pulse") && !warningPulse {
                 warningPulse = true
             }
         }
@@ -349,14 +369,12 @@ struct NotificationItemView: View {
         return notification.title
     }
 
-    // Title view: adapts based on lifecycle phase
-    // Arrival: matrix text (random chars resolve to real title)
-    // Normal + unread: wave text (rippling character offsets)
-    // Warning / read: static text
+    // Title view: adapts based on animation config.
+    // matrix_title during arrival, wave_title during idle+unread, static otherwise.
     @ViewBuilder
     private var titleView: some View {
         let titleColor = notification.isRead ? theme.textSecondary : theme.textPrimary
-        if isArrival {
+        if isActive("matrix_title") && isArrival {
             MatrixText(
                 text: displayTitle,
                 font: berkeleyMono(size: TypeSize.body),
@@ -364,7 +382,7 @@ struct NotificationItemView: View {
                 duration: 0.8
             )
             .lineLimit(1)
-        } else if !notification.isRead && phase == .normal {
+        } else if isActive("wave_title") && !notification.isRead {
             WaveText(
                 text: displayTitle,
                 font: berkeleyMono(size: TypeSize.body),
@@ -392,26 +410,26 @@ struct NotificationItemView: View {
     }
 
     // Left-edge colored bar: 2px wide, full item height.
-    // Unread notifications get an animated braille spinner.
+    // Spinner animations controlled by config.
     @ViewBuilder
     private var priorityEdge: some View {
         let (color, symbol) = priorityVisuals(notification.priority)
         VStack(spacing: 2) {
-            if phase == .warning {
+            if isActive("spinner") && phase == .warning {
                 // Warning phase: fast urgent spinner
                 SpriteView(
                     frames: Self.countdownFrames,
                     interval: 0.2,
                     color: theme.urgent
                 )
-            } else if !notification.isRead {
+            } else if isActive("spinner") && !notification.isRead {
                 SpriteView(
                     frames: Self.spinnerFrames,
                     interval: 0.1,
                     color: theme.accent
                 )
                 // Breathing pulse on the spinner like a Mac sleep LED
-                .breathing(isActive: true)
+                .breathing(isActive: isActive("breathing"))
             } else {
                 Text(symbol)
                     .font(berkeleyMono(size: TypeSize.meta, weight: .bold))

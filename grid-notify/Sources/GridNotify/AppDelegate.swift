@@ -7,6 +7,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var store: NotificationStore?
     private var fileWatcher: NotificationFileWatcher?
     private var scriptManager: ScriptManager?
+    private var animConfigWatcher: AnimationConfigWatcher?
 
     // Retain signal source references to prevent deallocation
     private var sigintSource: DispatchSourceSignal?
@@ -52,6 +53,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Create view model
         let vm = NotificationPanelViewModel(store: store, theme: theme)
         self.viewModel = vm
+
+        // Initialize animation engine
+        AnimationRegistry.shared.registerBuiltins()
+        let animConfig = loadAnimationConfigFromYAML()
+        vm.updateAnimationConfig(animConfig)
+
+        // Start hot-reload watcher for animation config
+        let animWatcher = AnimationConfigWatcher()
+        animWatcher.onConfigChange = { [weak vm] config in
+            vm?.updateAnimationConfig(config)
+            jlog("notify.animcfg.applied")
+        }
+        animWatcher.start()
+        self.animConfigWatcher = animWatcher
 
         // Create and show window
         let window = NotificationPanelWindow(viewModel: vm)
@@ -124,6 +139,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        animConfigWatcher?.stop()
         scriptManager?.stopAll()
         fileWatcher?.stop()
         // Flush store synchronously.

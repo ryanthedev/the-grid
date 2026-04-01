@@ -114,6 +114,9 @@ struct GridNotification: Codable, Identifiable {
     // Reset on each upsert to refresh the countdown.
     var ttlResetDate: Date?
 
+    // Per-notification animation override. nil = use config defaults.
+    var animationOverride: NotificationAnimationOverride?
+
     init(
         id: String = UUID().uuidString,
         source: String,
@@ -129,7 +132,8 @@ struct GridNotification: Codable, Identifiable {
         ttl: TimeInterval = 0,
         warnBefore: TimeInterval = 0,
         groupCount: Int = 1,
-        ttlResetDate: Date? = nil
+        ttlResetDate: Date? = nil,
+        animationOverride: NotificationAnimationOverride? = nil
     ) {
         self.id = id
         self.source = source
@@ -146,6 +150,7 @@ struct GridNotification: Codable, Identifiable {
         self.warnBefore = warnBefore
         self.groupCount = groupCount
         self.ttlResetDate = ttlResetDate
+        self.animationOverride = animationOverride
     }
 
     // Lifecycle phase of the notification based on current time.
@@ -171,6 +176,29 @@ struct GridNotification: Codable, Identifiable {
         // Use ttlResetDate if set, otherwise fall back to creation timestamp
         let baseDate = ttlResetDate ?? timestamp
         return max(0, ttl - now.timeIntervalSince(baseDate))
+    }
+}
+
+// MARK: - NotificationAnimationOverride
+
+// Per-notification animation override. When present, takes priority over
+// YAML config presets for the phases that have non-empty lists.
+// Sent via the JSON input's "animations" field.
+struct NotificationAnimationOverride: Codable {
+    var arrival: [String]?
+    var idle: [String]?
+    var warning: [String]?
+    var ghost: [String]?
+
+    // Returns animation names for a given phase.
+    // Empty list means "no override for this phase" (fall through to config).
+    func names(for phase: AnimationPhase) -> [String] {
+        switch phase {
+        case .arrival: return arrival ?? []
+        case .idle: return idle ?? []
+        case .warning: return warning ?? []
+        case .ghost: return ghost ?? []
+        }
     }
 }
 

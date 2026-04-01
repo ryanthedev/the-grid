@@ -61,6 +61,9 @@ class NotificationPanelViewModel: ObservableObject {
     // Published tick counter — views observe this to update warning animations
     @Published var lifecycleTick: UInt = 0
 
+    // Animation config — hot-reloadable, drives which animations are active
+    @Published var animationConfig: AnimationConfig = .builtinDefault
+
     init(store: NotificationStore, theme: NotificationPanelTheme = .default) {
         self.store = store
         self.theme = theme
@@ -96,6 +99,13 @@ class NotificationPanelViewModel: ObservableObject {
             refreshNotifications()
             jlog("notify.lifecycle.expire", data: ["count": expiredIDs.count])
         }
+    }
+
+    // MARK: - Animation Config
+
+    // Update animation config from hot-reload or initial load.
+    func updateAnimationConfig(_ config: AnimationConfig) {
+        self.animationConfig = config
     }
 
     // MARK: - Data Loading
