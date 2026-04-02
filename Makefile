@@ -192,7 +192,7 @@ dist-universal: app-bundle notify-app-bundle cli-universal viewer-universal
 	@cp VERSION dist/thegrid-$(VERSION)/
 	@cp LICENSE dist/thegrid-$(VERSION)/ 2>/dev/null || echo "No LICENSE file"
 	@cp README.md dist/thegrid-$(VERSION)/ 2>/dev/null || true
-	@printf '    prefix.install "GridServer.app"\n    prefix.install "GridNotify.app"\n    bin.install "bin/thegrid"\n    bin.install "bin/grid-viewer"\n    bin.install_symlink prefix/"GridServer.app/Contents/MacOS/grid-server"\n' > dist/thegrid-$(VERSION)/FORMULA_INSTALL
+	@printf '    prefix.install "GridServer.app"\n    prefix.install "GridNotify.app"\n    bin.install "bin/thegrid"\n    bin.install "bin/grid-viewer"\n    bin.install_symlink prefix/"GridServer.app/Contents/MacOS/grid-server"\n    bin.install_symlink prefix/"GridNotify.app/Contents/MacOS/grid-notify"\n' > dist/thegrid-$(VERSION)/FORMULA_INSTALL
 	@cd dist && tar -czf thegrid-$(VERSION)-darwin-universal.tar.gz thegrid-$(VERSION)
 	@echo ""
 	@echo "Universal distribution tarball created:"
@@ -293,7 +293,7 @@ run: dev install-dev
 	@echo "Killing any stray grid-server processes..."
 	@pkill -9 -f grid-server 2>/dev/null || true
 	@echo "Killing any stray grid-notify processes..."
-	@pkill -9 -f GridNotify 2>/dev/null || true
+	@pkill -9 -f grid-notify 2>/dev/null || true
 	@sleep 0.5
 	@echo "Clearing state, logs, and config cache..."
 	@rm -f ~/.local/state/thegrid/*.json
