@@ -89,6 +89,15 @@ class NotificationPanelViewModel: ObservableObject {
             }
         }
 
+        // Wake snoozed notifications
+        Task {
+            let woken = await store.wakeExpiredSnoozes()
+            if woken > 0 {
+                refreshNotifications()
+                jlog("notify.snooze.wake", data: ["count": woken])
+            }
+        }
+
         guard !expiredIDs.isEmpty else { return }
 
         // Auto-dismiss expired notifications
@@ -117,8 +126,10 @@ class NotificationPanelViewModel: ObservableObject {
         let filter = buildFilter()
         refreshTask = Task {
             let results = await store.notifications(filter: filter)
+            let snoozed = await store.snoozedCount()
             guard !Task.isCancelled else { return }
             self.notifications = results
+            self.cachedSnoozedCount = snoozed
             // Select newest notification (index 0, visually at bottom in flipped scroll)
             self.selectedIndex = 0
             self.updateStatusText()
@@ -135,6 +146,9 @@ class NotificationPanelViewModel: ObservableObject {
         return filter
     }
 
+    // Cached snoozed count, updated on each refresh
+    private var cachedSnoozedCount: Int = 0
+
     private func updateStatusText() {
         switch mode {
         case .normal:
@@ -143,6 +157,9 @@ class NotificationPanelViewModel: ObservableObject {
             var parts: [String] = ["\(total) notification\(total == 1 ? "" : "s")"]
             if pinnedCount > 0 {
                 parts.append("\(pinnedCount) pinned")
+            }
+            if cachedSnoozedCount > 0 {
+                parts.append("\(cachedSnoozedCount) snoozed")
             }
             if !filterText.isEmpty {
                 parts.append("filter: \(filterText)")
@@ -193,6 +210,21 @@ class NotificationPanelViewModel: ObservableObject {
         Task {
             await store.dismiss(id: notification.id)
             refreshNotifications()
+        }
+    }
+
+    // Default snooze duration: 5 minutes
+    private let snoozeDuration: TimeInterval = 300
+
+    func snoozeSelected() {
+        guard let notification = currentNotification else { return }
+        Task {
+            await store.snooze(id: notification.id, duration: snoozeDuration)
+            refreshNotifications()
+            jlog("notify.snooze", data: [
+                "id": notification.id,
+                "duration": snoozeDuration,
+            ])
         }
     }
 
@@ -365,6 +397,10 @@ class NotificationPanelViewModel: ObservableObject {
             // p - toggle pin
             case 35:
                 togglePinSelected()
+                return .none
+            // s - snooze selected (5 min)
+            case 1:
+                snoozeSelected()
                 return .none
             // + (= key with shift) - increase priority
             case 24:

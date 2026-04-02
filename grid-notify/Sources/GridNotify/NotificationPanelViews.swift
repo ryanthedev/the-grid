@@ -616,6 +616,7 @@ struct NotificationHelpView: View {
         ("g / G", "Jump to oldest / newest"),
         ("d / x", "Dismiss selected"),
         ("p", "Toggle pin"),
+        ("s", "Snooze (5 min)"),
         ("+ / -", "Increase / decrease priority"),
         ("Return", "Execute action"),
         ("/", "Filter mode"),

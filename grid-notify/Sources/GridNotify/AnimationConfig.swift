@@ -16,6 +16,7 @@ struct AnimationPreset: Codable {
         switch phase {
         case .arrival: return arrival ?? []
         case .idle: return idle ?? []
+        case .nudge: return idle ?? []
         case .warning: return warning ?? []
         case .ghost: return ghost ?? []
         }

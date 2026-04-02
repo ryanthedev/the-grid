@@ -25,6 +25,8 @@ private struct NotificationLineDescriptor: Codable {
     let warn_before: TimeInterval?
     // Per-notification animation overrides.
     let animations: NotificationAnimationOverride?
+    // Repeating nudge configuration.
+    let nudge: NudgeConfig?
 }
 
 // MARK: - NotificationFileWatcher
@@ -286,7 +288,8 @@ class NotificationFileWatcher {
                 detailCmd: desc.detail_cmd,
                 ttl: desc.ttl ?? 0,
                 warnBefore: desc.warn_before ?? 0,
-                animationOverride: desc.animations
+                animationOverride: desc.animations,
+                nudge: desc.nudge
             )
 
             // If explicit id was provided, use upsert (updates existing or inserts new).

@@ -8,6 +8,7 @@ import SwiftUI
 enum AnimationPhase: String, Codable, Hashable {
     case arrival
     case idle
+    case nudge
     case warning
     case ghost
 }
@@ -176,6 +177,7 @@ func computeAnimationPhase(
     if isArrival { return .arrival }
     let lifecycle = notification.lifecyclePhase()
     if lifecycle == .warning { return .warning }
+    if lifecycle == .nudge { return .nudge }
     // Ghost: in the last 3 seconds before expiry
     if let remaining = notification.secondsRemaining(), remaining < 3.0, remaining > 0 {
         return .ghost
@@ -192,6 +194,10 @@ func isAnimationActive(
     notification: GridNotification,
     animationPhase: AnimationPhase
 ) -> Bool {
+    // During nudge phase, use the notification's nudge animations instead of config
+    if animationPhase == .nudge, let nudge = notification.nudge {
+        return nudge.animations.contains(name)
+    }
     let activeNames = config.activeAnimations(
         source: notification.source,
         phase: animationPhase,

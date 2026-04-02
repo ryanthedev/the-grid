@@ -246,6 +246,11 @@ actor NotificationStore {
         return notifications(filter: filter).count
     }
 
+    // Count of currently snoozed notifications (dismissed with a future snoozedUntil).
+    func snoozedCount() -> Int {
+        return byID.values.filter { $0.snoozedUntil != nil && $0.isDismissed }.count
+    }
+
     // MARK: - State Mutations
 
     // Marks a notification as read. Returns true if state changed.
@@ -267,6 +272,41 @@ actor NotificationStore {
         byID[id] = n
         markDirty()
         return true
+    }
+
+    // Snooze a notification for a duration. Hides it now, wakes it later.
+    // Sets snoozedUntil and marks as dismissed. The wake timer checks this.
+    @discardableResult
+    func snooze(id: String, duration: TimeInterval) -> Bool {
+        guard var n = byID[id] else { return false }
+        n.isDismissed = true
+        n.snoozedUntil = Date().addingTimeInterval(duration)
+        byID[id] = n
+        markDirty()
+        return true
+    }
+
+    // Wake all snoozed notifications whose snooze time has passed.
+    // Returns the count of notifications woken.
+    func wakeExpiredSnoozes() -> Int {
+        let now = Date()
+        var wokenCount = 0
+        for (id, var n) in byID {
+            guard let snoozedUntil = n.snoozedUntil, now >= snoozedUntil else { continue }
+            n.isDismissed = false
+            n.isRead = false
+            n.snoozedUntil = nil
+            // Reset TTL so it gets a fresh countdown
+            if n.ttl > 0 {
+                n.ttlResetDate = Date()
+            }
+            byID[id] = n
+            wokenCount += 1
+        }
+        if wokenCount > 0 {
+            markDirty()
+        }
+        return wokenCount
     }
 
     // Pins a notification so it sorts to the top of the list.

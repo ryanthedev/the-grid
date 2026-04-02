@@ -117,6 +117,13 @@ struct GridNotification: Codable, Identifiable {
     // Per-notification animation override. nil = use config defaults.
     var animationOverride: NotificationAnimationOverride?
 
+    // When snoozed, this is the time it should wake up. nil = not snoozed.
+    var snoozedUntil: Date?
+
+    // Repeating nudge config. nil = no nudge.
+    // Fires configured animations for `duration` seconds every `interval` seconds during idle.
+    var nudge: NudgeConfig?
+
     init(
         id: String = UUID().uuidString,
         source: String,
@@ -133,7 +140,8 @@ struct GridNotification: Codable, Identifiable {
         warnBefore: TimeInterval = 0,
         groupCount: Int = 1,
         ttlResetDate: Date? = nil,
-        animationOverride: NotificationAnimationOverride? = nil
+        animationOverride: NotificationAnimationOverride? = nil,
+        nudge: NudgeConfig? = nil
     ) {
         self.id = id
         self.source = source
@@ -151,31 +159,64 @@ struct GridNotification: Codable, Identifiable {
         self.groupCount = groupCount
         self.ttlResetDate = ttlResetDate
         self.animationOverride = animationOverride
+        self.nudge = nudge
     }
 
     // Lifecycle phase of the notification based on current time.
     enum LifecyclePhase {
         case normal
+        case nudge
         case warning
         case expired
     }
 
     func lifecyclePhase(at now: Date = Date()) -> LifecyclePhase {
-        guard ttl > 0 else { return .normal }
-        // Use ttlResetDate if set, otherwise fall back to creation timestamp
+        guard ttl > 0 else {
+            // Permanent notification — check nudge
+            if isNudging(at: now) { return .nudge }
+            return .normal
+        }
         let baseDate = ttlResetDate ?? timestamp
         let age = now.timeIntervalSince(baseDate)
         if age >= ttl { return .expired }
         if warnBefore > 0 && age >= (ttl - warnBefore) { return .warning }
+        if isNudging(at: now) { return .nudge }
         return .normal
+    }
+
+    // Whether the notification is currently in a nudge burst.
+    func isNudging(at now: Date = Date()) -> Bool {
+        guard let nudge, nudge.interval > 0 else { return false }
+        let age = now.timeIntervalSince(timestamp)
+        // How far into the current interval cycle
+        let cyclePosition = age.truncatingRemainder(dividingBy: nudge.interval)
+        // Nudge fires at the start of each cycle for `duration` seconds
+        return cyclePosition < nudge.duration
     }
 
     // Seconds remaining until expiry. nil if permanent.
     func secondsRemaining(at now: Date = Date()) -> TimeInterval? {
         guard ttl > 0 else { return nil }
-        // Use ttlResetDate if set, otherwise fall back to creation timestamp
         let baseDate = ttlResetDate ?? timestamp
         return max(0, ttl - now.timeIntervalSince(baseDate))
+    }
+}
+
+// MARK: - NudgeConfig
+
+// Configures a repeating attention burst during the idle phase.
+struct NudgeConfig: Codable {
+    // Seconds between nudge bursts
+    var interval: TimeInterval
+    // How long each burst lasts (seconds)
+    var duration: TimeInterval
+    // Animations to play during the burst. Uses animation engine names.
+    var animations: [String]
+
+    init(interval: TimeInterval = 10, duration: TimeInterval = 2, animations: [String] = ["shake", "heartbeat"]) {
+        self.interval = interval
+        self.duration = duration
+        self.animations = animations
     }
 }
 
@@ -196,6 +237,7 @@ struct NotificationAnimationOverride: Codable {
         switch phase {
         case .arrival: return arrival ?? []
         case .idle: return idle ?? []
+        case .nudge: return idle ?? []
         case .warning: return warning ?? []
         case .ghost: return ghost ?? []
         }
