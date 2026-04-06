@@ -463,6 +463,7 @@ class GridReconciler: StateEventHandler {
 
         // Check if window is tileable
         guard isTileable(window: windowState) else {
+            await gridState.rejectWindow(windowID)
             jlog("reconcile.win.create.bail", data: [
                 "wid": windowID,
                 "reason": "not_tileable",

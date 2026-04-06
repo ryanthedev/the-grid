@@ -155,10 +155,12 @@ class GridApply {
 
         // 5. Filter tileable windows from StateManager
         let exclusions = await MainActor.run { gridConfig.getWindowExclusions() }
+        let rejected = await gridState.getRejectedWindows()
         let tileableWindows = filterTileableFromState(
             wmState: wmState,
             spaceID: spaceID,
-            exclusions: exclusions
+            exclusions: exclusions,
+            rejectedWindows: rejected
         )
 
         // 6. Get previous assignments from GridState
@@ -504,7 +506,8 @@ class GridApply {
     private func filterTileableFromState(
         wmState: WindowManagerState,
         spaceID: String,
-        exclusions: GridWindowExclusion
+        exclusions: GridWindowExclusion,
+        rejectedWindows: Set<UInt32> = []
     ) -> [WindowState] {
         var tileable: [WindowState] = []
 
@@ -514,6 +517,9 @@ class GridApply {
         for (_, windowState) in wmState.windows {
             // Check if window is on this space
             guard windowState.spaces.contains(spaceIDInt) else { continue }
+
+            // Skip windows rejected by the reconciler at creation
+            if rejectedWindows.contains(windowState.id) { continue }
 
             // Check tileable
             guard isTileable(window: windowState) else { continue }

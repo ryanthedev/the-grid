@@ -42,6 +42,11 @@ struct WindowSource: PickerSource {
                 continue
             }
 
+            // Skip zero/tiny windows (helper windows that aren't user-facing)
+            if window.frame.width < 50 || window.frame.height < 50 {
+                continue
+            }
+
             // Look up application info
             let pidStr = "\(window.pid)"
             let app = state.applications[pidStr]

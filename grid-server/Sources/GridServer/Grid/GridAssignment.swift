@@ -512,13 +512,21 @@ enum GridAssignment {
         for window in windows {
             var bestCell = ""
             var bestOverlap = 0.0
+            var bestCellCount = Int.max
 
             // Skip locked cells when computing overlap
             for (cellID, bounds) in cellBounds where !lockedCells.contains(cellID) {
                 let overlap = window.frame.overlapArea(with: bounds)
-                if overlap > bestOverlap {
+                let cellCount = result.assignments[cellID]?.count ?? 0
+                // Tiebreak equal overlap by least-populated cell.
+                // Prevents all stacked/tabbed windows (same frame) from
+                // piling into whichever cell iterates first.
+                if overlap > bestOverlap
+                    || (overlap == bestOverlap && overlap > 0 && cellCount < bestCellCount)
+                {
                     bestOverlap = overlap
                     bestCell = cellID
+                    bestCellCount = cellCount
                 }
             }
 
