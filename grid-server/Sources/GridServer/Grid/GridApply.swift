@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import CoreGraphics
 
@@ -154,10 +155,12 @@ class GridApply {
 
         // 5. Filter tileable windows from StateManager
         let exclusions = await MainActor.run { gridConfig.getWindowExclusions() }
+        let rejected = await gridState.getRejectedWindows()
         let tileableWindows = filterTileableFromState(
             wmState: wmState,
             spaceID: spaceID,
-            exclusions: exclusions
+            exclusions: exclusions,
+            rejectedWindows: rejected
         )
 
         // 6. Get previous assignments from GridState
@@ -458,8 +461,13 @@ class GridApply {
     // ============================================================
 
     // applyPlacementsViaAX: position windows via WindowManipulator
+    // Own-process windows (notification panel) use NSWindow.setFrame on MainActor
+    // because AX calls on own-process windows execute in-place on the calling
+    // thread, crashing AppKit's main-thread assertion.
     private func applyPlacementsViaAX(_ placements: [GridWindowPlacement]) async {
         if placements.isEmpty { return }
+
+        let serverPID = ProcessInfo.processInfo.processIdentifier
 
         await withTaskGroup(of: Void.self) { group in
             for placement in placements {
@@ -468,6 +476,19 @@ class GridApply {
                         jlog("warn.placement", data: ["wid": placement.windowID, "reason": "no_context"])
                         return
                     }
+
+                    // Own-process window: use NSWindow.setFrame on MainActor
+                    if context.pid == serverPID {
+                        let bounds = placement.bounds
+                        await MainActor.run {
+                            guard let nsWindow = NSApp.windows.first(where: { $0.windowNumber == Int(placement.windowID) }) else { return }
+                            let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
+                            let flippedY = primaryHeight - bounds.origin.y - bounds.height
+                            nsWindow.setFrame(NSRect(x: bounds.origin.x, y: flippedY, width: bounds.width, height: bounds.height), display: true)
+                        }
+                        return
+                    }
+
                     guard let manipulator = self?.windowManipulator else { return }
                     let success = await manipulator.setWindowFrame(
                         context: context,
@@ -485,7 +506,8 @@ class GridApply {
     private func filterTileableFromState(
         wmState: WindowManagerState,
         spaceID: String,
-        exclusions: GridWindowExclusion
+        exclusions: GridWindowExclusion,
+        rejectedWindows: Set<UInt32> = []
     ) -> [WindowState] {
         var tileable: [WindowState] = []
 
@@ -495,6 +517,9 @@ class GridApply {
         for (_, windowState) in wmState.windows {
             // Check if window is on this space
             guard windowState.spaces.contains(spaceIDInt) else { continue }
+
+            // Skip windows rejected by the reconciler at creation
+            if rejectedWindows.contains(windowState.id) { continue }
 
             // Check tileable
             guard isTileable(window: windowState) else { continue }

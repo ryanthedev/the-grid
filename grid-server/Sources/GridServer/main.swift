@@ -108,19 +108,22 @@ struct GridServerCommand: ParsableCommand {
 
             // Initialize GridConfig (replaces ServerConfig)
             let gridConfig = GridConfig()
+
+            // Initialize GridState (load persisted state)
+            let gridState = GridState()
             Task {
+                await gridState.load()
+            }
+
+            // Load config on @MainActor so that:
+            // - gridConfig.onReload (MainActor-isolated) can be assigned safely
+            Task { @MainActor in
                 do {
                     try await gridConfig.load()
                     jlog("grid.cfg.ready")
                 } catch {
                     jlog("err.grid.cfg", data: ["err": "\(error)"])
                 }
-            }
-
-            // Initialize GridState (load persisted state)
-            let gridState = GridState()
-            Task {
-                await gridState.load()
             }
 
             // Initialize GridReconciler (wired after StateManager starts)
@@ -202,6 +205,21 @@ struct GridServerCommand: ParsableCommand {
                 gridConfig: gridConfig,
                 stateManager: StateManager.shared
             )
+
+            // Reapply layouts on startup to reposition windows after server restart.
+            // Runs after all modules are wired, with a brief delay to let
+            // StateManager finish its initial poll cycle.
+            Task {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                let errors = await gridApply.refreshAllDisplays()
+                if errors.isEmpty {
+                    jlog("srv.layout.restore")
+                } else {
+                    jlog("srv.layout.restore", data: [
+                        "errors": errors.count,
+                    ])
+                }
+            }
 
             // Initialize BFD hotkey daemon
             // Note: bfdManager captured by shutdown closure - will be stopped on exit

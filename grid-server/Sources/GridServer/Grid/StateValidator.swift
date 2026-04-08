@@ -8,6 +8,10 @@
 
 import Foundation
 import CoreGraphics
+import ApplicationServices
+
+@_silgen_name("_AXUIElementGetWindow")
+private func _AXUIElementGetWindow(_ element: AXUIElement, _ windowID: UnsafeMutablePointer<UInt32>) -> AXError
 
 actor StateValidator {
 
@@ -23,6 +27,12 @@ actor StateValidator {
 
     // Validation interval: 30 seconds
     private let validationInterval: TimeInterval = 30.0
+
+    // Track consecutive AX-orphan detections per window.
+    // A window must be orphaned for 2+ consecutive cycles before pruning
+    // to avoid false positives during transient states (app launch, window creation).
+    private var axOrphanCounts: [UInt32: Int] = [:]
+    private let axOrphanThreshold = 2
 
     // MARK: - Initialization
 
@@ -68,6 +78,7 @@ actor StateValidator {
         jlog("validate.start")
 
         await pruneDeadWindows(wmState: wmState)
+        await pruneAXOrphanedWindows(wmState: wmState)
         await deduplicateWindows(wmState: wmState)
         await pruneDeadSpaces(wmState: wmState)
 
@@ -100,6 +111,89 @@ actor StateValidator {
                 jlog("validate.win.prune", data: ["wid": windowID, "reason": "dead"])
             }
         }
+    }
+
+    // pruneAXOrphanedWindows -- remove windows that exist in SkyLight but are
+    // not in their owner app's AX window list. These are "ghost" windows: the
+    // CGWindowList entry persists but the window is inaccessible via accessibility
+    // APIs, so it can't be focused or manipulated.
+    //
+    // Uses a 2-cycle threshold to avoid false positives during transient states
+    // (app launch, window animation, etc.).
+    private func pruneAXOrphanedWindows(wmState: WindowManagerState) async {
+        guard let gridState else { return }
+
+        let allTrackedIDs = await gridState.getAllWindowIDs()
+        var stillOrphaned: Set<UInt32> = []
+
+        // Group tracked windows by pid to batch AX lookups per app
+        var pidToWindows: [pid_t: [UInt32]] = [:]
+        for windowID in allTrackedIDs {
+            if wmState.windows[String(windowID)]?.isMinimized == true {
+                continue
+            }
+            guard let windowState = wmState.windows[String(windowID)] else { continue }
+            pidToWindows[windowState.pid, default: []].append(windowID)
+        }
+
+        for (pid, windowIDs) in pidToWindows {
+            let axWindowIDs = getAXWindowIDs(pid: pid)
+            // If AX query failed entirely (app busy, no permission), skip — don't prune
+            guard let axWindowIDs else { continue }
+
+            for windowID in windowIDs {
+                if !axWindowIDs.contains(windowID) {
+                    stillOrphaned.insert(windowID)
+                }
+            }
+        }
+
+        // Update orphan counts: increment for still-orphaned, reset for recovered
+        var newCounts: [UInt32: Int] = [:]
+        for windowID in stillOrphaned {
+            newCounts[windowID] = (axOrphanCounts[windowID] ?? 0) + 1
+        }
+        axOrphanCounts = newCounts
+
+        // Prune windows that exceeded the threshold
+        for (windowID, count) in axOrphanCounts where count >= axOrphanThreshold {
+            await gridState.removeWindowFromAllSpaces(windowID)
+            axOrphanCounts.removeValue(forKey: windowID)
+            jlog("validate.win.prune", data: [
+                "wid": windowID,
+                "reason": "ax_orphan",
+                "cycles": count,
+            ])
+        }
+    }
+
+    // Get all window IDs visible via AX for a given pid.
+    // Returns nil if the AX query fails (app unresponsive, no permission).
+    private func getAXWindowIDs(pid: pid_t) -> Set<UInt32>? {
+        let app = AXUIElementCreateApplication(pid)
+        var windowsValue: CFTypeRef?
+        let result = AXUIElementCopyAttributeValue(
+            app,
+            kAXWindowsAttribute as CFString,
+            &windowsValue
+        )
+        guard result == .success, let windows = windowsValue as? [AXUIElement] else {
+            // .cannotComplete / .notImplemented = app busy or unusual — skip, don't prune
+            // .attributeUnsupported = non-windowed process — safe to report empty
+            if result == .attributeUnsupported {
+                return Set()
+            }
+            return nil
+        }
+
+        var ids = Set<UInt32>()
+        for window in windows {
+            var windowID: UInt32 = 0
+            if _AXUIElementGetWindow(window, &windowID) == .success {
+                ids.insert(windowID)
+            }
+        }
+        return ids
     }
 
     // deduplicateWindows -- remove windows from all-but-one space when a window

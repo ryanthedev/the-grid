@@ -3,16 +3,18 @@
 // GridServer
 //
 // Builds a process tree from `ps -eo pid,ppid` and provides depth-limited
-// descendant lookup. Cached per discovery session.
+// descendant and ancestor lookup. Cached per discovery session.
 // ALL subprocess calls run on DispatchQueue.global(), NOT the cooperative pool.
 //
 
 import Foundation
 
-/// Process tree: parent PID -> [child PIDs]
+/// Process tree: bidirectional PID lookup (parent->children and child->parent)
 class ProcessTree {
     // parent PID -> [child PIDs]
     private var children: [pid_t: [pid_t]] = [:]
+    // child PID -> parent PID
+    private var parent: [pid_t: pid_t] = [:]
 
     // MARK: - Factory
 
@@ -57,6 +59,7 @@ class ProcessTree {
             guard let pid = pid_t(fields[0]),
                   let ppid = pid_t(fields[1]) else { continue }
             tree.children[ppid, default: []].append(pid)
+            tree.parent[pid] = ppid
         }
 
         return tree
@@ -84,6 +87,28 @@ class ProcessTree {
             for kid in kids {
                 queue.append((kid, depth + 1))
             }
+        }
+
+        return result
+    }
+
+    // MARK: - Ancestor Lookup
+
+    /// Walks upward from targetPID, returning up to maxDepth ancestor PIDs.
+    /// Stops early if parent is unknown (reached root or stale PID).
+    /// Caller checks whether any known window PID appears in the returned list.
+    func getAncestors(of targetPID: pid_t, maxDepth: Int) -> [pid_t] {
+        guard maxDepth > 0 else { return [] }
+
+        var result: [pid_t] = []
+        var current = targetPID
+        var steps = 0
+
+        while steps < maxDepth {
+            guard let ppid = parent[current] else { break }
+            result.append(ppid)
+            current = ppid
+            steps += 1
         }
 
         return result

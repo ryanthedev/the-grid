@@ -86,6 +86,11 @@ actor GridState {
     private var displaySpaces: [String: [String]] = [:]
     private var lastUpdated: Date = Date()
 
+    // Windows rejected by the reconciler at creation (e.g. 0x0 size).
+    // Prevents applyLayout from re-adopting ghost windows that later
+    // acquire a frame but remain unfocusable. In-memory only.
+    private var rejectedWindows: Set<UInt32> = []
+
     private let statePath: String
     private var saveTask: Task<Void, Never>?
     private var isDirty: Bool = false
@@ -460,6 +465,21 @@ actor GridState {
         for spaceID in spaces.keys {
             removeWindow(windowID, fromSpace: spaceID)
         }
+        rejectedWindows.remove(windowID)
+    }
+
+    // MARK: - Rejected Windows
+
+    func rejectWindow(_ windowID: UInt32) {
+        rejectedWindows.insert(windowID)
+    }
+
+    func isWindowRejected(_ windowID: UInt32) -> Bool {
+        rejectedWindows.contains(windowID)
+    }
+
+    func getRejectedWindows() -> Set<UInt32> {
+        rejectedWindows
     }
 
     private func removeWindowInternal(_ windowID: UInt32, from space: inout GridSpaceStateData) {

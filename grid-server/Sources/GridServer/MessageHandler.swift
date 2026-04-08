@@ -220,7 +220,9 @@ class MessageHandler {
             }
         }
 
-        // window.find - searches state.windows by criteria, returns immediately
+        // window.find - searches state.windows by criteria, returns immediately.
+        // Accepts: pid (Int), appName (String), title (String). pid branch is mutually
+        // exclusive — walks ancestor chain to find the window that owns the process.
         register(method: "window.find") { request, completion in
             guard let params = request.params else {
                 completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
@@ -229,15 +231,41 @@ class MessageHandler {
 
             let appNameFilter = params["appName"]?.value as? String
             let titleFilter = params["title"]?.value as? String
+            let pidFilter = params["pid"]?.value as? Int
 
-            guard appNameFilter != nil || titleFilter != nil else {
-                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "At least one of appName or title required")))
+            guard appNameFilter != nil || titleFilter != nil || pidFilter != nil else {
+                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "At least one of appName, title, or pid required")))
                 return
             }
 
             Task {
                 let state = await StateManager.shared.getState()
 
+                // pid branch: walk ancestor chain, return first window whose PID is an ancestor
+                if let pidFilter {
+                    let tree = await ProcessTree.build()
+                    let ancestors = tree.getAncestors(of: pid_t(pidFilter), maxDepth: 8)
+                    // Include the PID itself — handles case where process directly owns a window
+                    let ancestorSet = Set([pid_t(pidFilter)] + ancestors)
+
+                    for window in state.windows.values {
+                        if window.isHidden { continue }
+                        if window.frame.height < 100 { continue }
+                        if ancestorSet.contains(window.pid) {
+                            completion(Response(id: request.id, result: AnyCodable([
+                                "found": true,
+                                "windowId": String(window.id),
+                                "pid": window.pid
+                            ])))
+                            return
+                        }
+                    }
+
+                    completion(Response(id: request.id, result: AnyCodable(["found": false])))
+                    return
+                }
+
+                // appName/title branch: filter by name and/or title substring
                 for window in state.windows.values {
                     if let appName = appNameFilter, window.appName != appName { continue }
                     if let title = titleFilter, !(window.title?.contains(title) ?? false) { continue }

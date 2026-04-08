@@ -1,4 +1,4 @@
-.PHONY: help build server cli viewer test clean server-test server-clean run-server install dist dev reset-accessibility setup-signing server-universal cli-universal viewer-universal dist-universal
+.PHONY: help build server cli viewer test clean server-test server-clean run-server install dist dev reset-accessibility setup-signing server-universal cli-universal viewer-universal dist-universal notify notify-dev notify-universal notify-app-bundle notify-test notify-clean
 
 # Version from VERSION file
 VERSION := $(shell cat VERSION)
@@ -16,12 +16,13 @@ COMMIT  := $(shell git rev-parse HEAD 2>/dev/null || echo "unknown")
 CODESIGN_IDENTITY ?= thegrid-dev
 # Use $(CURDIR) so it works from worktrees and CI
 ENTITLEMENTS := $(CURDIR)/grid-server/thegrid.entitlements
+NOTIFY_ENTITLEMENTS := $(CURDIR)/grid-notify/grid-notify.entitlements
 
 # Default target - build everything
 all: build
 
-# Build both server and CLI
-build: server cli
+# Build server, CLI, and notify
+build: server cli notify
 	@echo "✓ Built all components"
 
 # Generate Version.swift with build-time version info
@@ -52,16 +53,29 @@ server-clean:
 	@echo "Cleaning grid-server..."
 	@cd grid-server && swift package clean
 
+# Notification panel targets
+notify:
+	@echo "Building grid-notify..."
+	@cd grid-notify && swift build
+
+notify-test:
+	@echo "Running grid-notify tests..."
+	@cd grid-notify && swift test
+
+notify-clean:
+	@echo "Cleaning grid-notify..."
+	@cd grid-notify && swift package clean
+
 # CLI target (Swift)
 cli:
 	@echo "Building grid-cli (Swift)..."
 	@cd grid-server && swift build --product grid-cli
 
 # Combined targets
-test: server-test
+test: server-test notify-test
 	@echo "✓ All tests passed"
 
-clean: server-clean
+clean: server-clean notify-clean
 	@echo "✓ Cleaned all components"
 
 # Quick verification
@@ -118,6 +132,17 @@ viewer-universal:
 	@echo "Created universal binary: grid-server/.build/apple/Products/Release/grid-viewer"
 	@file grid-server/.build/apple/Products/Release/grid-viewer
 
+notify-universal:
+	@echo "Building grid-notify (universal binary)..."
+	@cd grid-notify && swift build -c release --arch arm64 --arch x86_64
+	@echo "Verifying universal binary..."
+	@if ! file grid-notify/.build/apple/Products/Release/GridNotify | grep -q "universal binary"; then \
+		echo "Error: Failed to create universal binary for grid-notify"; \
+		exit 1; \
+	fi
+	@echo "Created universal binary: grid-notify/.build/apple/Products/Release/GridNotify"
+	@file grid-notify/.build/apple/Products/Release/GridNotify
+
 # Create GridServer.app bundle
 app-bundle: server-universal
 	@echo "Creating GridServer.app bundle..."
@@ -136,18 +161,38 @@ app-bundle: server-universal
 	@codesign -dv dist/GridServer.app 2>&1 | head -5
 	@echo "✓ GridServer.app created"
 
+# Create GridNotify.app bundle
+notify-app-bundle: notify-universal
+	@echo "Creating GridNotify.app bundle..."
+	@rm -rf dist/GridNotify.app
+	@mkdir -p dist/GridNotify.app/Contents/MacOS
+	@mkdir -p dist/GridNotify.app/Contents/Resources
+	@cp grid-notify/.build/apple/Products/Release/GridNotify dist/GridNotify.app/Contents/MacOS/grid-notify
+	@cp grid-notify/Info.plist dist/GridNotify.app/Contents/
+	@cp -R grid-notify/scripts/ dist/GridNotify.app/Contents/Resources/scripts/
+	@sed -i '' "s/VERSION_PLACEHOLDER/$(VERSION)/g" dist/GridNotify.app/Contents/Info.plist
+	@grep -q "$(VERSION)" dist/GridNotify.app/Contents/Info.plist || (echo "ERROR: Version substitution failed" && exit 1)
+	@echo "Signing app bundle with identity '$(CODESIGN_IDENTITY)'..."
+	@codesign -fs "$(CODESIGN_IDENTITY)" --entitlements $(NOTIFY_ENTITLEMENTS) dist/GridNotify.app/Contents/MacOS/grid-notify
+	@codesign -fs "$(CODESIGN_IDENTITY)" --entitlements $(NOTIFY_ENTITLEMENTS) dist/GridNotify.app
+	@echo "Verifying app bundle..."
+	@codesign --verify --verbose dist/GridNotify.app
+	@codesign -dv dist/GridNotify.app 2>&1 | head -5
+	@echo "✓ GridNotify.app created"
+
 # Distribution tarball with universal binaries (for Homebrew)
-dist-universal: app-bundle cli-universal viewer-universal
+dist-universal: app-bundle notify-app-bundle cli-universal viewer-universal
 	@echo "Creating universal distribution tarball v$(VERSION)..."
 	@rm -rf dist/thegrid-$(VERSION)
 	@mkdir -p dist/thegrid-$(VERSION)/bin
 	@cp -R dist/GridServer.app dist/thegrid-$(VERSION)/
+	@cp -R dist/GridNotify.app dist/thegrid-$(VERSION)/
 	@cp grid-server/.build/apple/Products/Release/grid-cli dist/thegrid-$(VERSION)/bin/thegrid
 	@cp grid-server/.build/apple/Products/Release/grid-viewer dist/thegrid-$(VERSION)/bin/
 	@cp VERSION dist/thegrid-$(VERSION)/
 	@cp LICENSE dist/thegrid-$(VERSION)/ 2>/dev/null || echo "No LICENSE file"
 	@cp README.md dist/thegrid-$(VERSION)/ 2>/dev/null || true
-	@printf '    prefix.install "GridServer.app"\n    bin.install "bin/thegrid"\n    bin.install "bin/grid-viewer"\n    bin.install_symlink prefix/"GridServer.app/Contents/MacOS/grid-server"\n' > dist/thegrid-$(VERSION)/FORMULA_INSTALL
+	@printf '    prefix.install "GridServer.app"\n    prefix.install "GridNotify.app"\n    bin.install "bin/thegrid"\n    bin.install "bin/grid-viewer"\n    bin.install_symlink prefix/"GridServer.app/Contents/MacOS/grid-server"\n    bin.install_symlink prefix/"GridNotify.app/Contents/MacOS/grid-notify"\n' > dist/thegrid-$(VERSION)/FORMULA_INSTALL
 	@cd dist && tar -czf thegrid-$(VERSION)-darwin-universal.tar.gz thegrid-$(VERSION)
 	@echo ""
 	@echo "Universal distribution tarball created:"
@@ -158,6 +203,7 @@ dist-universal: app-bundle cli-universal viewer-universal
 	@echo ""
 	@echo "Verify contents:"
 	@file dist/thegrid-$(VERSION)/GridServer.app/Contents/MacOS/grid-server
+	@file dist/thegrid-$(VERSION)/GridNotify.app/Contents/MacOS/grid-notify
 	@file dist/thegrid-$(VERSION)/bin/thegrid
 	@file dist/thegrid-$(VERSION)/bin/grid-viewer
 # Show help
@@ -165,7 +211,7 @@ help:
 	@echo "TheGrid Monorepo Build System"
 	@echo ""
 	@echo "Main targets:"
-	@echo "  all/build        - Build both server and CLI (default)"
+	@echo "  all/build        - Build server, CLI, and notify (default)"
 	@echo "  test             - Run all tests"
 	@echo "  clean            - Clean all build artifacts"
 	@echo "  verify           - Build and test everything"
@@ -188,20 +234,45 @@ help:
 	@echo "CLI targets:"
 	@echo "  cli              - Build Swift CLI"
 	@echo ""
+	@echo "Notify targets:"
+	@echo "  notify           - Build grid-notify (debug)"
+	@echo "  notify-test      - Run grid-notify tests"
+	@echo "  notify-clean     - Clean grid-notify build"
+	@echo ""
 	@echo "Usage examples:"
 	@echo "  make dev          # Build debug app bundle"
 	@echo "  make run          # Build and restart thegrid service"
 	@echo "  make test         # Run all tests"
 	@echo "  make dist         # Create distribution tarball"
 
-# Debug app bundle (for development - required for Accessibility permissions)
+# Debug app bundles (for development - required for Accessibility permissions)
 APP_BUNDLE := grid-server/.build/debug/GridServer.app
+NOTIFY_APP_BUNDLE := grid-notify/.build/debug/GridNotify.app
 
-# Where launchd expects the server (central location for all worktrees)
+# Where launchd expects the apps (central location for all worktrees)
 DEPLOY_LOCATION := $(HOME)/.local/state/thegrid/GridServer.app
+NOTIFY_DEPLOY_LOCATION := $(HOME)/.local/state/thegrid/GridNotify.app
 
-# Build debug app bundle
-dev: server viewer
+# Build and deploy debug GridNotify.app bundle
+notify-dev: notify
+	@echo "Creating debug GridNotify.app bundle..."
+	@mkdir -p $(NOTIFY_APP_BUNDLE)/Contents/MacOS
+	@mkdir -p $(NOTIFY_APP_BUNDLE)/Contents/Resources
+	@cp grid-notify/.build/debug/GridNotify $(NOTIFY_APP_BUNDLE)/Contents/MacOS/grid-notify
+	@cp grid-notify/Info.plist $(NOTIFY_APP_BUNDLE)/Contents/
+	@cp -R grid-notify/scripts/ $(NOTIFY_APP_BUNDLE)/Contents/Resources/scripts/
+	@echo "Signing with identity '$(CODESIGN_IDENTITY)'..."
+	@codesign -fs "$(CODESIGN_IDENTITY)" --entitlements $(NOTIFY_ENTITLEMENTS) $(NOTIFY_APP_BUNDLE)/Contents/MacOS/grid-notify
+	@codesign -fs "$(CODESIGN_IDENTITY)" --entitlements $(NOTIFY_ENTITLEMENTS) $(NOTIFY_APP_BUNDLE)
+	@echo "✓ Debug GridNotify.app built"
+	@echo "Deploying to $(NOTIFY_DEPLOY_LOCATION)..."
+	@mkdir -p $$(dirname $(NOTIFY_DEPLOY_LOCATION))
+	@rm -rf $(NOTIFY_DEPLOY_LOCATION)
+	@cp -R $(NOTIFY_APP_BUNDLE) $(NOTIFY_DEPLOY_LOCATION)
+	@echo "✓ GridNotify deployed to $(NOTIFY_DEPLOY_LOCATION)"
+
+# Build debug app bundles
+dev: server viewer notify-dev
 	@echo "Creating debug GridServer.app bundle..."
 	@mkdir -p $(APP_BUNDLE)/Contents/MacOS
 	@mkdir -p $(APP_BUNDLE)/Contents/Resources
@@ -221,12 +292,16 @@ dev: server viewer
 run: dev install-dev
 	@echo "Killing any stray grid-server processes..."
 	@pkill -9 -f grid-server 2>/dev/null || true
+	@echo "Killing any stray grid-notify processes..."
+	@pkill -9 -f grid-notify 2>/dev/null || true
 	@sleep 0.5
 	@echo "Clearing state, logs, and config cache..."
 	@rm -f ~/.local/state/thegrid/*.json
 	@rm -f ~/.cache/thegrid/config.merged.yaml
 	@echo "Restarting thegrid-dev service..."
 	@services restart thegrid-dev
+	@echo "Launching GridNotify..."
+	@open $(NOTIFY_DEPLOY_LOCATION)
 	@echo "✓ Service restarted"
 
 # Install dev build to ~/.local/bin

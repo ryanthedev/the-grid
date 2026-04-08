@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import CoreGraphics
 
@@ -667,6 +668,8 @@ class GridWindowMove {
     private func applyPlacementsViaAX(_ placements: [GridWindowPlacement]) async {
         if placements.isEmpty { return }
 
+        let serverPID = ProcessInfo.processInfo.processIdentifier
+
         await withTaskGroup(of: Void.self) { group in
             for placement in placements {
                 group.addTask { [weak self] in
@@ -674,6 +677,19 @@ class GridWindowMove {
                         jlog("warn.placement", data: ["wid": placement.windowID, "reason": "no_context"])
                         return
                     }
+
+                    // Own-process window: use NSWindow.setFrame on MainActor
+                    if context.pid == serverPID {
+                        let bounds = placement.bounds
+                        await MainActor.run {
+                            guard let nsWindow = NSApp.windows.first(where: { $0.windowNumber == Int(placement.windowID) }) else { return }
+                            let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
+                            let flippedY = primaryHeight - bounds.origin.y - bounds.height
+                            nsWindow.setFrame(NSRect(x: bounds.origin.x, y: flippedY, width: bounds.width, height: bounds.height), display: true)
+                        }
+                        return
+                    }
+
                     guard let manipulator = self?.windowManipulator else { return }
                     let success = await manipulator.setWindowFrame(
                         context: context,

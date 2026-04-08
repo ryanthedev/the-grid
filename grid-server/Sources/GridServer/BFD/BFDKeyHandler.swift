@@ -307,7 +307,11 @@ class BFDKeyHandler {
         }
 
         // Check rate limit
-        let rateLimit = config.effectiveRateLimit(for: def)
+        let allowRepeatForRateLimit = config.effectiveRepeat(for: def)
+        // For repeat:false hotkeys, enforce a 100ms minimum gap to prevent OS
+        // event batching from firing the same logical keypress twice.
+        let minimumGap: Int = allowRepeatForRateLimit ? 0 : 100
+        let rateLimit = max(config.effectiveRateLimit(for: def), minimumGap)
         let now = Date()
 
         lastExecutionTimeLock.lock()

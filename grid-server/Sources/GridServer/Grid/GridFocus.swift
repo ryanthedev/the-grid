@@ -1,3 +1,4 @@
+import AppKit
 import CoreGraphics
 import Foundation
 
@@ -232,21 +233,30 @@ class GridFocus {
             return windowID
         }
 
-        // Calculate next/prev index (wrapping)
-        let currentIdx = pruned ? 0 : spaceState.focusedWindow
-        let clampedIdx = max(0, min(currentIdx, cellWindows.count - 1))
-        let newIdx: Int
-        if forward {
-            newIdx = (clampedIdx + 1) % cellWindows.count
-        } else {
-            newIdx = (clampedIdx - 1 + cellWindows.count) % cellWindows.count
+        // Calculate next/prev index (wrapping), skipping unfocusable windows.
+        // Some windows (e.g. zero-size Messages helpers) pass isTileable but
+        // the OS refuses to focus them, causing an infinite mismatch loop.
+        let startIdx = pruned ? 0 : max(0, min(spaceState.focusedWindow, cellWindows.count - 1))
+        var tryIdx = startIdx
+
+        for _ in 0..<cellWindows.count {
+            if forward {
+                tryIdx = (tryIdx + 1) % cellWindows.count
+            } else {
+                tryIdx = (tryIdx - 1 + cellWindows.count) % cellWindows.count
+            }
+
+            let windowID = cellWindows[tryIdx]
+            let actualFocused = try await focusWindowByID(windowID)
+            if actualFocused == windowID {
+                await gridState.setFocus(spaceID: spaceID, cellID: cellID, windowIndex: tryIdx)
+                return windowID
+            }
+            // OS focused a different window — this one is unfocusable, try next
         }
 
-        let windowID = cellWindows[newIdx]
-        try await focusWindowByID(windowID)
-        await gridState.setFocus(spaceID: spaceID, cellID: cellID, windowIndex: newIdx)
-
-        return windowID
+        // All windows in cell were unfocusable
+        throw GridFocusError.noWindowsInCell(cellID)
     }
 
     // focusCell: focus a specific cell by ID
@@ -336,6 +346,19 @@ class GridFocus {
         let wmState = await stateManager.getState()
         guard let windowState = wmState.windows[String(windowID)] else {
             throw GridFocusError.windowNotFound(windowID)
+        }
+
+        // Own-process windows (notification panel): use NSWindow on MainActor
+        // AX calls on own-process execute in-place, crashing AppKit's main-thread assertion.
+        let serverPID = ProcessInfo.processInfo.processIdentifier
+        if windowState.pid == serverPID {
+            await MainActor.run {
+                guard let nsWindow = NSApp.windows.first(where: { $0.windowNumber == Int(windowID) }) else { return }
+                NSApp.activate(ignoringOtherApps: true)
+                nsWindow.makeKeyAndOrderFront(nil)
+            }
+            jlog("ax.focus", data: ["pid": windowState.pid, "wid": windowID])
+            return windowID
         }
 
         // Attempt 1: AX focus

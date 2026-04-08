@@ -805,6 +805,7 @@ actor StateManager: StateEventHandler {
         state.metadata.update()
     }
 
+
     /// Re-query and update space assignment for a specific window
     /// Uses geometric derivation from displayUUID, with macOS API as fallback
     private func updateWindowSpaces(_ windowID: UInt32) {
