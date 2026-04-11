@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import CoreGraphics
 
@@ -192,14 +193,7 @@ class GridCommandRouter {
             case "terminal":
                 return await gridTerminalManager.toggle()
             case "notify":
-                // Relay to standalone GridNotify.app via distributed notification
-                DistributedNotificationCenter.default().postNotificationName(
-                    NSNotification.Name("com.thegrid.notify.toggle"),
-                    object: nil,
-                    userInfo: nil,
-                    deliverImmediately: true
-                )
-                return .ok("toggled")
+                return await handleNotify(parsed)
             case "nudge":
                 // Suppression managed via beginAction/endAction inside handleNudge --
                 // enter starts the session, exit ends it. No executeAction wrapper here.
@@ -875,6 +869,56 @@ class GridCommandRouter {
     // PRIVATE: handleNotify
     // ============================================================
 
+    /// Bundle ID for GridNotify standalone app.
+    private static let notifyBundleID = "com.thegrid.notify"
+
+    private func handleNotify(_ cmd: ParsedCommand) async -> CommandResult {
+        let isRunning = NSWorkspace.shared.runningApplications.contains {
+            $0.bundleIdentifier == Self.notifyBundleID
+        }
+
+        if !isRunning {
+            // Find GridNotify.app as a sibling of GridServer.app.
+            // Layout: <prefix>/GridServer.app/Contents/MacOS/grid-server
+            //         <prefix>/GridNotify.app/
+            guard let serverExec = Bundle.main.executableURL else {
+                return .error("cannot resolve server executable path")
+            }
+            // Walk up from .../GridServer.app/Contents/MacOS/grid-server to <prefix>
+            let prefix = serverExec
+                .deletingLastPathComponent()  // MacOS/
+                .deletingLastPathComponent()  // Contents/
+                .deletingLastPathComponent()  // GridServer.app/
+            let notifyAppURL = prefix.appendingPathComponent("GridNotify.app")
+
+            guard FileManager.default.fileExists(atPath: notifyAppURL.path) else {
+                jlog("notify.err", msg: "GridNotify.app not found", data: ["path": notifyAppURL.path])
+                return .error("GridNotify.app not found at \(notifyAppURL.path)")
+            }
+
+            jlog("notify.launch", data: ["path": notifyAppURL.path])
+            let config = NSWorkspace.OpenConfiguration()
+            config.activates = true
+            do {
+                try await NSWorkspace.shared.openApplication(at: notifyAppURL, configuration: config)
+            } catch {
+                jlog("notify.err", msg: "failed to launch GridNotify", data: ["err": "\(error)"])
+                return .error("failed to launch GridNotify: \(error.localizedDescription)")
+            }
+
+            // Give it a moment to register for distributed notifications
+            try? await Task.sleep(nanoseconds: 500_000_000)
+        }
+
+        // Post toggle notification
+        DistributedNotificationCenter.default().postNotificationName(
+            NSNotification.Name("com.thegrid.notify.toggle"),
+            object: nil,
+            userInfo: nil,
+            deliverImmediately: true
+        )
+        return .ok(isRunning ? "toggled" : "launched and toggled")
+    }
 
     private func parseRecordingTarget(action: String, args: [String]) -> RecordingTarget {
         let targetStr = args.first ?? "cell"
