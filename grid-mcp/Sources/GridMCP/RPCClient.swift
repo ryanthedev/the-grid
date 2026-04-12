@@ -20,19 +20,68 @@ enum RPCError: Error, CustomStringConvertible {
     }
 }
 
-// @unchecked Sendable: internal state is only accessed from the CallTool handler
-// which is serialized by the MCP server actor in Phase 1.
-final class RPCClient: @unchecked Sendable {
+// Sendable: each call() opens a fresh Unix socket connection,
+// so there is no shared mutable state between concurrent calls.
+final class RPCClient: Sendable {
     let socketPath: String
     let timeout: TimeInterval
-    private var fileDescriptor: Int32 = -1
 
     init(socketPath: String = "/tmp/grid-server.sock", timeout: TimeInterval = 30) {
         self.socketPath = socketPath
         self.timeout = timeout
     }
 
-    func connect() throws {
+    func call(_ method: String, params: [String: Any] = [:]) throws -> [String: Any] {
+        // Open a fresh connection per call — local Unix sockets are cheap,
+        // and this eliminates shared state for concurrent MCP tool calls.
+        let fd = try openConnection()
+        defer { close(fd) }
+
+        let requestId = UUID().uuidString
+        let envelope: [String: Any] = [
+            "type": "request",
+            "request": [
+                "id": requestId,
+                "method": method,
+                "params": params
+            ]
+        ]
+
+        let jsonData = try JSONSerialization.data(withJSONObject: envelope)
+        var outData = jsonData
+        outData.append(0x0A)
+
+        let written = outData.withUnsafeBytes { buf in
+            write(fd, buf.baseAddress!, buf.count)
+        }
+        if written < 0 {
+            throw RPCError.writeFailed("Failed to write to socket")
+        }
+
+        let lineData = try readLine(fd: fd)
+
+        guard let response = try JSONSerialization.jsonObject(with: lineData) as? [String: Any] else {
+            throw RPCError.invalidResponse("Response is not a JSON object")
+        }
+
+        guard let type = response["type"] as? String, type == "response" else {
+            throw RPCError.invalidResponse("Response type is not 'response'")
+        }
+
+        guard let respObj = response["response"] as? [String: Any] else {
+            throw RPCError.invalidResponse("Missing response object")
+        }
+
+        if let errObj = respObj["error"] as? [String: Any] {
+            let code = errObj["code"] as? Int ?? -1
+            let message = errObj["message"] as? String ?? "Unknown error"
+            throw RPCError.serverError(code: code, message: message)
+        }
+
+        return respObj["result"] as? [String: Any] ?? [:]
+    }
+
+    private func openConnection() throws -> Int32 {
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         if fd < 0 {
             throw RPCError.connectionFailed("Failed to create socket")
@@ -65,75 +114,15 @@ final class RPCClient: @unchecked Sendable {
             throw RPCError.connectionFailed("Cannot connect to \(socketPath) - is the server running?")
         }
 
-        self.fileDescriptor = fd
+        return fd
     }
 
-    func call(_ method: String, params: [String: Any] = [:]) throws -> [String: Any] {
-        if fileDescriptor < 0 {
-            try connect()
-        }
-
-        let requestId = UUID().uuidString
-        let envelope: [String: Any] = [
-            "type": "request",
-            "request": [
-                "id": requestId,
-                "method": method,
-                "params": params
-            ]
-        ]
-
-        let jsonData = try JSONSerialization.data(withJSONObject: envelope)
-        var outData = jsonData
-        outData.append(0x0A)
-
-        let written = outData.withUnsafeBytes { buf in
-            write(fileDescriptor, buf.baseAddress!, buf.count)
-        }
-        if written < 0 {
-            throw RPCError.writeFailed("Failed to write to socket")
-        }
-
-        let lineData = try readLine()
-
-        guard let response = try JSONSerialization.jsonObject(with: lineData) as? [String: Any] else {
-            throw RPCError.invalidResponse("Response is not a JSON object")
-        }
-
-        guard let type = response["type"] as? String, type == "response" else {
-            throw RPCError.invalidResponse("Response type is not 'response'")
-        }
-
-        guard let respObj = response["response"] as? [String: Any] else {
-            throw RPCError.invalidResponse("Missing response object")
-        }
-
-        if let errObj = respObj["error"] as? [String: Any] {
-            let code = errObj["code"] as? Int ?? -1
-            let message = errObj["message"] as? String ?? "Unknown error"
-            throw RPCError.serverError(code: code, message: message)
-        }
-
-        return respObj["result"] as? [String: Any] ?? [:]
-    }
-
-    func disconnect() {
-        if fileDescriptor >= 0 {
-            close(fileDescriptor)
-            fileDescriptor = -1
-        }
-    }
-
-    deinit {
-        disconnect()
-    }
-
-    private func readLine() throws -> Data {
+    private func readLine(fd: Int32) throws -> Data {
         var buffer = Data()
         var byte: UInt8 = 0
 
         while true {
-            let n = read(fileDescriptor, &byte, 1)
+            let n = read(fd, &byte, 1)
             if n < 0 {
                 throw RPCError.readFailed("Failed to read from socket")
             }

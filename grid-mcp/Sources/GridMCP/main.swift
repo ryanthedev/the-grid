@@ -15,40 +15,22 @@ func resolveSocketPath() -> String {
 
 let socketPath = resolveSocketPath()
 let rpcClient = RPCClient(socketPath: socketPath)
+let registry = ToolRegistry(rpcClient: rpcClient)
 
 let server = Server(
     name: "grid-mcp",
-    version: "0.1.0",
+    version: "0.2.0",
     capabilities: Server.Capabilities(tools: .init())
 )
 
-// Register tools/list handler — empty for Phase 1; Phase 2 adds real tools
+// Register tools/list handler — returns all Grid tool definitions
 await server.withMethodHandler(ListTools.self) { _ in
-    ListTools.Result(tools: [])
+    ListTools.Result(tools: registry.allTools())
 }
 
-// Register tools/call handler — routes ping to grid-server for DW-1.3 validation
+// Register tools/call handler — dispatches to the correct Grid RPC
 await server.withMethodHandler(CallTool.self) { params in
-    switch params.name {
-    case "ping":
-        do {
-            let result = try rpcClient.call("ping")
-            let status = result["status"] as? String ?? "ok"
-            return CallTool.Result(
-                content: [.text(text: "ping: \(status)", annotations: nil, _meta: nil)]
-            )
-        } catch {
-            return CallTool.Result(
-                content: [.text(text: "ping failed: \(error)", annotations: nil, _meta: nil)],
-                isError: true
-            )
-        }
-    default:
-        return CallTool.Result(
-            content: [.text(text: "unknown tool: \(params.name)", annotations: nil, _meta: nil)],
-            isError: true
-        )
-    }
+    registry.dispatch(name: params.name, arguments: params.arguments)
 }
 
 // server.start launches the message loop in a background task and returns.
