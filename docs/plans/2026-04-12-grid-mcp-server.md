@@ -2,7 +2,7 @@
 **Created:** 2026-04-12
 **Status:** in-progress
 **Started:** 2026-04-12
-**Current Phase:** 3
+**Current Phase:** 4
 **Complexity:** medium
 ---
 ## Context
@@ -176,3 +176,10 @@ Summary: New `grid-mcp/` Swift package with MCP SDK, ported RPCClient, minimal s
 - [x] Committed
 Commit: 13b888b
 Summary: 47 MCP tools across GridTools (24), WindowTools (14), QueryTools (9). RPCClient refactored to per-call connections. Removed grid.pick/grid.notify.toggle (no backing RPCs), added pick.show.
+
+### Phase 3: Screenshot + Recording Tools (Gate: Standard)
+- [x] BUILD: Discovery + pseudocode + implementation complete
+- [x] REVIEW: SKIPPED — tests are gate
+- [x] Committed
+Commit: dfecee7
+Summary: New `grid.screenshot` tool captures via macOS screencapture, returns base64 PNG as MCP image content. Supports full/window/cell targets. Recording tools work via RPC passthrough from Phase 2.

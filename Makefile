@@ -1,4 +1,4 @@
-.PHONY: help build server cli viewer test clean server-test server-clean run-server install dist dev reset-accessibility setup-signing server-universal cli-universal viewer-universal dist-universal notify notify-dev notify-universal notify-app-bundle notify-test notify-clean
+.PHONY: help build server cli viewer test clean server-test server-clean run-server install dist dev reset-accessibility setup-signing server-universal cli-universal viewer-universal dist-universal notify notify-dev notify-universal notify-app-bundle notify-test notify-clean mcp mcp-dev mcp-install
 
 # Version from VERSION file
 VERSION := $(shell cat VERSION)
@@ -327,3 +327,25 @@ reset-accessibility:
 # Setup code signing certificate (one-time)
 setup-signing:
 	@./scripts/create-dev-certificate.sh
+
+# --- grid-mcp (MCP server) ---
+
+MCP_BINARY := grid-mcp/.build/debug/GridMCP
+MCP_INSTALL_PATH := $(HOME)/.local/bin/grid-mcp
+
+# Build grid-mcp debug binary
+mcp:
+	cd grid-mcp && swift build
+	@echo "✓ GridMCP built"
+
+# Build and symlink grid-mcp binary (changes reflected immediately on next call)
+mcp-dev: mcp
+	@mkdir -p $(HOME)/.local/bin
+	@ln -sf $(CURDIR)/$(MCP_BINARY) $(MCP_INSTALL_PATH)
+	@echo "✓ GridMCP symlinked to $(MCP_INSTALL_PATH)"
+
+# Install grid-mcp binary (copy, for stable installs)
+mcp-install: mcp
+	@mkdir -p $(HOME)/.local/bin
+	@cp $(CURDIR)/$(MCP_BINARY) $(MCP_INSTALL_PATH)
+	@echo "✓ GridMCP installed to $(MCP_INSTALL_PATH)"
