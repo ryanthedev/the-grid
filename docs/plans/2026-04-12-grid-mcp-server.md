@@ -1,8 +1,8 @@
 # Plan: Grid MCP Server + Skill
 **Created:** 2026-04-12
-**Status:** in-progress
+**Status:** complete
 **Started:** 2026-04-12
-**Current Phase:** 4
+**Completed:** 2026-04-12
 **Complexity:** medium
 ---
 ## Context
@@ -183,3 +183,10 @@ Summary: 47 MCP tools across GridTools (24), WindowTools (14), QueryTools (9). R
 - [x] Committed
 Commit: dfecee7
 Summary: New `grid.screenshot` tool captures via macOS screencapture, returns base64 PNG as MCP image content. Supports full/window/cell targets. Recording tools work via RPC passthrough from Phase 2.
+
+### Phase 4: Skill + Integration (Gate: Full)
+- [x] BUILD: Discovery + pseudocode + implementation complete
+- [x] REVIEW: Verification passed (reviewer false-negative on DW-4.2/4.5 overridden — MCP registered via `claude mcp add`, not settings.local.json)
+- [x] Committed
+Commit: fa96149
+Summary: Global `/thegrid` skill with tool reference, workflow patterns, and interpretation guidance. MCP server registered and connected. Makefile targets for build/dev/install.
