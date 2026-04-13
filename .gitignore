@@ -51,3 +51,15 @@ bfd.local.yaml
 grid-notify/.build/
 grid-notify/.swiftpm/
 grid-notify/Package.resolved
+
+# Grid MCP
+grid-mcp/.build/
+grid-mcp/.swiftpm/
+grid-mcp/Package.resolved
+
+# Scratch / local docs
+docs/building/
+docs/plans/
+
+# Claude worktrees
+.claude/worktrees/

@@ -274,13 +274,14 @@ enum GridTools {
 
         Tool(
             name: "grid.screenshot",
-            description: "Capture a screenshot and return it as an inline image Claude can view. Targets: 'full' (entire screen), 'window' (specific window by ID), 'cell' (grid cell by ID — captures the focused window in that cell).",
+            description: "Capture a screenshot and return it as an inline image Claude can view. Targets: 'full' (entire screen), 'window' (specific window by ID), 'cell' (grid cell by ID — captures the focused window in that cell). Returns a small compressed JPEG by default to save context. Use quality='high' for full resolution PNG.",
             inputSchema: objectSchema(
                 properties: [
                     "target": prop("string", description: "What to capture: 'full', 'window', or 'cell' (default: full)", enumValues: ["full", "window", "cell"]),
                     "id": prop("string", description: "Window ID for target=window, or cell ID for target=cell"),
                     "cursor": prop("boolean", description: "Include cursor (full screen only)"),
                     "display": prop("integer", description: "Display index, 0-based (full screen only, default: main display)"),
+                    "quality": prop("string", description: "Image quality: 'low' (default) returns compressed JPEG ≤1024px to save context, 'high' returns full-resolution PNG", enumValues: ["low", "high"]),
                 ]
             ),
             annotations: .init(readOnlyHint: true)
@@ -321,7 +322,8 @@ enum GridTools {
 
     // MARK: - Screenshot
 
-    /// Capture a screenshot using macOS screencapture and return base64 PNG as MCP image content.
+    /// Capture a screenshot using macOS screencapture and return as MCP image content.
+    /// Default: compressed JPEG ≤1024px to save context. quality=high: full-res PNG.
     private static func handleScreenshot(
         arguments: [String: Value]?,
         rpcClient: RPCClient
@@ -330,10 +332,12 @@ enum GridTools {
         let id = arguments?["id"]?.stringValue
         let includeCursor = arguments?["cursor"]?.boolValue ?? false
         let displayIndex = arguments?["display"]?.intValue
+        let quality = arguments?["quality"]?.stringValue ?? "low"
+        let highQuality = quality == "high"
 
         // Build a unique temp file path for this capture.
         let uuid = UUID().uuidString
-        let outPath = "/tmp/grid-screenshot-\(uuid).png"
+        let pngPath = "/tmp/grid-screenshot-\(uuid).png"
 
         // Build screencapture args based on target.
         var args: [String] = ["-x"]  // silent (no shutter sound)
@@ -345,14 +349,14 @@ enum GridTools {
                 // screencapture -D is 1-based
                 args += ["-D", "\(idx + 1)"]
             }
-            args.append(outPath)
+            args.append(pngPath)
 
         case "window":
             guard let windowIdStr = id, let windowId = UInt32(windowIdStr) else {
                 return errorResult("window target requires a numeric 'id' (window ID)")
             }
             args += ["-l", "\(windowId)"]
-            args.append(outPath)
+            args.append(pngPath)
 
         case "cell":
             guard let cellId = id else {
@@ -363,7 +367,7 @@ enum GridTools {
                 return errorResult("could not find a focused window in cell '\(cellId)'")
             }
             args += ["-l", "\(windowId)"]
-            args.append(outPath)
+            args.append(pngPath)
 
         default:
             return errorResult("unknown target '\(target)'; use 'full', 'window', or 'cell'")
@@ -376,15 +380,46 @@ enum GridTools {
             return errorResult("screencapture failed: \(error)")
         }
 
-        // Read PNG and encode to base64.
-        defer { try? FileManager.default.removeItem(atPath: outPath) }
-        guard let pngData = FileManager.default.contents(atPath: outPath), !pngData.isEmpty else {
-            return errorResult("screenshot file not found or empty at \(outPath)")
+        defer { try? FileManager.default.removeItem(atPath: pngPath) }
+        guard FileManager.default.fileExists(atPath: pngPath) else {
+            return errorResult("screenshot file not found at \(pngPath)")
         }
-        let base64String = pngData.base64EncodedString()
+
+        if highQuality {
+            // Return full-resolution PNG.
+            guard let pngData = FileManager.default.contents(atPath: pngPath), !pngData.isEmpty else {
+                return errorResult("screenshot file empty at \(pngPath)")
+            }
+            let base64String = pngData.base64EncodedString()
+            return CallTool.Result(
+                content: [.image(data: base64String, mimeType: "image/png", annotations: nil, _meta: nil)]
+            )
+        }
+
+        // Low quality: resize to ≤1024px and convert to compressed JPEG via sips.
+        let jpegPath = "/tmp/grid-screenshot-\(uuid).jpg"
+        defer { try? FileManager.default.removeItem(atPath: jpegPath) }
+
+        do {
+            // Resize longest edge to 1024px (no-op if already smaller), output as JPEG.
+            try runProcessSync("/usr/bin/sips", arguments: [
+                "--resampleHeightWidthMax", "1024",
+                "--setProperty", "format", "jpeg",
+                "--setProperty", "formatOptions", "60",
+                pngPath,
+                "--out", jpegPath,
+            ])
+        } catch {
+            return errorResult("sips resize/compress failed: \(error)")
+        }
+
+        guard let jpegData = FileManager.default.contents(atPath: jpegPath), !jpegData.isEmpty else {
+            return errorResult("compressed screenshot empty at \(jpegPath)")
+        }
+        let base64String = jpegData.base64EncodedString()
 
         return CallTool.Result(
-            content: [.image(data: base64String, mimeType: "image/png", annotations: nil, _meta: nil)]
+            content: [.image(data: base64String, mimeType: "image/jpeg", annotations: nil, _meta: nil)]
         )
     }
 
