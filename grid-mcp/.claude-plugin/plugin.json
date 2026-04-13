@@ -1,0 +1,21 @@
+{
+  "name": "grid-mcp",
+  "version": "0.2.0",
+  "description": "MCP server for theGrid window manager — 48 tools for full grid control",
+  "keywords": [
+    "grid",
+    "window-manager",
+    "macos",
+    "mcp"
+  ],
+  "license": "ISC",
+  "author": {
+    "name": "ryanthedev"
+  },
+  "mcpServers": {
+    "thegrid": {
+      "command": "bun",
+      "args": ["run", "${CLAUDE_PLUGIN_ROOT}/src/mcp.js"]
+    }
+  }
+}

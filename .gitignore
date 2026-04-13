@@ -56,6 +56,8 @@ grid-notify/Package.resolved
 grid-mcp/.build/
 grid-mcp/.swiftpm/
 grid-mcp/Package.resolved
+grid-mcp/node_modules/
+grid-mcp/bun.lock
 
 # Scratch / local docs
 docs/building/
