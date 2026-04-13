@@ -75,6 +75,231 @@ function makeResizeHandler(toolName) {
   };
 }
 
+function makeScreenshotHandler() {
+  return async (args) => {
+    try {
+      const result = await handleScreenshot(args);
+      return result;
+    } catch (error) {
+      return {
+        isError: true,
+        content: [{ type: "text", text: `Screenshot error: ${error.message}` }],
+      };
+    }
+  };
+}
+
+async function handleScreenshot(args) {
+  const fs = require("fs");
+  const { randomUUID } = require("crypto");
+
+  // Parse arguments
+  const target = args?.target ?? "full";
+  const id = args?.id;
+  const includeCursor = args?.cursor ?? false;
+  const displayIndex = args?.display ?? null;
+  const quality = args?.quality ?? "low";
+  const isHighQuality = quality === "high";
+
+  // Generate unique temp file paths
+  const uuid = randomUUID();
+  const pngPath = `/tmp/grid-screenshot-${uuid}.png`;
+  const jpegPath = `/tmp/grid-screenshot-${uuid}.jpg`;
+
+  // Cleanup handler
+  const cleanup = () => {
+    try {
+      if (fs.existsSync(pngPath)) fs.unlinkSync(pngPath);
+    } catch {
+      // ignore
+    }
+    try {
+      if (fs.existsSync(jpegPath)) fs.unlinkSync(jpegPath);
+    } catch {
+      // ignore
+    }
+  };
+
+  try {
+    // Build screencapture arguments
+    const captureArgs = ["-x"]; // silent
+
+    let windowIdForCapture;
+    switch (target) {
+      case "full":
+        if (includeCursor) captureArgs.push("-C");
+        if (displayIndex !== null && displayIndex !== undefined) {
+          // screencapture -D is 1-based; we convert from 0-based
+          captureArgs.push("-D", String(displayIndex + 1));
+        }
+        captureArgs.push(pngPath);
+        break;
+
+      case "window":
+        if (!id || Number.isNaN(parseInt(id))) {
+          return {
+            isError: true,
+            content: [{ type: "text", text: "window target requires numeric 'id' (window ID)" }],
+          };
+        }
+        captureArgs.push("-l", id);
+        captureArgs.push(pngPath);
+        break;
+
+      case "cell":
+        if (!id) {
+          return {
+            isError: true,
+            content: [{ type: "text", text: "cell target requires 'id' (cell ID)" }],
+          };
+        }
+        windowIdForCapture = await resolveWindowIdForCell(id);
+        if (!windowIdForCapture) {
+          return {
+            isError: true,
+            content: [{ type: "text", text: `could not find focused window in cell '${id}'` }],
+          };
+        }
+        captureArgs.push("-l", String(windowIdForCapture));
+        captureArgs.push(pngPath);
+        break;
+
+      default:
+        return {
+          isError: true,
+          content: [{ type: "text", text: "unknown target; use 'full', 'window', or 'cell'" }],
+        };
+    }
+
+    // Run screencapture
+    const captureProc = Bun.spawn(["/usr/sbin/screencapture", ...captureArgs]);
+    const captureExitCode = await captureProc.exited;
+    if (captureExitCode !== 0) {
+      cleanup();
+      return {
+        isError: true,
+        content: [{ type: "text", text: `screencapture failed with exit code ${captureExitCode}` }],
+      };
+    }
+
+    // Verify PNG was created
+    if (!fs.existsSync(pngPath)) {
+      cleanup();
+      return {
+        isError: true,
+        content: [{ type: "text", text: `screenshot file not found at ${pngPath}` }],
+      };
+    }
+
+    // High quality: return full-res PNG as base64
+    if (isHighQuality) {
+      const pngData = fs.readFileSync(pngPath);
+      if (!pngData || pngData.length === 0) {
+        cleanup();
+        return {
+          isError: true,
+          content: [{ type: "text", text: `screenshot file empty at ${pngPath}` }],
+        };
+      }
+      const base64String = pngData.toString("base64");
+      cleanup();
+      return {
+        content: [
+          {
+            type: "image",
+            data: base64String,
+            mimeType: "image/png",
+          },
+        ],
+      };
+    }
+
+    // Low quality: resize to <=1024px and convert to JPEG via sips
+    const sipsProc = Bun.spawn([
+      "/usr/bin/sips",
+      "--resampleHeightWidthMax",
+      "1024",
+      "--setProperty",
+      "format",
+      "jpeg",
+      "--setProperty",
+      "formatOptions",
+      "60",
+      pngPath,
+      "--out",
+      jpegPath,
+    ]);
+    const sipsExitCode = await sipsProc.exited;
+    if (sipsExitCode !== 0) {
+      cleanup();
+      return {
+        isError: true,
+        content: [{ type: "text", text: `sips compress failed with exit code ${sipsExitCode}` }],
+      };
+    }
+
+    // Read compressed JPEG
+    if (!fs.existsSync(jpegPath)) {
+      cleanup();
+      return {
+        isError: true,
+        content: [{ type: "text", text: `compressed screenshot not found at ${jpegPath}` }],
+      };
+    }
+
+    const jpegData = fs.readFileSync(jpegPath);
+    if (!jpegData || jpegData.length === 0) {
+      cleanup();
+      return {
+        isError: true,
+        content: [{ type: "text", text: `compressed screenshot empty at ${jpegPath}` }],
+      };
+    }
+
+    const base64String = jpegData.toString("base64");
+    cleanup();
+    return {
+      content: [
+        {
+          type: "image",
+          data: base64String,
+          mimeType: "image/jpeg",
+        },
+      ],
+    };
+  } catch (error) {
+    cleanup();
+    throw error;
+  }
+}
+
+async function resolveWindowIdForCell(cellId) {
+  try {
+    const result = await rpcClient.call("grid.state.show", {});
+    const state = result?.state;
+    if (!state) return null;
+
+    const spaces = state.spaces ?? {};
+
+    // Walk all spaces to find the cell
+    for (const [, space] of Object.entries(spaces)) {
+      const cells = space?.cells ?? {};
+      const cell = cells[cellId];
+      if (!cell) continue;
+
+      // Extract lastFocusedWid from cell
+      const windowId = cell.lastFocusedWid;
+      if (typeof windowId === "number" && windowId > 0) {
+        return windowId;
+      }
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 // ============================================================================
 // Grid Tools (25)
 // ============================================================================
@@ -256,11 +481,7 @@ server.tool(
       .optional()
       .describe("Quality preset: 'low' (default, <=1024px JPEG), 'high' (full-res PNG)"),
   },
-  async () => {
-    return {
-      content: [{ type: "text", text: "Screenshot not yet implemented — coming in Phase 3" }],
-    };
-  }
+  makeScreenshotHandler()
 );
 
 server.tool(
