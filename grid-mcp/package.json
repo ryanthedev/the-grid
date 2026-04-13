@@ -1,0 +1,13 @@
+{
+  "name": "grid-mcp",
+  "version": "0.2.0",
+  "description": "MCP server for theGrid window manager control",
+  "type": "module",
+  "bin": {
+    "grid-mcp": "./src/mcp.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.3.6"
+  }
+}
