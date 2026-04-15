@@ -8,6 +8,7 @@
 
 import Foundation
 import CoreGraphics
+import AppKit
 
 struct PendingLaunchTarget {
     let spaceID: String
@@ -404,6 +405,9 @@ class GridReconciler: StateEventHandler {
         case .displayDisconnected(let displayUUID):
             await handleDisplayDisconnected(displayUUID)
 
+        case .appTerminated(let app):
+            await handleAppTerminated(app)
+
         default:
             // Ignore other events (app lifecycle, title changes, etc.)
             break
@@ -411,6 +415,50 @@ class GridReconciler: StateEventHandler {
     }
 
     // MARK: - Event Handlers
+
+    // handleAppTerminated: instrumentation-only scan over gridState cells.
+    // When an app dies we want to tell, post-mortem, whether the crash was
+    // correlated with cells still referencing wids owned by the dying pid.
+    // Does NOT mutate state — the per-window AX destroy flow still runs.
+    private func handleAppTerminated(_ app: NSRunningApplication) async {
+        guard let gridState, let stateManager else { return }
+        let pid = app.processIdentifier
+
+        // Collect the per-space assignments snapshot from GridState.
+        let spaceIDs = await gridState.getSpaceIDs()
+        var assignmentsBySpace: [String: [String: [UInt32]]] = [:]
+        for spaceID in spaceIDs {
+            assignmentsBySpace[spaceID] = await gridState.getWindowAssignments(spaceID: spaceID)
+        }
+
+        // Build space→display map from wmState.
+        let wmState = await stateManager.getState()
+        var spaceToDisplay: [String: String] = [:]
+        for (spaceID, space) in wmState.spaces {
+            spaceToDisplay[spaceID] = space.displayUUID
+        }
+
+        let stale = AppTermReconciler.findStaleCells(
+            pid: pid,
+            wmState: wmState,
+            assignmentsBySpace: assignmentsBySpace,
+            spaceToDisplay: spaceToDisplay
+        )
+
+        let payload: [[String: Any]] = stale.map { entry in
+            [
+                "display": entry.display,
+                "cell": entry.cell,
+                "wids": entry.wids.map { Int($0) }
+            ]
+        }
+
+        jlog("app.term.reconcile", data: [
+            "app": app.localizedName ?? "?",
+            "pid": Int(pid),
+            "displays_with_stale_wids": payload
+        ])
+    }
 
     private func handleWindowDestroyed(_ windowID: UInt32) async {
         // Remove window from GridState (all spaces)
@@ -884,7 +932,7 @@ class GridReconciler: StateEventHandler {
 
     // MARK: - Border Sync
 
-    private func syncBordersForCurrentSpace() async {
+    private func syncBordersForCurrentSpace(source: String = "reconcile") async {
         // Get current space and display from StateManager
         guard let stateManager else { return }
 
@@ -894,10 +942,23 @@ class GridReconciler: StateEventHandler {
             return
         }
 
-        await syncBordersForSpace(spaceID, displayUUID: displayUUID)
+        await syncBordersForSpace(spaceID, displayUUID: displayUUID, source: source)
     }
 
-    func syncBordersForSpace(_ spaceID: String, displayUUID: String) async {
+    // Compute the live wids known to StateManager for a display — used as the
+    // `live_wids` payload on bdr.empty so post-mortem can tell what windows
+    // the state machine believed existed when an empty assignment was sent.
+    private func computeLiveWids(displayUUID: String, wmState: WindowManagerState) -> [UInt32] {
+        var wids: [UInt32] = []
+        for (_, win) in wmState.windows {
+            if win.displayUUID == displayUUID {
+                wids.append(win.id)
+            }
+        }
+        return wids
+    }
+
+    func syncBordersForSpace(_ spaceID: String, displayUUID: String, source: String = "reconcile") async {
         guard let gridState, let gridConfig else { return }
 
         // Get layout for this space
@@ -905,8 +966,21 @@ class GridReconciler: StateEventHandler {
         guard !layoutID.isEmpty else {
             // No layout -- clear borders by sending empty assignments
             if let borderManager = simpleBorderManager {
+                let liveWids: [UInt32]
+                if let stateManager {
+                    let wmState = await stateManager.getState()
+                    liveWids = computeLiveWids(displayUUID: displayUUID, wmState: wmState)
+                } else {
+                    liveWids = []
+                }
                 await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-                    borderManager.setCellAssignments([:], forDisplay: displayUUID, completion: { continuation.resume() })
+                    borderManager.setCellAssignments(
+                        [:],
+                        forDisplay: displayUUID,
+                        source: "no_layout:\(source)",
+                        liveWids: liveWids,
+                        completion: { continuation.resume() }
+                    )
                 }
             }
             return
@@ -964,6 +1038,7 @@ class GridReconciler: StateEventHandler {
         // withCheckedContinuation bridges the DispatchQueue.main.async boundary
         // so that fence releases in GridWindowMove wait for border work to finish.
         if let borderManager = simpleBorderManager {
+            let liveWids = computeLiveWids(displayUUID: displayUUID, wmState: wmState)
             await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
                 borderManager.setCellAssignments(
                     windowToCellMap,
@@ -972,6 +1047,8 @@ class GridReconciler: StateEventHandler {
                     cellStackModes: cellStackModes,
                     windowOrder: windowOrder,
                     displayFrame: bounds,
+                    source: source,
+                    liveWids: liveWids,
                     completion: { continuation.resume() }
                 )
             }

@@ -53,6 +53,11 @@ class GridFocus {
     private weak var windowManipulator: WindowManipulator?
     private weak var gridReconciler: GridReconciler?
 
+    // Tracks recent focus-mismatch pairs to detect ping-pong loops across
+    // repeated focusWindowByID calls. Bails to accept-OS-reality when the
+    // same (requested, actual) pair flips >3 times within 2s.
+    private var focusLoopDetector = FocusLoopDetector()
+
     init() {}
 
     func setup(
@@ -379,6 +384,28 @@ class GridFocus {
                 "actual": Int(actualWID),
                 "retry": true,
             ])
+
+            // Loop detection: if this pair has been flipping repeatedly across
+            // recent calls, skip the retry and accept OS reality instead of
+            // contributing to an unbounded ping-pong.
+            if let trip = focusLoopDetector.observe(
+                requested: windowID,
+                actual: actualWID,
+                now: CFAbsoluteTimeGetCurrent()
+            ) {
+                let lowWid = min(windowID, actualWID)
+                let highWid = max(windowID, actualWID)
+                jlog("focus.loop", data: [
+                    "pair": [Int(lowWid), Int(highWid)],
+                    "count": trip.count,
+                    "dur_ms": trip.durationMs,
+                ])
+                jlog("focus.mismatch.accept", data: [
+                    "requested": Int(windowID),
+                    "actual": Int(actualWID),
+                ])
+                return actualWID
+            }
 
             // Attempt 2: retry AX focus
             _ = windowManipulator.focusWindow(pid: windowState.pid, windowID: windowID)
