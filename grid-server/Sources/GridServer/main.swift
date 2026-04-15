@@ -32,6 +32,13 @@ struct GridServerCommand: ParsableCommand {
     @Option(name: .long, help: "Heartbeat interval in seconds")
     var heartbeatInterval: Double = 10.0
 
+    // Test-only: after installing crash reporter + logging srv.start, trigger
+    // a synthetic fault so we can verify the crash instrumentation path.
+    // Accepted values: SIGSEGV, SIGABRT, SIGILL, SIGBUS, SIGFPE, SIGPIPE,
+    // NSException, exit-after-startlog.
+    @Option(name: .long, help: .hidden)
+    var crashTest: String? = nil
+
     func run() throws {
         // Silence legacy Logger output (components will be migrated to JSONLogger)
         LoggingSystem.bootstrap { _ in SilentLogHandler() }
@@ -58,8 +65,28 @@ struct GridServerCommand: ParsableCommand {
             jlog("srv.cleanup", data: ["file": lockPath.path])
         }
 
+        // Classify the previous run's exit from the on-disk log BEFORE we
+        // write our own srv.start (otherwise our srv.start would be the last
+        // line and shadow the prior run).
+        let prevExit = PrevExitClassifier.classify(
+            jsonlTail: PrevExitClassifier.readTail(path: JSONLogger.shared.getLogPath())
+        )
+        jlog("srv.prev_exit", data: ["exit": prevExit.rawValue])
+
+        // Install crash-exit instrumentation: fatal-signal handlers,
+        // NSSetUncaughtExceptionHandler, atexit. Do this before srv.start so
+        // a crash in component init still produces a srv.fatal line.
+        CrashReporter.install()
+
         // Log server start
         jlog("srv.start", data: ["ver": GridServerVersion, "commit": GridServerCommit, "socket": socketPath])
+
+        // Test-only: optionally trigger a synthetic fault and exit. Used by
+        // crash-instrumentation tests to verify DW-1.1 / DW-1.2 / DW-1.3 / DW-1.5.
+        if let mode = crashTest {
+            triggerCrashTest(mode: mode)
+            return
+        }
 
         // Check for Accessibility permission
         if !PermissionChecker.checkAccessibilityPermission() {
@@ -274,6 +301,44 @@ struct GridServerCommand: ParsableCommand {
             throw ExitCode.failure
         }
     }
+}
+
+/// Test-only fault injector used by `--crash-test=<mode>`. Invoked after
+/// CrashReporter is installed and srv.start is logged; raises the requested
+/// fault and never returns (for signal modes and NSException). For
+/// `exit-after-startlog`, writes a final srv.shutdown.done and returns so the
+/// caller can Darwin.exit(0) through the normal path.
+func triggerCrashTest(mode: String) {
+    switch mode {
+    case "SIGSEGV": raise(SIGSEGV)
+    case "SIGABRT": raise(SIGABRT)
+    case "SIGILL":  raise(SIGILL)
+    case "SIGBUS":  raise(SIGBUS)
+    case "SIGFPE":  raise(SIGFPE)
+    case "SIGPIPE": raise(SIGPIPE)
+    case "NSException":
+        // Raise on a background queue so the uncaught handler path is exercised
+        // exactly like a real escaped ObjC exception.
+        DispatchQueue.global().async {
+            NSException(name: .init("CrashTestException"), reason: "synthetic", userInfo: nil).raise()
+        }
+        // Give the async raise time to terminate the process through the
+        // uncaught handler. If we return first, the test harness would see
+        // a clean exit.
+        sleep(5)
+    case "exit-after-startlog":
+        // Used by DW-1.5: a second run that only needs to emit srv.prev_exit
+        // before exiting, so the test can check the prev-exit classification.
+        jlog("srv.shutdown.done")
+        // Give JSONLogWriter a beat to flush before we exit.
+        usleep(300_000)
+        Darwin.exit(0)
+    default:
+        jlog("warn.crash.test", msg: "unknown crash-test mode", data: ["mode": mode])
+    }
+    // Belt-and-suspenders: if somehow the signal didn't kill us, hang so the
+    // test observes no clean exit rather than a false-positive pass.
+    sleep(10)
 }
 
 // Run the command
