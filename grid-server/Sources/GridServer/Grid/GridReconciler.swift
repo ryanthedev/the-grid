@@ -375,6 +375,17 @@ class GridReconciler: StateEventHandler {
             }
         }
 
+        // Space ID reassignment must always be processed — it affects GridState
+        // integrity and cannot wait for suppression to end.
+        if case .spaceIDReassigned(let oldSpaceID, let newSpaceID, let displayUUID) = event {
+            await handleSpaceIDReassigned(
+                oldSpaceID: oldSpaceID,
+                newSpaceID: newSpaceID,
+                displayUUID: displayUUID
+            )
+            return
+        }
+
         // Skip other events when suppressed
         if suppressReconciliation {
             return
@@ -777,6 +788,42 @@ class GridReconciler: StateEventHandler {
         // (SimpleBorderManager handles this via empty assignments on next sync)
 
         jlog("reconcile.space.change", data: ["space": newSpaceID, "display": displayUUID])
+    }
+
+    // macOS reassigned a space ID on a display (fullscreen app create/destroy).
+    // Migrate GridState from the old ID to the new one so window assignments
+    // survive, and reset AX orphan counts so the validator doesn't prune
+    // windows that are only transiently invisible during the shuffle.
+    private func handleSpaceIDReassigned(
+        oldSpaceID: String,
+        newSpaceID: String,
+        displayUUID: String
+    ) async {
+        guard let gridState else { return }
+
+        let migratedWids = await gridState.migrateSpace(from: oldSpaceID, to: newSpaceID)
+
+        if !migratedWids.isEmpty {
+            // Reset orphan tracking — these windows are real, just briefly
+            // invisible to AX during the space ID transition.
+            await stateValidator?.resetOrphanCounts(for: migratedWids)
+
+            // Sync borders for the new space ID so they don't go blank.
+            await syncBordersForSpace(newSpaceID, displayUUID: displayUUID)
+
+            jlog("reconcile.space.reassign", data: [
+                "old": oldSpaceID,
+                "new": newSpaceID,
+                "display": displayUUID,
+                "migratedWindows": migratedWids.count,
+            ])
+        } else {
+            jlog("reconcile.space.reassign.noop", data: [
+                "old": oldSpaceID,
+                "new": newSpaceID,
+                "display": displayUUID,
+            ])
+        }
     }
 
     private func handleSystemWake() async {

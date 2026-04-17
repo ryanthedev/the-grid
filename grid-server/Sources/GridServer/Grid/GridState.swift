@@ -257,8 +257,40 @@ actor GridState {
         markDirty()
     }
 
-    // MARK: - Space ID Migration (sleep/wake)
+    // MARK: - Space ID Migration
 
+    // Migrate a single space: move GridState data from oldID to newID.
+    // Called live when macOS reassigns space IDs (fullscreen app create/destroy).
+    // Returns the window IDs that were migrated (for orphan count reset).
+    func migrateSpace(from oldSpaceID: String, to newSpaceID: String) -> [UInt32] {
+        guard oldSpaceID != newSpaceID,
+              var oldState = spaces[oldSpaceID],
+              hasSignificantState(oldState) else {
+            return []
+        }
+
+        // Collect window IDs before migrating
+        var windowIDs: [UInt32] = []
+        for cell in oldState.cells.values {
+            windowIDs.append(contentsOf: cell.windows)
+        }
+
+        oldState.spaceId = newSpaceID
+        spaces[newSpaceID] = oldState
+        spaces.removeValue(forKey: oldSpaceID)
+        markDirty()
+
+        jlog("state.space_migrated.live", data: [
+            "old": oldSpaceID,
+            "new": newSpaceID,
+            "windows": windowIDs.map { Int($0) },
+            "cells": Array(oldState.cells.keys),
+        ])
+
+        return windowIDs
+    }
+
+    // Bulk migration: positional matching across displays (used on wake).
     func migrateSpaceIDs(currentDisplaySpaces: [String: [String]]) -> Bool {
         var migrated = false
 

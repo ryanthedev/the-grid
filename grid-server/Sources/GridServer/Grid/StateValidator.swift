@@ -49,6 +49,24 @@ actor StateValidator {
 
     // MARK: - Public API
 
+    // Reset AX orphan tracking for specific windows. Called when macOS
+    // reassigns space IDs — windows on the affected space become temporarily
+    // invisible to AX during the transition and would otherwise be pruned.
+    func resetOrphanCounts(for windowIDs: [UInt32]) {
+        var cleared = 0
+        for wid in windowIDs {
+            if axOrphanCounts.removeValue(forKey: wid) != nil {
+                cleared += 1
+            }
+        }
+        if cleared > 0 {
+            jlog("validate.orphan.reset", data: [
+                "cleared": cleared,
+                "total": windowIDs.count,
+            ])
+        }
+    }
+
     // start() -- called once from main.swift after all components are wired.
     // Creates a repeating background timer that fires validate() every 30 seconds.
     func start() {

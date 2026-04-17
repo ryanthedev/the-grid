@@ -254,6 +254,10 @@ actor StateManager: StateEventHandler {
         case .spaceDestroyed(let spaceID):
             await handleSpaceDestroyed(spaceID)
 
+        case .spaceIDReassigned:
+            // Handled by GridReconciler (GridState migration + orphan reset)
+            break
+
         case .displayConnected(let displayUUID):
             await handleDisplayConnected(displayUUID)
 
@@ -1686,6 +1690,19 @@ var windows: [String: WindowState] = [:]
                     "newSid": display.currentSpaceID,
                     "display": display.uuid
                 ])
+
+                // Notify GridReconciler so it can migrate GridState and
+                // reset AX orphan counts before the validator prunes windows
+                // that are only transiently invisible during space ID shuffles.
+                await EventRouter.shared.route(
+                    .spaceIDReassigned(
+                        oldSpaceID: String(oldSpaceID),
+                        newSpaceID: String(display.currentSpaceID),
+                        displayUUID: display.uuid
+                    ),
+                    from: .workspaceObserver
+                )
+
                 break
             }
         }
