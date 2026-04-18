@@ -130,17 +130,17 @@ class SimpleBorderManager {
     ///   - cellStackModes: Optional - cellID → stackMode ("tabs", "vertical", "horizontal")
     ///   - windowOrder: Optional - cellID → [windowID] ordered array for focus cycling
     ///   - displayFrame: Optional - display frame for layout context
-    func setCellAssignments(_ assignments: [UInt32: String], forDisplay displayUUID: String, focusedWindowID: UInt32? = nil, cellStackModes: [String: String] = [:], windowOrder: [String: [UInt32]]? = nil, displayFrame: CGRect? = nil, completion: (() -> Void)? = nil) {
+    func setCellAssignments(_ assignments: [UInt32: String], forDisplay displayUUID: String, focusedWindowID: UInt32? = nil, cellStackModes: [String: String] = [:], windowOrder: [String: [UInt32]]? = nil, displayFrame: CGRect? = nil, source: String = "unknown", liveWids: [UInt32]? = nil, completion: (() -> Void)? = nil) {
         let span = CurrentSpan.current
         DispatchQueue.main.async { [weak self, span] in
             CurrentSpan.$current.withValue(span) {
-                self?.setCellAssignmentsImpl(assignments, forDisplay: displayUUID, focusedWindowID: focusedWindowID, cellStackModes: cellStackModes, windowOrder: windowOrder, displayFrame: displayFrame)
+                self?.setCellAssignmentsImpl(assignments, forDisplay: displayUUID, focusedWindowID: focusedWindowID, cellStackModes: cellStackModes, windowOrder: windowOrder, displayFrame: displayFrame, source: source, liveWids: liveWids)
                 completion?()
             }
         }
     }
 
-    private func setCellAssignmentsImpl(_ assignments: [UInt32: String], forDisplay displayUUID: String, focusedWindowID newFocusedWindow: UInt32? = nil, cellStackModes: [String: String] = [:], windowOrder: [String: [UInt32]]? = nil, displayFrame: CGRect? = nil) {
+    private func setCellAssignmentsImpl(_ assignments: [UInt32: String], forDisplay displayUUID: String, focusedWindowID newFocusedWindow: UInt32? = nil, cellStackModes: [String: String] = [:], windowOrder: [String: [UInt32]]? = nil, displayFrame: CGRect? = nil, source: String = "unknown", liveWids: [UInt32]? = nil) {
         // Reentrancy guard
         guard !isUpdating else { return }
         isUpdating = true
@@ -229,6 +229,18 @@ class SimpleBorderManager {
             "prev": prevStr as Any,
             "atomicFocus": newFocusedWindow as Any
         ])
+
+        // Companion diagnostic: empty-assignments is a recurring pre-crash
+        // pattern. Emit sibling event with source context so post-mortem can
+        // tell which code path produced the empty set.
+        if assignments.isEmpty {
+            JSONLogger.shared.log("bdr.empty", data: [
+                "prev_count": oldAssignments?.count ?? 0,
+                "source": source,
+                "display": displayUUID,
+                "live_wids": (liveWids ?? []).sorted().map { Int($0) }
+            ])
+        }
     }
 
     // MARK: - Focus Management

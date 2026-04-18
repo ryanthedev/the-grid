@@ -34,6 +34,11 @@ actor StateValidator {
     private var axOrphanCounts: [UInt32: Int] = [:]
     private let axOrphanThreshold = 2
 
+    // Heartbeat tick counter: increments every validation cycle (30s). Used by
+    // HeartbeatScheduler to emit `srv.alive` at a 60s cadence for memory-growth
+    // correlation on crashes.
+    private var heartbeatTickCount: Int = 0
+
     // MARK: - Initialization
 
     init(gridState: GridState, stateManager: StateManager, connectionID: Int32) {
@@ -43,6 +48,24 @@ actor StateValidator {
     }
 
     // MARK: - Public API
+
+    // Reset AX orphan tracking for specific windows. Called when macOS
+    // reassigns space IDs — windows on the affected space become temporarily
+    // invisible to AX during the transition and would otherwise be pruned.
+    func resetOrphanCounts(for windowIDs: [UInt32]) {
+        var cleared = 0
+        for wid in windowIDs {
+            if axOrphanCounts.removeValue(forKey: wid) != nil {
+                cleared += 1
+            }
+        }
+        if cleared > 0 {
+            jlog("validate.orphan.reset", data: [
+                "cleared": cleared,
+                "total": windowIDs.count,
+            ])
+        }
+    }
 
     // start() -- called once from main.swift after all components are wired.
     // Creates a repeating background timer that fires validate() every 30 seconds.
@@ -83,6 +106,18 @@ actor StateValidator {
         await pruneDeadSpaces(wmState: wmState)
 
         jlog("validate.end")
+
+        // Heartbeat: emit every other tick (60s cadence at 30s validator
+        // cadence). Primary purpose is ruling in/out heap growth on crashes.
+        heartbeatTickCount += 1
+        if HeartbeatScheduler.shouldEmit(tickCount: heartbeatTickCount) {
+            jlog("srv.alive", data: [
+                "heap_mb": Int(HeapReader.readHeapMb()),
+                "focused_wid": Int(wmState.metadata.focusedWindowID ?? 0),
+                "displays": wmState.displays.count,
+                "total_wins": wmState.windows.count,
+            ])
+        }
     }
 
     // MARK: - Pruning Passes

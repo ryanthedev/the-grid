@@ -1223,7 +1223,7 @@ completion(Response(id: request.id, result: AnyCodable(["success": true])))
 
             // Update SimpleBorderManager with per-display data (and optional atomic focus)
             if let simpleBorderManager = self.simpleBorderManager {
-                simpleBorderManager.setCellAssignments(cellAssignments, forDisplay: displayUUID, focusedWindowID: focusedWindowID, cellStackModes: cellStackModes, windowOrder: windowOrder, displayFrame: displayFrame)
+                simpleBorderManager.setCellAssignments(cellAssignments, forDisplay: displayUUID, focusedWindowID: focusedWindowID, cellStackModes: cellStackModes, windowOrder: windowOrder, displayFrame: displayFrame, source: "rpc")
             }
             completion(Response(id: request.id, result: AnyCodable(["success": true])))
         }

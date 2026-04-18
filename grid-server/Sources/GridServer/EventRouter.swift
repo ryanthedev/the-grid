@@ -30,6 +30,8 @@ enum StateEvent {
     // Space lifecycle
     case spaceCreated(spaceID: UInt64, displayUUID: String)
     case spaceDestroyed(spaceID: UInt64)
+    // macOS reassigned a space ID on a display (e.g. fullscreen app create/destroy)
+    case spaceIDReassigned(oldSpaceID: String, newSpaceID: String, displayUUID: String)
 
     // Display lifecycle
     case displayConnected(displayUUID: String)
@@ -295,6 +297,13 @@ extension StateEvent {
 
         case .spaceDestroyed(let spaceID):
             return ("ev.spc.destroy", ["sid": spaceID])
+
+        case .spaceIDReassigned(let oldSpaceID, let newSpaceID, let displayUUID):
+            return ("ev.spc.reassign", [
+                "old": oldSpaceID,
+                "new": newSpaceID,
+                "display": displayUUID
+            ])
 
         // Display lifecycle
         case .displayConnected(let displayUUID):
