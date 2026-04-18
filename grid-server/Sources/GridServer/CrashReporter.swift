@@ -92,10 +92,8 @@ enum CrashReporter {
 
         // atexit: normal termination path (runs after Darwin.exit, not _exit).
         atexit {
-            // Best-effort. Uses jlog because atexit runs in normal context.
             jlog("srv.atexit")
-            // Flush: jlog enqueues async; give the writer a moment.
-            usleep(200_000)
+            JSONLogWriter.shared.flushSync()
         }
     }
 

@@ -85,6 +85,20 @@ final class JSONLogWriter {
 
     /// Get the log file path (for startup message)
     var logPath: String { filePath }
+
+    /// Drain any queued writes and flush the buffer to disk synchronously.
+    /// Safe to call from atexit — serializes through the writer queue so any
+    /// in-flight `enqueue` calls complete before we write.
+    func flushSync() {
+        queue.sync {
+            flushWorkItem?.cancel()
+            flushWorkItem = nil
+            guard !buffer.isEmpty else { return }
+            let lines = buffer
+            buffer.removeAll(keepingCapacity: true)
+            writeBatch(lines)
+        }
+    }
 }
 
 // MARK: - JSONLogger (Formatting + Span management)
