@@ -158,7 +158,7 @@ final class EventAllowlistTests: XCTestCase {
         "warn.bdr.bad_bounds", "warn.bdr.exists", "warn.bdr.missing",
         "warn.bdr.no_ctx", "warn.bdr.setup",
         "warn.bfd.init", "warn.broadcast", "warn.client_response",
-        "warn.config", "warn.dsp", "warn.fence.empty",
+        "warn.config", "warn.dsp", "warn.dsp.cgbounds_empty", "warn.fence.empty",
         "warn.focus", "warn.mouse", "warn.mouse.tap_disabled",
         "warn.move", "warn.mss", "warn.placement",
         "warn.reconcile.display.connect.errors",

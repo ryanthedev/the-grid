@@ -4,9 +4,63 @@ import Foundation
 import IOKit
 import Logging
 
+/// Indicates whether CGDisplayBounds returned usable data or whether the hand-rolled
+/// Cocoa→Quartz flip should be used as a fallback.
+enum FrameSource: Equatable {
+    case success
+    case fallback
+}
+
 /// Helper class for enriching display information from NSScreen and CGDisplay APIs
 class DisplayInfoHelper {
     private static let logger = Logger(label: "com.grid.DisplayInfo")
+
+    // selectFrameSource: decide whether CGDisplayBounds result is usable.
+    // Returns .success when bounds has non-zero area; .fallback for .zero or
+    // zero-size rects (observed on disconnected/transitioning displays).
+    static func selectFrameSource(bounds: CGRect) -> FrameSource {
+        if bounds.width > 0 && bounds.height > 0 {
+            return .success
+        }
+        return .fallback
+    }
+
+    // computeFrameQuartz: return the Quartz-coordinate frame for a display.
+    // Success path: returns CGDisplayBounds output verbatim.
+    // Fallback path: applies the hand-rolled Cocoa→Quartz flip using mainScreenHeight.
+    static func computeFrameQuartz(bounds: CGRect, cocoaFrame: CGRect, mainScreenHeight: CGFloat) -> CGRect {
+        switch selectFrameSource(bounds: bounds) {
+        case .success:
+            return bounds
+        case .fallback:
+            let quartzY = mainScreenHeight - (cocoaFrame.origin.y + cocoaFrame.height)
+            return CGRect(x: cocoaFrame.origin.x, y: quartzY, width: cocoaFrame.width, height: cocoaFrame.height)
+        }
+    }
+
+    // computeVisibleFrame: derive the visible-frame inset from Cocoa screen coordinates
+    // (no pivot needed — both inputs share the same coord system) and apply to quartzFrame.
+    //
+    // Inset deltas are coordinate-system-agnostic scalars:
+    //   topInset    = cocoaScreen.maxY - cocoaVisibleScreen.maxY  (menu bar)
+    //   bottomInset = cocoaVisibleScreen.minY - cocoaScreen.minY  (dock on bottom)
+    //   leftInset   = cocoaVisibleScreen.minX - cocoaScreen.minX  (dock on left)
+    //   rightInset  = cocoaScreen.maxX - cocoaVisibleScreen.maxX  (dock on right)
+    //
+    // In Quartz coords, y increases downward, so the menu-bar topInset shifts y
+    // downward (larger y) and reduces height.
+    static func computeVisibleFrame(quartzFrame: CGRect, cocoaScreen: CGRect, cocoaVisibleScreen: CGRect) -> CGRect {
+        let topInset    = cocoaScreen.maxY - cocoaVisibleScreen.maxY
+        let bottomInset = cocoaVisibleScreen.minY - cocoaScreen.minY
+        let leftInset   = cocoaVisibleScreen.minX - cocoaScreen.minX
+        let rightInset  = cocoaScreen.maxX - cocoaVisibleScreen.maxX
+        return CGRect(
+            x: quartzFrame.origin.x + leftInset,
+            y: quartzFrame.origin.y + topInset,
+            width: quartzFrame.width - leftInset - rightInset,
+            height: quartzFrame.height - topInset - bottomInset
+        )
+    }
 
     /// Enriches a display with comprehensive information from NSScreen and CGDisplay
     static func enrichDisplayInfo(uuid: String, screenIndex: Int, currentSpaceID: UInt64, spaces: [UInt64]) -> DisplayState {
@@ -24,29 +78,41 @@ class DisplayInfoHelper {
         let displayID = getCGDisplayID(from: screen)
         display.displayID = displayID
 
-        // Extract NSScreen properties and convert to Quartz coordinates
-        // NSScreen uses Cocoa coords (Y=0 at bottom, increases upward)
-        // Windows use Quartz coords (Y=0 at top of MAIN display, increases downward)
-        // Formula: quartz_y = main_screen_height - (cocoa_y + rect_height)
-        let mainScreenHeight = NSScreen.main?.frame.height ?? screen.frame.height
+        // Compute frame in Quartz coordinates.
+        // Primary path: use CGDisplayBounds which returns Quartz coords directly,
+        // eliminating the NSScreen.main pivot entirely.
+        // Fallback path: hand-rolled flip, used only when CGDisplayBounds returns
+        // a zero-sized rect (disconnected/transitioning display edge case).
+        if let id = displayID {
+            let bounds = CGDisplayBounds(id)
+            if selectFrameSource(bounds: bounds) == .fallback {
+                jlog("warn.dsp.cgbounds_empty", data: ["uuid": uuid, "displayID": id])
+            }
+            // mainScreenHeight only used in the fallback branch of computeFrameQuartz
+            let mainScreenHeight = NSScreen.main?.frame.height ?? screen.frame.height
+            display.frame = computeFrameQuartz(bounds: bounds, cocoaFrame: screen.frame, mainScreenHeight: mainScreenHeight)
+        } else {
+            // No displayID — fall back to hand-rolled flip
+            let mainScreenHeight = NSScreen.main?.frame.height ?? screen.frame.height
+            let frameQuartzY = mainScreenHeight - (screen.frame.origin.y + screen.frame.height)
+            display.frame = CGRect(
+                x: screen.frame.origin.x,
+                y: frameQuartzY,
+                width: screen.frame.width,
+                height: screen.frame.height
+            )
+        }
 
-        // Convert frame from Cocoa to Quartz
-        let frameQuartzY = mainScreenHeight - (screen.frame.origin.y + screen.frame.height)
-        display.frame = CGRect(
-            x: screen.frame.origin.x,
-            y: frameQuartzY,
-            width: screen.frame.width,
-            height: screen.frame.height
-        )
-
-        // Convert visibleFrame from Cocoa to Quartz
-        let visibleQuartzY = mainScreenHeight - (screen.visibleFrame.origin.y + screen.visibleFrame.height)
-        display.visibleFrame = CGRect(
-            x: screen.visibleFrame.origin.x,
-            y: visibleQuartzY,
-            width: screen.visibleFrame.width,
-            height: screen.visibleFrame.height
-        )
+        // Compute visibleFrame using pivot-free inset derivation.
+        // The Cocoa inset deltas (screen.frame vs screen.visibleFrame) are
+        // coordinate-system-agnostic and apply directly to the Quartz frame.
+        if let quartzFrame = display.frame {
+            display.visibleFrame = computeVisibleFrame(
+                quartzFrame: quartzFrame,
+                cocoaScreen: screen.frame,
+                cocoaVisibleScreen: screen.visibleFrame
+            )
+        }
 
         display.backingScaleFactor = screen.backingScaleFactor
 
