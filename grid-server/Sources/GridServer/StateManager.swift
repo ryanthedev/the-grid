@@ -914,9 +914,13 @@ actor StateManager: StateEventHandler {
             // Only warn for real windows, not:
             // - Menu bar items (small height, no display)
             // - Off-screen helper windows (Chrome phantom windows, system panels)
+            // - Any window where geometric display lookup failed (Finder/zoom
+            //   helpers, system overlays — center isn't on any display, so
+            //   there's nothing actionable to do regardless of macOS spaces)
             let isMenuBarItem = window.frame.size.height <= 30 && window.displayUUID == nil
             let isOffScreen = isWindowGeometricallyOffScreen(window.frame)
-            if originalSpaces.isEmpty && !isMenuBarItem && !isOffScreen {
+            let hasNoDisplay = window.displayUUID == nil
+            if originalSpaces.isEmpty && !isMenuBarItem && !isOffScreen && !hasNoDisplay {
                 jlog("warn.spaces", msg: "both geometric and macOS space detection failed", data: [
                     "wid": window.id,
                     "app": window.appName ?? "unknown",
