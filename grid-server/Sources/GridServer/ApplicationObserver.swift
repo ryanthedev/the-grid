@@ -196,10 +196,18 @@ class ApplicationObserver {
 
         // Extract window ID from AX element for other notifications
         guard let windowID = getWindowID(from: element) else {
-            JSONLogger.shared.log("ax.fail", data: [
-                "op": "get_window_id",
-                "notif": notifName
-            ])
+            // Sample 1-in-N: AX events fire constantly on transient elements
+            // (AXTitleChanged, AXWindowMoved, AXWindowResized) where window ID
+            // resolution is expected to fail and there's nothing to act on.
+            let (shouldLog, total) = Self.recordGetWindowIDFail()
+            if shouldLog {
+                JSONLogger.shared.log("ax.fail", data: [
+                    "op": "get_window_id",
+                    "notif": notifName,
+                    "sampled": "1/\(Self.getWindowIDFailSampleN)",
+                    "totalSeen": total
+                ])
+            }
             return
         }
 
@@ -256,6 +264,20 @@ class ApplicationObserver {
         )
         guard error == .success else { return (nil, error) }
         return (focusedWindow as! AXUIElement, nil)
+    }
+
+    // MARK: - Log Sampling
+
+    private static let getWindowIDFailSampleN: UInt64 = 100
+    private static let getWindowIDFailLock = NSLock()
+    private static var getWindowIDFailCount: UInt64 = 0
+
+    private static func recordGetWindowIDFail() -> (shouldLog: Bool, total: UInt64) {
+        getWindowIDFailLock.lock()
+        defer { getWindowIDFailLock.unlock() }
+        getWindowIDFailCount &+= 1
+        let total = getWindowIDFailCount
+        return (total % getWindowIDFailSampleN == 1, total)
     }
 
     private func getWindowID(from element: AXUIElement) -> UInt32? {
