@@ -257,11 +257,37 @@ class GridFocus {
                 await gridState.setFocus(spaceID: spaceID, cellID: cellID, windowIndex: tryIdx)
                 return windowID
             }
-            // OS focused a different window — this one is unfocusable, try next
+            // Same-cell async race: the OS reported a different window as
+            // focused, but that window is itself a member of this cell. This
+            // happens when an appActivated notification from a prior ax.focus
+            // arrives after our verification read. The first ax.focus call
+            // DID take effect — accept reality, commit the requested index,
+            // and stop iterating. Without this branch we'd issue extra
+            // ax.focus calls that compound the race and ultimately throw a
+            // spurious noWindowsInCell.
+            if GridFocus.detectFocusRace(actual: actualFocused, cellWindows: cellWindows) {
+                jlog("focus.cycle.race", data: [
+                    "requested": Int(windowID),
+                    "actual": Int(actualFocused),
+                    "cell": cellID,
+                ])
+                await gridState.setFocus(spaceID: spaceID, cellID: cellID, windowIndex: tryIdx)
+                return windowID
+            }
+            // OS focused a window outside this cell — genuinely unfocusable, try next
         }
 
         // All windows in cell were unfocusable
         throw GridFocusError.noWindowsInCell(cellID)
+    }
+
+    // detectFocusRace: pure predicate for the same-cell race branch in
+    // cycleFocus. Returns true when the OS-reported actually-focused window
+    // is itself a member of the cell we're cycling within — which means a
+    // prior ax.focus call landed late and we should commit instead of
+    // walking the rest of the list.
+    static func detectFocusRace(actual: UInt32, cellWindows: [UInt32]) -> Bool {
+        return cellWindows.contains(actual)
     }
 
     // focusCell: focus a specific cell by ID
@@ -371,6 +397,15 @@ class GridFocus {
         if !success {
             throw GridFocusError.focusFailed(windowID)
         }
+
+        // Yield one runloop tick before reading the verification state.
+        // The macOS appActivated notification delivers focusedWindowID
+        // updates asynchronously; without this yield, the verification
+        // read can fire before the notification lands and report the
+        // *previous* focused window as actual, producing a spurious
+        // mismatch. The cycleFocus same-cell race branch is a backstop
+        // for cases where a single yield isn't enough.
+        await Task.yield()
 
         // Verify: read cached focused window ID (no OS call).
         // Re-read state after the focus call to see what the OS reports.
