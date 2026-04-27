@@ -857,10 +857,27 @@ class GridReconciler: StateEventHandler {
                 jlog("reconcile.wake.migrated")
             }
 
+            // Step 1.5: Reset AX orphan counts before validate runs so
+            // pre-sleep stale counts cannot push real windows past the
+            // 2-cycle prune threshold during the wake stabilization window.
+            await self.stateValidator?.resetAllOrphanCounts()
+
             // Step 2: Full state validation after migration.
             // Re-fetch wmState so validator sees correct space IDs post-migration.
             let freshWmState = await stateManager.getState()
             await self.stateValidator?.validate(wmState: freshWmState)
+
+            // Step 2.5: Reapply layouts on every active space. Display
+            // reconnect already does this (handleDisplayConnected); wake
+            // must too, otherwise windows do not snap back into cells
+            // after sleep. refreshAllDisplays does not throw — failures
+            // are returned as a per-display error array.
+            jlog("reconcile.wake.refresh.start")
+            let refreshErrors = await self.gridApply?.refreshAllDisplays() ?? []
+            if !refreshErrors.isEmpty {
+                jlog("warn.reconcile.wake.refresh.errors",
+                     data: ["errorCount": refreshErrors.count])
+            }
 
             // Step 3: Sync borders for current space
             await self.syncBordersForCurrentSpace()

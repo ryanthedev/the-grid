@@ -67,6 +67,43 @@ actor StateValidator {
         }
     }
 
+    // Reset ALL AX orphan tracking. Called on system wake before validate()
+    // runs so pre-sleep stale counts cannot push real, alive windows past
+    // the 2-cycle prune threshold during the wake stabilization window.
+    // Distinct from resetOrphanCounts(for:): this clears the entire map
+    // rather than a specific subset.
+    func resetAllOrphanCounts() {
+        let cleared = axOrphanCounts.count
+        axOrphanCounts.removeAll()
+        if cleared > 0 {
+            jlog("validate.orphan.reset.all", data: [
+                "cleared": cleared,
+            ])
+        }
+    }
+
+    // MARK: - Test Helpers
+
+    // peekHeartbeatTickCount: read-only accessor used by tests to verify
+    // ordering (validate() increments heartbeatTickCount; observing >0
+    // proves validate completed). Cheap actor read.
+    func peekHeartbeatTickCount() -> Int {
+        return heartbeatTickCount
+    }
+
+    // _test_seedOrphanCounts: directly populate the orphan-count map for
+    // tests that exercise reset behavior without needing real AX queries.
+    func _test_seedOrphanCounts(_ counts: [UInt32: Int]) {
+        for (wid, n) in counts {
+            axOrphanCounts[wid] = n
+        }
+    }
+
+    // _test_orphanCountForWid: read the orphan count for a wid (0 if absent).
+    func _test_orphanCountForWid(_ wid: UInt32) -> Int {
+        return axOrphanCounts[wid] ?? 0
+    }
+
     // start() -- called once from main.swift after all components are wired.
     // Creates a repeating background timer that fires validate() every 30 seconds.
     func start() {
