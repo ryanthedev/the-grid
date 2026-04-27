@@ -39,6 +39,12 @@ actor StateValidator {
     // correlation on crashes.
     private var heartbeatTickCount: Int = 0
 
+    // Paused: when true, validate(wmState:) early-returns without running any
+    // prune passes. Toggled by pause()/resume() in response to system sleep
+    // and screen lock/unlock events. Single Bool (not refcounted) — wake
+    // unconditionally clears it via resume() in handleSystemWake.
+    private var paused: Bool = false
+
     // MARK: - Initialization
 
     init(gridState: GridState, stateManager: StateManager, connectionID: Int32) {
@@ -79,6 +85,28 @@ actor StateValidator {
             jlog("validate.orphan.reset.all", data: [
                 "cleared": cleared,
             ])
+        }
+    }
+
+    // pause -- mark the validator as paused. Subsequent validate(wmState:)
+    // calls early-return until resume() is called. Idempotent: calling
+    // pause() twice is the same as calling it once. Triggered by system
+    // willSleep and screen lock events; AX queries during these states
+    // return reduced window lists that cause false-positive ax_orphan
+    // prunes.
+    func pause() {
+        if !paused {
+            paused = true
+            jlog("validate.pause")
+        }
+    }
+
+    // resume -- clear the paused flag. Triggered by screen unlock and
+    // unconditionally by system wake. Idempotent.
+    func resume() {
+        if paused {
+            paused = false
+            jlog("validate.resume")
         }
     }
 
@@ -134,7 +162,17 @@ actor StateValidator {
     // validate(wmState:) -- called on wake and periodically.
     // Runs all three pruning passes in sequence. All mutations go through
     // GridState actor calls so this does not block the caller's thread.
+    //
+    // When paused (system asleep or screen locked), returns immediately
+    // after emitting one `validate.skip.paused` jlog. AX queries during
+    // these states return reduced window lists that previously caused
+    // pruneAXOrphanedWindows to false-positive prune real windows.
     func validate(wmState: WindowManagerState) async {
+        if paused {
+            jlog("validate.skip.paused")
+            return
+        }
+
         jlog("validate.start")
 
         await pruneDeadWindows(wmState: wmState)

@@ -153,6 +153,7 @@ final class EventAllowlistTests: XCTestCase {
         "tmux.cache.encode_err",
         "validate.end", "validate.init", "validate.orphan.reset",
         "validate.orphan.reset.all",
+        "validate.pause", "validate.resume", "validate.skip.paused",
         "validate.space.prune",
         "validate.start", "validate.timer.start",
         "validate.win.dedup", "validate.win.prune",
@@ -172,7 +173,8 @@ final class EventAllowlistTests: XCTestCase {
         "win.minimized", "win.move", "win.refresh",
         "win.space.timing", "win.spaces",
         "winmove.cross.timing", "winmove.init", "winmove.setup",
-        "ws.register", "ws.screen", "ws.space", "ws.stop", "ws.wake",
+        "ws.lock", "ws.register", "ws.screen", "ws.space",
+        "ws.stop", "ws.unlock", "ws.wake", "ws.willsleep",
         "zorder.map",
     ]
 

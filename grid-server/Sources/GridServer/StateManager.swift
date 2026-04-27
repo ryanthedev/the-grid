@@ -245,6 +245,11 @@ actor StateManager: StateEventHandler {
         case .systemWoke:
             await handleSystemWoke()
 
+        case .systemWillSleep, .screenLocked, .screenUnlocked:
+            // Handled by GridReconciler (validator pause/resume).
+            // StateManager itself does not need to react to sleep/lock state.
+            break
+
         case .displayReconfigured(_):
             await handleDisplayConfigurationChanged()
 

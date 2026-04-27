@@ -66,6 +66,67 @@ final class WakeLayoutRestoreTests: XCTestCase {
         XCTAssertEqual(afterWid222, 0, "wid 222 must be cleared after resetAll")
     }
 
+    // DW-2.5: validate(wmState:) must early-return when paused, leaving
+    // axOrphanCounts untouched and heartbeatTickCount unchanged. We seed
+    // the orphan map, call pause(), call validate with an empty wmState,
+    // then assert the seeded counts are PRESERVED (proves the prune-and-
+    // rebuild logic in pruneAXOrphanedWindows did not run — that logic
+    // overwrites axOrphanCounts unconditionally even when no windows are
+    // tracked, so a preserved count is the strongest signal of skip).
+    func test_DW_2_5_validate_skips_when_paused() async {
+        let gridState = GridState()
+        let validator = StateValidator(
+            gridState: gridState,
+            stateManager: StateManager.shared,
+            connectionID: 0
+        )
+
+        await validator._test_seedOrphanCounts([111: 1, 222: 2])
+        await validator.pause()
+
+        // Empty wmState — if validate ran, pruneAXOrphanedWindows would
+        // overwrite axOrphanCounts with an empty newCounts dict.
+        let emptyWmState = WindowManagerState()
+        await validator.validate(wmState: emptyWmState)
+
+        let wid111 = await validator._test_orphanCountForWid(111)
+        let wid222 = await validator._test_orphanCountForWid(222)
+        XCTAssertEqual(wid111, 1, "paused validate must NOT touch orphan counts")
+        XCTAssertEqual(wid222, 2, "paused validate must NOT touch orphan counts")
+
+        let tick = await validator.peekHeartbeatTickCount()
+        XCTAssertEqual(tick, 0, "paused validate must NOT increment heartbeat tick")
+    }
+
+    // DW-2.6: resume re-enables full validate. Pause, seed counts, resume,
+    // then call validate. Heartbeat tick must increment to >= 1 (proves
+    // validate body ran). The seeded counts must be cleared because
+    // pruneAXOrphanedWindows overwrites axOrphanCounts with newCounts —
+    // empty here since the seeded wids have no entry in wmState.windows.
+    func test_DW_2_6_resume_re_enables_validate() async {
+        let gridState = GridState()
+        let validator = StateValidator(
+            gridState: gridState,
+            stateManager: StateManager.shared,
+            connectionID: 0
+        )
+
+        await validator.pause()
+        await validator._test_seedOrphanCounts([333: 1])
+        await validator.resume()
+
+        let emptyWmState = WindowManagerState()
+        await validator.validate(wmState: emptyWmState)
+
+        let tick = await validator.peekHeartbeatTickCount()
+        XCTAssertGreaterThanOrEqual(tick, 1,
+            "resumed validate must increment heartbeat tick (>= 1)")
+
+        let wid333 = await validator._test_orphanCountForWid(333)
+        XCTAssertEqual(wid333, 0,
+            "resumed validate must run prune logic, clearing untracked seeded counts")
+    }
+
     // DW-1.6: handleSystemWake (driven via the public StateEventHandler
     // path) must invoke gridApply.refreshAllDisplays exactly once, AFTER
     // stateValidator.validate has run. Heartbeat tick == 1 at refresh-call

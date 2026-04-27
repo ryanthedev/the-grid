@@ -401,6 +401,15 @@ class GridReconciler: StateEventHandler {
         case .systemWoke:
             await handleSystemWake()
 
+        case .systemWillSleep:
+            await stateValidator?.pause()
+
+        case .screenLocked:
+            await stateValidator?.pause()
+
+        case .screenUnlocked:
+            await stateValidator?.resume()
+
         case .windowMoved(let windowID, let frame):
             handleWindowMoved(windowID, frame)
 
@@ -838,6 +847,11 @@ class GridReconciler: StateEventHandler {
         // via awaitWakeCompletion(). The task reference is cleared on completion.
         let task = Task { [weak self] in
             guard let self else { return }
+
+            // Step 0: Unconditionally resume the validator. willSleep may
+            // have been the last system event seen before the wake, leaving
+            // paused == true. Wake should always restore normal validation.
+            await self.stateValidator?.resume()
 
             // Step 1: Migrate space IDs (macOS may reassign after sleep)
             var displaySpaces: [String: [String]] = [:]
