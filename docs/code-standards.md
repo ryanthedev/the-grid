@@ -172,6 +172,7 @@ Actor test helpers use the `_test_` prefix to signal they exist only for tests (
 func _test_seedOrphanCounts(_ counts: [UInt32: Int]) { ... }
 func _test_orphanCountForWid(_ wid: UInt32) -> Int { ... }
 ```
+
 Per project `CLAUDE.md`: 3-5 targeted tests per feature, prove the approach. Temporary tests are fine; delete after validation if not load-bearing.
 
 ---
