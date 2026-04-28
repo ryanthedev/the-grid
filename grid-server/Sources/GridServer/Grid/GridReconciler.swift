@@ -14,6 +14,8 @@ struct PendingLaunchTarget {
     let spaceID: String
     let cellID: String
     let createdAt: CFAbsoluteTime
+    // PID of the launched app; nil until NSWorkspace completion fires
+    var pid: pid_t?
 }
 
 class GridReconciler: StateEventHandler {
@@ -184,6 +186,14 @@ class GridReconciler: StateEventHandler {
         if let target {
             jlog("reconcile.pending.set", data: ["spaceID": target.spaceID, "cellID": target.cellID])
         }
+    }
+
+    // Update the PID on the live pending target once NSWorkspace fires its completion.
+    // No-op if the target was already consumed (nil) by the time PID arrives.
+    func updatePendingLaunchTargetPID(_ pid: pid_t) {
+        guard pendingLaunchTarget != nil else { return }
+        pendingLaunchTarget?.pid = pid
+        jlog("reconcile.pending.pid", data: ["pid": pid])
     }
 
     func setApply(_ apply: GridApply) {
@@ -636,12 +646,25 @@ class GridReconciler: StateEventHandler {
             return
         }
 
-        // Always clear target first (one-shot: prevents retry on failure)
-        pendingLaunchTarget = nil
+        // Skip (do NOT consume) if PID is known and this window belongs to a different process.
+        // Catches zero-size phantom AX windows emitted before the real window appears.
+        // If target.pid is nil (NSWorkspace completion hasn't fired yet), skip the PID check --
+        // multi-shot skipping on isTileable/classifyWindow is sufficient until PID arrives.
+        if let targetPID = target.pid, pid != targetPID {
+            jlog("reconcile.pending.skip", data: [
+                "wid": windowID,
+                "reason": "pid_mismatch",
+                "got": pid,
+                "want": targetPID,
+            ])
+            await handleWindowCreated(windowID, pid)
+            return
+        }
 
-        // Check timeout
+        // Check timeout -- consume target and fall through (unrecoverable)
         let elapsed = CFAbsoluteTimeGetCurrent() - target.createdAt
         if elapsed > pendingLaunchTimeout {
+            pendingLaunchTarget = nil
             jlog("reconcile.pending.expired", data: ["elapsed": elapsed])
             await handleWindowCreated(windowID, pid)
             return
@@ -651,27 +674,40 @@ class GridReconciler: StateEventHandler {
         guard let stateManager else { return }
         let wmState = await stateManager.getState()
         guard let windowState = wmState.windows[String(windowID)] else {
-            await handleWindowCreated(windowID, pid)
+            // Window not in state yet -- skip (don't consume), let a later event retry
+            jlog("reconcile.pending.skip", data: ["wid": windowID, "reason": "not_in_state"])
             return
         }
 
-        // Validate: must be tileable
+        // Skip (do NOT consume) if window is a phantom: zero-size or non-tileable
         if !isTileable(window: windowState) {
+            jlog("reconcile.pending.skip", data: [
+                "wid": windowID,
+                "reason": "not_tileable",
+                "w": windowState.frame.width,
+                "h": windowState.frame.height,
+            ])
             await handleWindowCreated(windowID, pid)
             return
         }
 
-        // Validate: must be standard category
+        // Skip (do NOT consume) if window is not a standard application window
         let appName = windowState.appName ?? ""
         let category = classifyWindow(window: windowState, appName: appName)
         if category != .standard {
+            jlog("reconcile.pending.skip", data: [
+                "wid": windowID,
+                "reason": "not_standard",
+                "category": String(describing: category),
+            ])
             await handleWindowCreated(windowID, pid)
             return
         }
 
-        // Validate: window appeared on the target space
+        // Consume target: window appeared on the wrong space (unrecoverable mismatch)
         let actualSpaceID = findCurrentSpaceID(from: wmState)
         if actualSpaceID == nil || actualSpaceID != target.spaceID {
+            pendingLaunchTarget = nil
             jlog("reconcile.pending.space.mismatch", data: [
                 "expected": target.spaceID,
                 "actual": actualSpaceID ?? "nil",
@@ -680,15 +716,17 @@ class GridReconciler: StateEventHandler {
             return
         }
 
-        // Validate: target space has an active layout
+        // Consume target: target space lost its layout (unrecoverable)
         guard let gridState else { return }
         let layoutID = await gridState.getCurrentLayout(spaceID: target.spaceID)
         if layoutID.isEmpty {
+            pendingLaunchTarget = nil
             await handleWindowCreated(windowID, pid)
             return
         }
 
-        // All checks passed: assign to target cell
+        // All checks passed: consume target and assign window to the target cell
+        pendingLaunchTarget = nil
         await gridState.prependWindow(windowID, toCellID: target.cellID, inSpace: target.spaceID)
         await gridState.setFocus(spaceID: target.spaceID, cellID: target.cellID, windowIndex: 0)
 

@@ -227,8 +227,25 @@ class PickerManager {
                 }
             }
 
+            // Build onPID callback for launch-type actions so the reconciler can filter phantoms.
+            // NSWorkspace completion fires on an arbitrary thread; hop to main to match the
+            // same thread where setPendingLaunchTarget is called (GridCommandRouter uses MainActor).
+            let reconcilerRef = gridReconciler
+            let onPID: ((pid_t) -> Void)? = {
+                switch action {
+                case .openApp, .openDir:
+                    return { pid in
+                        DispatchQueue.main.async {
+                            reconcilerRef?.updatePendingLaunchTargetPID(pid)
+                        }
+                    }
+                default:
+                    return nil
+                }
+            }()
+
             // Execute the action
-            ActionExecutor.execute(action)
+            ActionExecutor.execute(action, onPID: onPID)
 
             // For focusWindow: update GridState in Task{} then end suppression.
             // Suppression remains active until Task runs, catching all stale events.

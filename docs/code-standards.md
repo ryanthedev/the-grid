@@ -1,4 +1,4 @@
-<!-- base-commit: d7500378ff1a5c79242584ffd6aa6bbc0596245e -->
+<!-- base-commit: c7677f3 -->
 <!-- generated: 2026-04-27 -->
 
 # Code Standards
@@ -164,6 +164,14 @@ func test_DW_1_1_race_branch_returns_true_when_actual_in_cell_windows() {
 ```
 
 Pure-logic tests preferred (extract decision predicates as `static` helpers). Avoid AX/SkyLight calls in tests — mock at the boundary or test a pure helper.
+
+Actor test helpers use the `_test_` prefix to signal they exist only for tests (not part of the actor's public contract):
+
+```swift
+// From StateValidator — seed data without real AX queries
+func _test_seedOrphanCounts(_ counts: [UInt32: Int]) { ... }
+func _test_orphanCountForWid(_ wid: UInt32) -> Int { ... }
+```
 
 Per project `CLAUDE.md`: 3-5 targeted tests per feature, prove the approach. Temporary tests are fine; delete after validation if not load-bearing.
 
