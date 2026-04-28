@@ -625,9 +625,14 @@ class GridReconciler: StateEventHandler {
             }
         }
 
-        // Auto-assign: find least-populated cell, skipping locked cells
+        // Auto-assign: prefer focused cell (if non-empty and not locked), else least-populated
         let locked = lockedCellIDs(appRules: appRules)
-        let targetCell = findLeastPopulatedCell(assignments, excludeCells: locked)
+        let focusedCell = await gridState.getFocusedCell(spaceID: spaceID)
+        let targetCell = GridReconciler.pickTargetCell(
+            focusedCell: focusedCell,
+            assignments: assignments,
+            locked: locked
+        )
 
         if !targetCell.isEmpty {
             await gridState.assignWindow(windowID, toCellID: targetCell, inSpace: spaceID)
@@ -1218,11 +1223,24 @@ class GridReconciler: StateEventHandler {
         return nil
     }
 
-    private func findLeastPopulatedCell(
-        _ assignments: [String: [UInt32]],
-        excludeCells: Set<String> = []
+    // pickTargetCell: choose the auto-assign destination cell for a new window.
+    //
+    // Prefers the focused cell when it is known, present in assignments, and not
+    // reserved by a locked app rule. Falls back to the least-populated cell.
+    // Extracted as a static pure helper so tests can verify the decision logic
+    // without driving the full reconciler stack.
+    static func pickTargetCell(
+        focusedCell: String?,
+        assignments: [String: [UInt32]],
+        locked: Set<String>
     ) -> String {
-        let candidates = assignments.keys.filter { !excludeCells.contains($0) }
+        if let focused = focusedCell,
+           !focused.isEmpty,
+           assignments[focused] != nil,
+           !locked.contains(focused) {
+            return focused
+        }
+        let candidates = assignments.keys.filter { !locked.contains($0) }
         return candidates.sorted().min { a, b in
             (assignments[a]?.count ?? 0) < (assignments[b]?.count ?? 0)
         } ?? ""
@@ -1232,5 +1250,13 @@ class GridReconciler: StateEventHandler {
         guard let stateManager else { return nil }
         let wmState = await stateManager.getState()
         return findCurrentSpaceID(from: wmState)
+    }
+
+    // MARK: - Test Helpers
+
+    // _test_pendingLaunchTarget: read the current pending launch target.
+    // Used only in tests to assert target-survival (skip-not-consume) behavior.
+    func _test_pendingLaunchTarget() -> PendingLaunchTarget? {
+        pendingLaunchTarget
     }
 }
