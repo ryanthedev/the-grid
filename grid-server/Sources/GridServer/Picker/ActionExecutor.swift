@@ -13,8 +13,10 @@ import AppKit
 /// All methods are static -- no state needed.
 struct ActionExecutor {
 
-    /// Execute the given picker action
-    static func execute(_ action: PickerAction) {
+    /// Execute the given picker action.
+    /// onPID is called with the launched app's PID for .openApp and .openDir actions.
+    /// Chrome and exec paths have no phantom problem and do not need PID tracking.
+    static func execute(_ action: PickerAction, onPID: ((pid_t) -> Void)? = nil) {
         switch action {
         case .focusWindow(let pid, let windowID):
             let connectionID = SLSMainConnectionID()
@@ -31,15 +33,19 @@ struct ActionExecutor {
                 NSWorkspace.shared.openApplication(
                     at: url,
                     configuration: NSWorkspace.OpenConfiguration()
-                ) { _, error in
+                ) { app, error in
                     if let error = error {
                         jlog("pick.err.open", data: ["bundle": bundleID, "err": "\(error)"])
+                        return
+                    }
+                    if let app {
+                        onPID?(app.processIdentifier)
                     }
                 }
             }
 
         case .openChromeProfile(let profileDir):
-            // open -na "Google Chrome" --args --profile-directory="Profile 1"
+            // Chrome profiles have no phantom AX window problem; no PID needed
             spawnDetached("/usr/bin/open", args: [
                 "-na", "Google Chrome", "--args",
                 "--profile-directory=" + profileDir
@@ -51,10 +57,10 @@ struct ActionExecutor {
             spawnDetached(shell, args: ["-c", command], cleanEnv: true)
 
         case .openDir(let dirPath):
-            // Create or attach tmux session, open in Ghostty
+            // Create or attach tmux session, open in Ghostty via NSWorkspace for PID capture
             // Must run async because tmux commands need to be awaited
             Task {
-                await openDirInTmux(dirPath)
+                await openDirInTmux(dirPath, onPID: onPID)
             }
         }
     }
@@ -62,7 +68,7 @@ struct ActionExecutor {
     // MARK: - Private Helpers
 
     /// Open a directory in a tmux session via Ghostty
-    private static func openDirInTmux(_ dirPath: String) async {
+    private static func openDirInTmux(_ dirPath: String, onPID: ((pid_t) -> Void)? = nil) async {
         let sessionName = sanitizeTmuxName((dirPath as NSString).lastPathComponent)
         let tmuxPath = findTmux()
 
@@ -81,14 +87,31 @@ struct ActionExecutor {
             ])
         }
 
-        // Open Ghostty with tmux attach (fire-and-forget)
+        // Resolve the Ghostty app URL for NSWorkspace (prefer bundle lookup, fall back to path)
+        let ghosttyURL = NSWorkspace.shared.urlForApplication(
+            withBundleIdentifier: "com.mitchellh.ghostty"
+        ) ?? URL(fileURLWithPath: "/Applications/Ghostty.app")
+
         let shell = userShell()
         let attachCmd = tmuxPath + " attach -t " + sessionName
-        spawnDetached("/usr/bin/open", args: [
-            "-na", "Ghostty", "--args",
+
+        // Open Ghostty via NSWorkspace to capture the launched PID
+        let config = NSWorkspace.OpenConfiguration()
+        config.arguments = [
             "--title=" + sessionName,
             "--command=" + shell + " -l -c '" + attachCmd + "'"
-        ], cleanEnv: true)
+        ]
+        config.createsNewApplicationInstance = true
+
+        NSWorkspace.shared.openApplication(at: ghosttyURL, configuration: config) { app, error in
+            if let error = error {
+                jlog("pick.err.open", data: ["app": "Ghostty", "err": "\(error)"])
+                return
+            }
+            if let app {
+                onPID?(app.processIdentifier)
+            }
+        }
     }
 
     /// Get user's default shell

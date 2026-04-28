@@ -78,12 +78,37 @@ class WorkspaceObserver {
             object: nil
         )
 
+        nc.addObserver(
+            self,
+            selector: #selector(systemWillSleep(_:)),
+            name: NSWorkspace.willSleepNotification,
+            object: nil
+        )
+
         // NOTE: This notification is posted on NotificationCenter.default,
         // not NSWorkspace.shared.notificationCenter
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(screenParametersChanged(_:)),
             name: NSApplication.didChangeScreenParametersNotification,
+            object: nil
+        )
+
+        // NOTE: Screen lock/unlock notifications post on
+        // DistributedNotificationCenter.default(), NOT NSWorkspace's center.
+        // Subscribing to these on the NSWorkspace center would silently
+        // never fire. See docs/code-standards.md § 8.
+        let dnc = DistributedNotificationCenter.default()
+        dnc.addObserver(
+            self,
+            selector: #selector(screenLocked(_:)),
+            name: NSNotification.Name("com.apple.screenIsLocked"),
+            object: nil
+        )
+        dnc.addObserver(
+            self,
+            selector: #selector(screenUnlocked(_:)),
+            name: NSNotification.Name("com.apple.screenIsUnlocked"),
             object: nil
         )
 
@@ -96,6 +121,7 @@ class WorkspaceObserver {
     func stopObserving() {
         NSWorkspace.shared.notificationCenter.removeObserver(self)
         NotificationCenter.default.removeObserver(self)
+        DistributedNotificationCenter.default().removeObserver(self)
         Task {
             JSONLogger.shared.log("ws.stop", data: [:])
         }
@@ -229,6 +255,27 @@ class WorkspaceObserver {
         Task {
             JSONLogger.shared.log("ws.wake", data: [:])
             await EventRouter.shared.route(.systemWoke, from: .workspaceObserver)
+        }
+    }
+
+    @objc private func systemWillSleep(_ notification: Notification) {
+        Task {
+            JSONLogger.shared.log("ws.willsleep", data: [:])
+            await EventRouter.shared.route(.systemWillSleep, from: .workspaceObserver)
+        }
+    }
+
+    @objc private func screenLocked(_ notification: Notification) {
+        Task {
+            JSONLogger.shared.log("ws.lock", data: [:])
+            await EventRouter.shared.route(.screenLocked, from: .workspaceObserver)
+        }
+    }
+
+    @objc private func screenUnlocked(_ notification: Notification) {
+        Task {
+            JSONLogger.shared.log("ws.unlock", data: [:])
+            await EventRouter.shared.route(.screenUnlocked, from: .workspaceObserver)
         }
     }
 }

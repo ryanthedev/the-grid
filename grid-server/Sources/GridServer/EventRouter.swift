@@ -46,6 +46,9 @@ enum StateEvent {
 
     // System
     case systemWoke
+    case systemWillSleep
+    case screenLocked
+    case screenUnlocked
 
     // CLI commands (intent events)
     case commandFocusWindow(windowID: UInt32, requestID: String)
@@ -344,6 +347,15 @@ extension StateEvent {
         // System
         case .systemWoke:
             return ("ev.sys.wake", [:])
+
+        case .systemWillSleep:
+            return ("ev.sys.willsleep", [:])
+
+        case .screenLocked:
+            return ("ev.sys.lock", [:])
+
+        case .screenUnlocked:
+            return ("ev.sys.unlock", [:])
 
         // CLI commands
         case .commandFocusWindow(let windowID, let requestID):

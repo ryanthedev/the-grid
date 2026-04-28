@@ -144,6 +144,13 @@ actor StateManager: StateEventHandler {
         state.metadata.activeSpaceID = spaceID
     }
 
+    // _test_setState: overwrite the entire state snapshot.
+    // Used only in tests to inject a controlled WindowManagerState without
+    // triggering real AX/SkyLight queries.
+    func _test_setState(_ s: WindowManagerState) {
+        state = s
+    }
+
     /// Graceful shutdown - cleanup all observers and timers
     /// MUST be called before server termination to prevent resource leaks
     func shutdown() async {
@@ -244,6 +251,11 @@ actor StateManager: StateEventHandler {
 
         case .systemWoke:
             await handleSystemWoke()
+
+        case .systemWillSleep, .screenLocked, .screenUnlocked:
+            // Handled by GridReconciler (validator pause/resume).
+            // StateManager itself does not need to react to sleep/lock state.
+            break
 
         case .displayReconfigured(_):
             await handleDisplayConfigurationChanged()

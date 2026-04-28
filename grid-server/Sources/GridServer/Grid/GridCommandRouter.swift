@@ -619,7 +619,10 @@ class GridCommandRouter {
                             PendingLaunchTarget(
                                 spaceID: spaceID,
                                 cellID: cellID,
-                                createdAt: CFAbsoluteTimeGetCurrent()
+                                createdAt: CFAbsoluteTimeGetCurrent(),
+                                // PID starts nil; updated async via updatePendingLaunchTargetPID
+                                // once NSWorkspace completion fires after app launch
+                                pid: nil
                             )
                         )
                     default:

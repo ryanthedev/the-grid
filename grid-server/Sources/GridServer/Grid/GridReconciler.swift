@@ -14,6 +14,8 @@ struct PendingLaunchTarget {
     let spaceID: String
     let cellID: String
     let createdAt: CFAbsoluteTime
+    // PID of the launched app; nil until NSWorkspace completion fires
+    var pid: pid_t?
 }
 
 class GridReconciler: StateEventHandler {
@@ -184,6 +186,14 @@ class GridReconciler: StateEventHandler {
         if let target {
             jlog("reconcile.pending.set", data: ["spaceID": target.spaceID, "cellID": target.cellID])
         }
+    }
+
+    // Update the PID on the live pending target once NSWorkspace fires its completion.
+    // No-op if the target was already consumed (nil) by the time PID arrives.
+    func updatePendingLaunchTargetPID(_ pid: pid_t) {
+        guard pendingLaunchTarget != nil else { return }
+        pendingLaunchTarget?.pid = pid
+        jlog("reconcile.pending.pid", data: ["pid": pid])
     }
 
     func setApply(_ apply: GridApply) {
@@ -401,6 +411,15 @@ class GridReconciler: StateEventHandler {
         case .systemWoke:
             await handleSystemWake()
 
+        case .systemWillSleep:
+            await stateValidator?.pause()
+
+        case .screenLocked:
+            await stateValidator?.pause()
+
+        case .screenUnlocked:
+            await stateValidator?.resume()
+
         case .windowMoved(let windowID, let frame):
             handleWindowMoved(windowID, frame)
 
@@ -606,9 +625,14 @@ class GridReconciler: StateEventHandler {
             }
         }
 
-        // Auto-assign: find least-populated cell, skipping locked cells
+        // Auto-assign: prefer focused cell (if non-empty and not locked), else least-populated
         let locked = lockedCellIDs(appRules: appRules)
-        let targetCell = findLeastPopulatedCell(assignments, excludeCells: locked)
+        let focusedCell = await gridState.getFocusedCell(spaceID: spaceID)
+        let targetCell = GridReconciler.pickTargetCell(
+            focusedCell: focusedCell,
+            assignments: assignments,
+            locked: locked
+        )
 
         if !targetCell.isEmpty {
             await gridState.assignWindow(windowID, toCellID: targetCell, inSpace: spaceID)
@@ -627,12 +651,25 @@ class GridReconciler: StateEventHandler {
             return
         }
 
-        // Always clear target first (one-shot: prevents retry on failure)
-        pendingLaunchTarget = nil
+        // Skip (do NOT consume) if PID is known and this window belongs to a different process.
+        // Catches zero-size phantom AX windows emitted before the real window appears.
+        // If target.pid is nil (NSWorkspace completion hasn't fired yet), skip the PID check --
+        // multi-shot skipping on isTileable/classifyWindow is sufficient until PID arrives.
+        if let targetPID = target.pid, pid != targetPID {
+            jlog("reconcile.pending.skip", data: [
+                "wid": windowID,
+                "reason": "pid_mismatch",
+                "got": pid,
+                "want": targetPID,
+            ])
+            await handleWindowCreated(windowID, pid)
+            return
+        }
 
-        // Check timeout
+        // Check timeout -- consume target and fall through (unrecoverable)
         let elapsed = CFAbsoluteTimeGetCurrent() - target.createdAt
         if elapsed > pendingLaunchTimeout {
+            pendingLaunchTarget = nil
             jlog("reconcile.pending.expired", data: ["elapsed": elapsed])
             await handleWindowCreated(windowID, pid)
             return
@@ -642,27 +679,40 @@ class GridReconciler: StateEventHandler {
         guard let stateManager else { return }
         let wmState = await stateManager.getState()
         guard let windowState = wmState.windows[String(windowID)] else {
-            await handleWindowCreated(windowID, pid)
+            // Window not in state yet -- skip (don't consume), let a later event retry
+            jlog("reconcile.pending.skip", data: ["wid": windowID, "reason": "not_in_state"])
             return
         }
 
-        // Validate: must be tileable
+        // Skip (do NOT consume) if window is a phantom: zero-size or non-tileable
         if !isTileable(window: windowState) {
+            jlog("reconcile.pending.skip", data: [
+                "wid": windowID,
+                "reason": "not_tileable",
+                "w": windowState.frame.width,
+                "h": windowState.frame.height,
+            ])
             await handleWindowCreated(windowID, pid)
             return
         }
 
-        // Validate: must be standard category
+        // Skip (do NOT consume) if window is not a standard application window
         let appName = windowState.appName ?? ""
         let category = classifyWindow(window: windowState, appName: appName)
         if category != .standard {
+            jlog("reconcile.pending.skip", data: [
+                "wid": windowID,
+                "reason": "not_standard",
+                "category": String(describing: category),
+            ])
             await handleWindowCreated(windowID, pid)
             return
         }
 
-        // Validate: window appeared on the target space
+        // Consume target: window appeared on the wrong space (unrecoverable mismatch)
         let actualSpaceID = findCurrentSpaceID(from: wmState)
         if actualSpaceID == nil || actualSpaceID != target.spaceID {
+            pendingLaunchTarget = nil
             jlog("reconcile.pending.space.mismatch", data: [
                 "expected": target.spaceID,
                 "actual": actualSpaceID ?? "nil",
@@ -671,15 +721,17 @@ class GridReconciler: StateEventHandler {
             return
         }
 
-        // Validate: target space has an active layout
+        // Consume target: target space lost its layout (unrecoverable)
         guard let gridState else { return }
         let layoutID = await gridState.getCurrentLayout(spaceID: target.spaceID)
         if layoutID.isEmpty {
+            pendingLaunchTarget = nil
             await handleWindowCreated(windowID, pid)
             return
         }
 
-        // All checks passed: assign to target cell
+        // All checks passed: consume target and assign window to the target cell
+        pendingLaunchTarget = nil
         await gridState.prependWindow(windowID, toCellID: target.cellID, inSpace: target.spaceID)
         await gridState.setFocus(spaceID: target.spaceID, cellID: target.cellID, windowIndex: 0)
 
@@ -839,6 +891,11 @@ class GridReconciler: StateEventHandler {
         let task = Task { [weak self] in
             guard let self else { return }
 
+            // Step 0: Unconditionally resume the validator. willSleep may
+            // have been the last system event seen before the wake, leaving
+            // paused == true. Wake should always restore normal validation.
+            await self.stateValidator?.resume()
+
             // Step 1: Migrate space IDs (macOS may reassign after sleep)
             var displaySpaces: [String: [String]] = [:]
             for display in wmState.displays {
@@ -857,10 +914,27 @@ class GridReconciler: StateEventHandler {
                 jlog("reconcile.wake.migrated")
             }
 
+            // Step 1.5: Reset AX orphan counts before validate runs so
+            // pre-sleep stale counts cannot push real windows past the
+            // 2-cycle prune threshold during the wake stabilization window.
+            await self.stateValidator?.resetAllOrphanCounts()
+
             // Step 2: Full state validation after migration.
             // Re-fetch wmState so validator sees correct space IDs post-migration.
             let freshWmState = await stateManager.getState()
             await self.stateValidator?.validate(wmState: freshWmState)
+
+            // Step 2.5: Reapply layouts on every active space. Display
+            // reconnect already does this (handleDisplayConnected); wake
+            // must too, otherwise windows do not snap back into cells
+            // after sleep. refreshAllDisplays does not throw — failures
+            // are returned as a per-display error array.
+            jlog("reconcile.wake.refresh.start")
+            let refreshErrors = await self.gridApply?.refreshAllDisplays() ?? []
+            if !refreshErrors.isEmpty {
+                jlog("warn.reconcile.wake.refresh.errors",
+                     data: ["errorCount": refreshErrors.count])
+            }
 
             // Step 3: Sync borders for current space
             await self.syncBordersForCurrentSpace()
@@ -1149,11 +1223,24 @@ class GridReconciler: StateEventHandler {
         return nil
     }
 
-    private func findLeastPopulatedCell(
-        _ assignments: [String: [UInt32]],
-        excludeCells: Set<String> = []
+    // pickTargetCell: choose the auto-assign destination cell for a new window.
+    //
+    // Prefers the focused cell when it is known, present in assignments, and not
+    // reserved by a locked app rule. Falls back to the least-populated cell.
+    // Extracted as a static pure helper so tests can verify the decision logic
+    // without driving the full reconciler stack.
+    static func pickTargetCell(
+        focusedCell: String?,
+        assignments: [String: [UInt32]],
+        locked: Set<String>
     ) -> String {
-        let candidates = assignments.keys.filter { !excludeCells.contains($0) }
+        if let focused = focusedCell,
+           !focused.isEmpty,
+           assignments[focused] != nil,
+           !locked.contains(focused) {
+            return focused
+        }
+        let candidates = assignments.keys.filter { !locked.contains($0) }
         return candidates.sorted().min { a, b in
             (assignments[a]?.count ?? 0) < (assignments[b]?.count ?? 0)
         } ?? ""
@@ -1163,5 +1250,13 @@ class GridReconciler: StateEventHandler {
         guard let stateManager else { return nil }
         let wmState = await stateManager.getState()
         return findCurrentSpaceID(from: wmState)
+    }
+
+    // MARK: - Test Helpers
+
+    // _test_pendingLaunchTarget: read the current pending launch target.
+    // Used only in tests to assert target-survival (skip-not-consume) behavior.
+    func _test_pendingLaunchTarget() -> PendingLaunchTarget? {
+        pendingLaunchTarget
     }
 }
