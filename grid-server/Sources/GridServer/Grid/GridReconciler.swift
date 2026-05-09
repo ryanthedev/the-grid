@@ -106,6 +106,7 @@ class GridReconciler: StateEventHandler {
 
             // 4. Sync borders if requested and depth reached 0
             if suppressionDepth == 0 && syncBorders {
+                await sweepDisplacedWindows()
                 await syncBordersForCurrentSpace()
             }
 
@@ -117,6 +118,7 @@ class GridReconciler: StateEventHandler {
             suppressionDepth = max(0, suppressionDepth - 1)
 
             if suppressionDepth == 0 && syncBorders {
+                await sweepDisplacedWindows()
                 await syncBordersForCurrentSpace()
             }
 
@@ -148,7 +150,8 @@ class GridReconciler: StateEventHandler {
         ])
         if suppressionDepth == 0 && syncBorders {
             Task {
-                await syncBordersForCurrentSpace()
+                await self.sweepDisplacedWindows()
+                await self.syncBordersForCurrentSpace()
             }
         }
     }
@@ -1223,6 +1226,40 @@ class GridReconciler: StateEventHandler {
         return nil
     }
 
+    // resolveDisplacedTarget: pure decision predicate for sweepDisplacedWindows.
+    //
+    // Given the space GridState believes the window is on (trackedSpaceID),
+    // the actual OS-reported spaces for that window (actualSpaces), and the
+    // set of space IDs currently tracked in GridState (knownSpaceIDs):
+    //
+    //   - Returns nil  → no migration (window still on tracked space, or skip
+    //                     due to ambiguity / untracked target)
+    //   - Returns spaceID → migrate to that space (exactly one unambiguous match)
+    //
+    // Extracted as a static pure helper so tests can verify all four decision
+    // branches without driving the full reconciler/actor stack.
+    static func resolveDisplacedTarget(
+        trackedSpaceID: String,
+        actualSpaces: [UInt64],
+        knownSpaceIDs: Set<String>
+    ) -> String? {
+        // Empty actualSpaces: minimized or off-screen — skip
+        guard !actualSpaces.isEmpty else { return nil }
+
+        // Window still on its tracked space — no displacement
+        if let trackedUInt64 = UInt64(trackedSpaceID), actualSpaces.contains(trackedUInt64) {
+            return nil
+        }
+
+        // Find candidate target spaces: actual spaces that GridState tracks
+        let candidates = actualSpaces.filter { knownSpaceIDs.contains(String($0)) }
+
+        // Ambiguous (multiple tracked candidates) or untracked target — skip
+        guard candidates.count == 1 else { return nil }
+
+        return String(candidates[0])
+    }
+
     // pickTargetCell: choose the auto-assign destination cell for a new window.
     //
     // Prefers the focused cell when it is known, present in assignments, and not
@@ -1244,6 +1281,70 @@ class GridReconciler: StateEventHandler {
         return candidates.sorted().min { a, b in
             (assignments[a]?.count ?? 0) < (assignments[b]?.count ?? 0)
         } ?? ""
+    }
+
+    // sweepDisplacedWindows: detect and migrate windows whose OS-level space no longer
+    // matches their GridState-tracked space. Called at every suppression-depth-0 exit
+    // so windows that changed spaces while suppressed are reconciled immediately.
+    //
+    // Skip cases (conservative — never guess):
+    //   - wmState has no entry for the window (recently destroyed / invisible)
+    //   - window.spaces is empty (minimized or off-screen)
+    //   - window is still on its tracked space (no displacement)
+    //   - window is on multiple tracked spaces simultaneously (ambiguous)
+    //   - window moved to a space not tracked by GridState (unmanaged space)
+    private func sweepDisplacedWindows() async {
+        guard let gridState, let stateManager else { return }
+
+        let wmState = await stateManager.getState()
+        let trackedSpaceIDs = Set(await gridState.getSpaceIDs())
+        var affectedSpaces = Set<String>()
+
+        let allWids = await gridState.getAllWindowIDs()
+
+        for wid in allWids {
+            // Resolve the space GridState believes this window is on
+            guard let trackedSpaceID = await gridState.findSpaceContaining(windowID: wid) else {
+                continue
+            }
+
+            // Resolve the actual OS-level spaces for this window
+            guard let actualSpaces = wmState.windows[String(wid)]?.spaces else {
+                // Unknown to StateManager — skip (recently destroyed or invisible)
+                continue
+            }
+
+            // Delegate displacement decision to pure static helper
+            guard let targetSpaceID = GridReconciler.resolveDisplacedTarget(
+                trackedSpaceID: trackedSpaceID,
+                actualSpaces: actualSpaces,
+                knownSpaceIDs: trackedSpaceIDs
+            ) else {
+                continue
+            }
+            let targetCell = await gridState.getFocusedCell(spaceID: targetSpaceID) ?? "left"
+
+            await gridState.removeWindow(wid, fromSpace: trackedSpaceID)
+            await gridState.assignWindow(wid, toCellID: targetCell, inSpace: targetSpaceID)
+
+            jlog("reconcile.lift.migrate", data: [
+                "wid": Int(wid),
+                "from": trackedSpaceID,
+                "to": targetSpaceID,
+                "cell": targetCell,
+            ])
+
+            affectedSpaces.insert(trackedSpaceID)
+            affectedSpaces.insert(targetSpaceID)
+        }
+
+        for spaceID in affectedSpaces {
+            guard let displayUUID = findDisplayUUIDForSpace(spaceID, from: wmState) else {
+                // Background space — no visible borders to update
+                continue
+            }
+            await syncBordersForSpace(spaceID, displayUUID: displayUUID)
+        }
     }
 
     private func findCurrentSpaceIDAsync() async -> String? {

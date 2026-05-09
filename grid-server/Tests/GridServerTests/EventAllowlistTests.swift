@@ -118,6 +118,7 @@ final class EventAllowlistTests: XCTestCase {
         "reconcile.focus.fenced", "reconcile.focus.fenced.cell",
         "reconcile.focus.suppressed",
         "reconcile.init",
+        "reconcile.lift.migrate",
         "reconcile.pending.expired", "reconcile.pending.pid",
         "reconcile.pending.set", "reconcile.pending.skip",
         "reconcile.pending.space.mismatch", "reconcile.space.change",
