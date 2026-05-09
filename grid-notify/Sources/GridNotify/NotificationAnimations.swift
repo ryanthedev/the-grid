@@ -209,39 +209,39 @@ struct MarqueeText: View {
 // MARK: - WaveText
 
 // Characters ripple with subtle vertical offsets, creating a wave effect.
-// Each character oscillates independently with a phase offset.
+// Uses AttributedString with per-character baselineOffset to keep glyph
+// shaping intact (the old per-Text approach broke kerning with custom fonts).
 struct WaveText: View {
     let text: String
     let font: Font
     let color: Color
-    // Amplitude of the wave in points
     let amplitude: CGFloat
-    // Duration of one full wave cycle
     let cycleDuration: TimeInterval
 
     @State private var phase: Double = 0
     @State private var timer: Timer?
 
     var body: some View {
-        HStack(spacing: 0) {
-            ForEach(Array(text.enumerated()), id: \.offset) { index, char in
-                Text(String(char))
-                    .font(font)
-                    .foregroundColor(color)
-                    .offset(y: yOffset(for: index))
+        Text(waveAttributedString)
+            .font(font)
+            .foregroundColor(color)
+            .onAppear {
+                startWave()
             }
-        }
-        .onAppear {
-            startWave()
-        }
-        .onDisappear {
-            timer?.invalidate()
-        }
+            .onDisappear {
+                timer?.invalidate()
+            }
     }
 
-    private func yOffset(for index: Int) -> CGFloat {
-        let charPhase = phase + Double(index) * 0.4
-        return amplitude * CGFloat(sin(charPhase))
+    private var waveAttributedString: AttributedString {
+        var result = AttributedString()
+        for (index, char) in text.enumerated() {
+            var charAttr = AttributedString(String(char))
+            let charPhase = phase + Double(index) * 0.4
+            charAttr.baselineOffset = amplitude * CGFloat(sin(charPhase))
+            result.append(charAttr)
+        }
+        return result
     }
 
     private func startWave() {
