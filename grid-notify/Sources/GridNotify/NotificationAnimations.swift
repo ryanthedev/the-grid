@@ -166,24 +166,30 @@ struct MarqueeText: View {
     }
 
     var body: some View {
-        GeometryReader { geo in
-            Text(text)
-                .font(font)
-                .foregroundColor(color)
-                .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)
-                .offset(x: needsScroll ? offset : 0)
-                .background(
-                    GeometryReader { textGeo in
-                        Color.clear.onAppear {
-                            textWidth = textGeo.size.width
-                            containerWidth = geo.size.width
-                            startScrollCycle()
-                        }
-                    }
-                )
-        }
-        .clipped()
+        Text(text)
+            .font(font)
+            .lineLimit(1)
+            .hidden()
+            .overlay(
+                GeometryReader { geo in
+                    Text(text)
+                        .font(font)
+                        .foregroundColor(color)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .offset(x: needsScroll ? offset : 0)
+                        .background(
+                            GeometryReader { textGeo in
+                                Color.clear.onAppear {
+                                    textWidth = textGeo.size.width
+                                    containerWidth = geo.size.width
+                                    startScrollCycle()
+                                }
+                            }
+                        )
+                }
+                .clipped()
+            )
     }
 
     private func startScrollCycle() {

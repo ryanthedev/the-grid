@@ -80,6 +80,7 @@ final class AnimationRegistry {
         register(FadeToGhostEffect())
         register(MatrixTitleEffect())
         register(WaveTitleEffect())
+        register(MarqueeTitleEffect())
         register(ProgressBarEffect())
         register(WarningPulseEffect())
         register(ArrivalFlashEffect())
@@ -148,6 +149,10 @@ struct MatrixTitleEffect: AnimationEffect {
 
 struct WaveTitleEffect: AnimationEffect {
     static let name = "wave_title"
+}
+
+struct MarqueeTitleEffect: AnimationEffect {
+    static let name = "marquee_title"
 }
 
 struct ProgressBarEffect: AnimationEffect {
