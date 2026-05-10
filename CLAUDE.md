@@ -14,7 +14,6 @@
 ## Logging
 
 All logging goes to JSONL files in `~/.local/state/thegrid/`:
-- `thegrid-cli.json` - CLI logs
 - `thegrid-server.json` - Server logs
 
 ### Log Schema
@@ -35,13 +34,6 @@ All logging goes to JSONL files in `~/.local/state/thegrid/`:
 
 ### Usage
 
-CLI (Go):
-```go
-jsonlog.Log("cmd.start", jsonlog.WithData(map[string]any{"cmd": "focus"}))
-jsonlog.Log("err.focus", jsonlog.WithMsg("window not found"), jsonlog.WithData(map[string]any{"wid": 123}))
-```
-
-Server (Swift):
 ```swift
 // Convenience wrapper (uses TaskLocal trace context)
 jlog("srv.init")
@@ -55,21 +47,6 @@ JSONLogger.shared.log("err.bounds", msg: "failed to get bounds", data: ["wid": 4
 
 For timing and correlation, use spans:
 
-CLI (Go):
-```go
-span := jsonlog.StartSpan("cmd", jsonlog.WithData(map[string]any{"cmd": "focus"}))
-defer span.End()
-
-// Child span
-child := span.StartChild("validate")
-// ... work ...
-child.End()
-
-// End with error
-span.EndWithError("window not found")
-```
-
-Server (Swift):
 ```swift
 let span = JSONLogger.shared.startSpan("srv", tid: tid, parentSid: parentSid, data: ["method": method])
 
@@ -88,25 +65,24 @@ Output format:
 
 ## Project Paths
 
-Both CLI and server follow the XDG Base Directory Specification:
+The server follows the XDG Base Directory Specification:
 
 - **State**: `$XDG_STATE_HOME/thegrid/` (default: `~/.local/state/thegrid/`)
-  - `thegrid-cli.json` - CLI logs (JSONL)
   - `thegrid-server.json` - Server logs (JSONL)
   - `state.json` - Runtime state
   - `GridServer.app/` - Server app bundle (deployed by `make dev`)
 - **Config**: `$XDG_CONFIG_HOME/thegrid/` (default: `~/.config/thegrid/`)
-  - `config.yaml` - CLI configuration
+  - `config.yaml` - Configuration
   - `config.local.yaml` - Local overrides
   - `bfd.yaml` - BFD hotkey configuration
   - `bfd.local.yaml` - Local hotkey overrides
-- **Server socket**: `/tmp/grid-server.sock` (configurable via `--socket` CLI flag)
+- **Server socket**: `/tmp/grid-server.sock`
 
 ## Config Layering
 
-Both CLI and BFD configs support machine-specific overrides via `.local.yaml` files:
+Configs support machine-specific overrides via `.local.yaml` files:
 
-- `~/.config/thegrid/config.yaml` - Base CLI config (committed)
+- `~/.config/thegrid/config.yaml` - Base config (committed)
 - `~/.config/thegrid/config.local.yaml` - Local overrides (gitignored)
 - `~/.config/thegrid/bfd.yaml` - Base BFD hotkey config (committed)
 - `~/.config/thegrid/bfd.local.yaml` - Local overrides (gitignored)
@@ -121,7 +97,7 @@ settings:
 
 ## XDG Config Resolution
 
-Both CLI and server support the XDG Base Directory Specification:
+The server supports the XDG Base Directory Specification:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -171,7 +147,7 @@ apps:
     ctrl-h: ~  # Passthrough (let app handle it)
 ```
 
-Supports `.local.yaml` overrides like CLI config.
+Supports `.local.yaml` overrides like base config.
 
 ## Documentation Research
 - ALWAYS search online for API docs, library usage examples
