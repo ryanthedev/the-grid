@@ -889,9 +889,10 @@ class GridCommandRouter {
             }
             // Walk up from .../GridServer.app/Contents/MacOS/grid-server to <prefix>
             let prefix = serverExec
-                .deletingLastPathComponent()  // MacOS/
-                .deletingLastPathComponent()  // Contents/
-                .deletingLastPathComponent()  // GridServer.app/
+                .deletingLastPathComponent()  // grid-server -> MacOS/
+                .deletingLastPathComponent()  // MacOS/      -> Contents/
+                .deletingLastPathComponent()  // Contents/   -> GridServer.app/
+                .deletingLastPathComponent()  // GridServer.app/ -> <prefix>
             let notifyAppURL = prefix.appendingPathComponent("GridNotify.app")
 
             guard FileManager.default.fileExists(atPath: notifyAppURL.path) else {
@@ -911,16 +912,19 @@ class GridCommandRouter {
 
             // Give it a moment to register for distributed notifications
             try? await Task.sleep(nanoseconds: 500_000_000)
+
+            // App already shows its window on launch — no toggle needed
+            return .ok("launched")
         }
 
-        // Post toggle notification
+        // Post toggle notification (only when app was already running)
         DistributedNotificationCenter.default().postNotificationName(
             NSNotification.Name("com.thegrid.notify.toggle"),
             object: nil,
             userInfo: nil,
             deliverImmediately: true
         )
-        return .ok(isRunning ? "toggled" : "launched and toggled")
+        return .ok("toggled")
     }
 
     private func parseRecordingTarget(action: String, args: [String]) -> RecordingTarget {

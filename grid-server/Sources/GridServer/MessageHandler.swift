@@ -1904,6 +1904,63 @@ completion(Response(id: request.id, result: AnyCodable(["success": true])))
             dispatchAndRespond(request, commandString: cmd, completion: completion)
         }
 
+        // grid.notify.show -- { cell?: string }
+        register(method: "grid.notify.show") { request, completion in
+            let cmd = buildCommand(domain: "notify", action: "show", params: request.params)
+            dispatchAndRespond(request, commandString: cmd, completion: completion)
+        }
+
+        // grid.notify.hide -- {}
+        register(method: "grid.notify.hide") { request, completion in
+            dispatchAndRespond(request, commandString: "@notify hide", completion: completion)
+        }
+
+        // grid.notify.toggle -- { cell?: string }
+        register(method: "grid.notify.toggle") { request, completion in
+            let cmd = buildCommand(domain: "notify", action: "toggle", params: request.params)
+            dispatchAndRespond(request, commandString: cmd, completion: completion)
+        }
+
+        // grid.notify.push -- { title, body?, priority?, source?, action? }
+        register(method: "grid.notify.push") { request, completion in
+            let cmd = buildCommand(domain: "notify", action: "push", params: request.params)
+            dispatchAndRespond(request, commandString: cmd, completion: completion)
+        }
+
+        // grid.notify.list -- { source?, priority?, all? }
+        register(method: "grid.notify.list") { request, completion in
+            let cmd = buildCommand(domain: "notify", action: "list", params: request.params)
+            dispatchAndRespond(request, commandString: cmd, completion: completion)
+        }
+
+        // grid.notify.dismiss -- { id }
+        register(method: "grid.notify.dismiss") { request, completion in
+            let cmd = buildCommand(domain: "notify", action: "dismiss", params: request.params)
+            dispatchAndRespond(request, commandString: cmd, completion: completion)
+        }
+
+        // grid.notify.clear -- { purge? }
+        register(method: "grid.notify.clear") { request, completion in
+            let cmd = buildCommand(domain: "notify", action: "clear", params: request.params)
+            dispatchAndRespond(request, commandString: cmd, completion: completion)
+        }
+
+        // grid.notify.count -- {}
+        register(method: "grid.notify.count") { request, completion in
+            dispatchAndRespond(request, commandString: "@notify count", completion: completion)
+        }
+
+        // grid.notify.assign -- { cell }
+        register(method: "grid.notify.assign") { request, completion in
+            let cmd = buildCommand(domain: "notify", action: "assign", params: request.params)
+            dispatchAndRespond(request, commandString: cmd, completion: completion)
+        }
+
+        // grid.notify.unassign -- {}
+        register(method: "grid.notify.unassign") { request, completion in
+            dispatchAndRespond(request, commandString: "@notify unassign", completion: completion)
+        }
+
         jlog("grid.rpc.registered")
     }
 }
