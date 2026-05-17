@@ -506,6 +506,10 @@ actor GridState {
         rejectedWindows.insert(windowID)
     }
 
+    func unrejectWindow(_ windowID: UInt32) {
+        rejectedWindows.remove(windowID)
+    }
+
     func isWindowRejected(_ windowID: UInt32) -> Bool {
         rejectedWindows.contains(windowID)
     }

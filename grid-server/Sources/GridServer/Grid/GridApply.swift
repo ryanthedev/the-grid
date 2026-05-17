@@ -246,21 +246,31 @@ class GridApply {
         }
 
         // 11. Apply placements via WindowManipulator (parallel via TaskGroup)
-        await applyPlacementsViaAX(placements)
+        let failedIDs = await applyPlacementsViaAX(placements)
 
-        // 12. Update GridState
+        // 12. Strip windows that failed AX placement from assignments
+        var finalAssignments = assignment.assignments
+        if !failedIDs.isEmpty {
+            for (cellID, windowIDs) in finalAssignments {
+                let filtered = windowIDs.filter { !failedIDs.contains($0) }
+                finalAssignments[cellID] = filtered.isEmpty ? nil : filtered
+            }
+            finalAssignments = finalAssignments.compactMapValues { $0 }
+        }
+
+        // 13. Update GridState
         if existingLayoutID != layoutID {
             // Switching layouts: reset state
             let layoutIndex = await MainActor.run { gridConfig.getLayoutIDs().firstIndex(of: layoutID) ?? 0 }
             await gridState.setCurrentLayout(spaceID: spaceID, layoutID: layoutID, layoutIndex: layoutIndex)
         }
 
-        await gridState.setWindowAssignments(spaceID: spaceID, assignments: assignment.assignments)
+        await gridState.setWindowAssignments(spaceID: spaceID, assignments: finalAssignments)
 
-        // 13. Sync borders (explicit space/display -- not generic "current space")
+        // 14. Sync borders (explicit space/display -- not generic "current space")
         await gridReconciler?.syncBordersForSpace(spaceID, displayUUID: displayUUID)
 
-        jlog("layout.apply.done", data: ["lid": layoutID, "placements": placements.count])
+        jlog("layout.apply.done", data: ["lid": layoutID, "placements": placements.count - failedIDs.count])
     }
 
     // ============================================================
@@ -464,17 +474,18 @@ class GridApply {
     // Own-process windows (notification panel) use NSWindow.setFrame on MainActor
     // because AX calls on own-process windows execute in-place on the calling
     // thread, crashing AppKit's main-thread assertion.
-    private func applyPlacementsViaAX(_ placements: [GridWindowPlacement]) async {
-        if placements.isEmpty { return }
+    @discardableResult
+    private func applyPlacementsViaAX(_ placements: [GridWindowPlacement]) async -> Set<UInt32> {
+        if placements.isEmpty { return [] }
 
         let serverPID = ProcessInfo.processInfo.processIdentifier
 
-        await withTaskGroup(of: Void.self) { group in
+        let failedIDs = await withTaskGroup(of: UInt32?.self, returning: Set<UInt32>.self) { group in
             for placement in placements {
                 group.addTask { [weak self] in
                     guard let context = await ManipulationContext.from(windowID: placement.windowID) else {
                         jlog("warn.placement", data: ["wid": placement.windowID, "reason": "no_context"])
-                        return
+                        return placement.windowID
                     }
 
                     // Own-process window: use NSWindow.setFrame on MainActor
@@ -486,20 +497,32 @@ class GridApply {
                             let flippedY = primaryHeight - bounds.origin.y - bounds.height
                             nsWindow.setFrame(NSRect(x: bounds.origin.x, y: flippedY, width: bounds.width, height: bounds.height), display: true)
                         }
-                        return
+                        return nil
                     }
 
-                    guard let manipulator = self?.windowManipulator else { return }
+                    guard let manipulator = self?.windowManipulator else { return placement.windowID }
                     let success = await manipulator.setWindowFrame(
                         context: context,
                         frame: placement.bounds
                     )
                     if !success {
                         jlog("warn.placement", data: ["wid": placement.windowID, "reason": "ax_fail"])
+                        return placement.windowID
                     }
+                    return nil
                 }
             }
+
+            var failed = Set<UInt32>()
+            for await result in group {
+                if let wid = result {
+                    failed.insert(wid)
+                }
+            }
+            return failed
         }
+
+        return failedIDs
     }
 
     // filterTileableFromState: get tileable windows for a space from StateManager

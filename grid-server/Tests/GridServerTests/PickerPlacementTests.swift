@@ -161,6 +161,54 @@ final class PickerPlacementTests: XCTestCase {
             "window 401 must be assigned to target cell 'left', got: \(leftWindows)")
     }
 
+    // MARK: - DW-1.5: Floating-classified window (no fullscreen button) claims pending target
+
+    // System Settings, Calculator, etc. lack a fullscreen button so classifyWindow
+    // returns .floating. When the user explicitly picks the app via picker, the
+    // pending path must accept the window regardless of classification.
+    func test_DW_1_5_floatingWindow_claimsPendingTarget() async throws {
+        let gridState = GridState()
+        let sm = StateManager.shared
+
+        var wmState = WindowManagerState()
+        var window = WindowState(id: 501)
+        window.pid = 55
+        window.appName = "System Settings"
+        window.role = "AXWindow"
+        window.subrole = "AXStandardWindow"
+        window.hasCloseButton = true
+        window.hasFullscreenButton = false
+        window.frame = CGRect(x: 0, y: 0, width: 723, height: 1024)
+        wmState.windows["501"] = window
+        wmState.metadata.activeSpaceID = 1
+        await sm._test_setState(wmState)
+
+        await gridState.setCurrentLayout(spaceID: "1", layoutID: "test", layoutIndex: 0)
+        await gridState.assignWindow(9999, toCellID: "right", inSpace: "1")
+
+        let reconciler = makeReconciler(gridState: gridState, stateManager: sm)
+
+        let target = PendingLaunchTarget(
+            spaceID: "1",
+            cellID: "right",
+            createdAt: CFAbsoluteTimeGetCurrent(),
+            pid: 55
+        )
+        reconciler.setPendingLaunchTarget(target)
+
+        let ctx = eventContext()
+        try await reconciler.handle(.windowCreated(windowID: 501, pid: 55), context: ctx)
+
+        let remaining = reconciler._test_pendingLaunchTarget()
+        XCTAssertNil(remaining,
+            "floating-classified window must consume pendingLaunchTarget when user picked it")
+
+        let assignments = await gridState.getWindowAssignments(spaceID: "1")
+        let rightWindows = assignments["right"] ?? []
+        XCTAssertTrue(rightWindows.contains(501),
+            "floating window 501 must land in target cell 'right', got: \(rightWindows)")
+    }
+
     // MARK: - DW-2.1: Focused cell wins over least-populated when eligible
 
     // assignments: left=[a, b], right=[]  → least-populated is "right"

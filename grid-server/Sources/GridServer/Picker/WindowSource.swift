@@ -134,11 +134,15 @@ struct WindowSource: PickerSource {
             items.append(item)
         }
 
+        // Deduplicate by stable ID. Multiple AX windows can map to the same
+        // logical window (e.g. Ghostty creates one AX window per tab, but tabs
+        // sharing a tmux session produce identical stable IDs).
+        var seenIDs = Set<String>()
+        items = items.filter { seenIDs.insert($0.id).inserted }
+
         jlog("pick.win.enrich.done", data: ["items": "\(items.count)"])
-        // Persist tmux cache after processing all windows
         enricher.cleanup()
 
-        // Sort by title for consistent initial ordering
         items.sort { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
 
         return items

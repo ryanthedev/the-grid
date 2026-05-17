@@ -424,7 +424,10 @@ class GridReconciler: StateEventHandler {
             await stateValidator?.resume()
 
         case .windowMoved(let windowID, let frame):
-            handleWindowMoved(windowID, frame)
+            await handleWindowMoved(windowID, frame)
+
+        case .windowResized(let windowID, let frame):
+            await handleWindowMoved(windowID, frame)
 
         case .windowMinimized(let windowID):
             await handleWindowMinimized(windowID)
@@ -699,14 +702,14 @@ class GridReconciler: StateEventHandler {
             return
         }
 
-        // Skip (do NOT consume) if window is not a standard application window
-        let appName = windowState.appName ?? ""
-        let category = classifyWindow(window: windowState, appName: appName)
-        if category != .standard {
+        // Skip (do NOT consume) if window is modal — modal dialogs are transient
+        // and should not consume the pending target.
+        // Accept floating-classified windows (e.g. System Settings lacks a
+        // fullscreen button) since the user explicitly chose this app via picker.
+        if windowState.isModal {
             jlog("reconcile.pending.skip", data: [
                 "wid": windowID,
-                "reason": "not_standard",
-                "category": String(describing: category),
+                "reason": "modal",
             ])
             await handleWindowCreated(windowID, pid)
             return
@@ -955,9 +958,27 @@ class GridReconciler: StateEventHandler {
         await task.value
     }
 
-    private func handleWindowMoved(_ windowID: UInt32, _ frame: CGRect) {
-        // Forward to border manager for position tracking
+    private func handleWindowMoved(_ windowID: UInt32, _ frame: CGRect) async {
         simpleBorderManager?.handleWindowMoved(windowID: windowID, newFrame: frame)
+
+        // Re-evaluate rejected windows that may now be tileable (e.g. Ghostty
+        // emits a 0x0 AX window at creation, then resizes to real dimensions).
+        guard let gridState, await gridState.isWindowRejected(windowID) else { return }
+        let nowTileable = frame.width >= 100 && frame.height >= 100
+        guard nowTileable else { return }
+
+        guard let stateManager else { return }
+        let wmState = await stateManager.getState()
+        guard let windowState = wmState.windows[String(windowID)] else { return }
+
+        await gridState.unrejectWindow(windowID)
+        jlog("reconcile.win.unrejected", data: ["wid": windowID, "w": frame.width, "h": frame.height])
+
+        if pendingLaunchTarget != nil {
+            await handlePendingLaunchWindow(windowID, windowState.pid)
+        } else {
+            await handleWindowCreated(windowID, windowState.pid)
+        }
     }
 
     private func handleWindowMinimized(_ windowID: UInt32) async {
