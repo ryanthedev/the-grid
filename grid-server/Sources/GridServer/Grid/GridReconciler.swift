@@ -510,27 +510,14 @@ class GridReconciler: StateEventHandler {
     }
 
     private func handleWindowCreated(_ windowID: UInt32, _ pid: pid_t) async {
-        // Get current state to find which space we're on
         guard let stateManager else {
             jlog("reconcile.win.create.bail", data: ["wid": windowID, "reason": "no_stateManager"])
             return
         }
         let wmState = await stateManager.getState()
 
-        // Find the current space ID from active spaces
-        guard let spaceID = findCurrentSpaceID(from: wmState) else {
-            jlog("reconcile.win.create.bail", data: ["wid": windowID, "reason": "no_spaceID"])
-            return
-        }
-
-        // Check if there's an active layout for this space
         guard let gridState else {
             jlog("reconcile.win.create.bail", data: ["wid": windowID, "reason": "no_gridState"])
-            return
-        }
-        let layoutID = await gridState.getCurrentLayout(spaceID: spaceID)
-        if layoutID.isEmpty {
-            jlog("reconcile.win.create.bail", data: ["wid": windowID, "reason": "no_layout", "space": spaceID])
             return
         }
 
@@ -539,9 +526,22 @@ class GridReconciler: StateEventHandler {
             jlog("reconcile.win.create.bail", data: [
                 "wid": windowID,
                 "reason": "not_in_state",
-                "space": spaceID,
                 "windowCount": wmState.windows.count
             ])
+            return
+        }
+
+        // Resolve the space from the window's actual OS-level space assignment.
+        // With multiple monitors the focused space can differ from the window's
+        // display, so metadata.activeSpaceID is unreliable here.
+        guard let spaceID = await resolveWindowSpace(windowState, gridState: gridState, wmState: wmState) else {
+            jlog("reconcile.win.create.bail", data: ["wid": windowID, "reason": "no_spaceID"])
+            return
+        }
+
+        let layoutID = await gridState.getCurrentLayout(spaceID: spaceID)
+        if layoutID.isEmpty {
+            jlog("reconcile.win.create.bail", data: ["wid": windowID, "reason": "no_layout", "space": spaceID])
             return
         }
 
@@ -715,8 +715,10 @@ class GridReconciler: StateEventHandler {
             return
         }
 
-        // Consume target: window appeared on the wrong space (unrecoverable mismatch)
-        let actualSpaceID = findCurrentSpaceID(from: wmState)
+        // Consume target: window appeared on the wrong space (unrecoverable mismatch).
+        // Use the window's actual OS-level space, not the focused space.
+        let actualSpaceID = windowState.spaces.first.map { String($0) }
+            ?? findCurrentSpaceID(from: wmState)
         if actualSpaceID == nil || actualSpaceID != target.spaceID {
             pendingLaunchTarget = nil
             jlog("reconcile.pending.space.mismatch", data: [
@@ -970,6 +972,11 @@ class GridReconciler: StateEventHandler {
         guard let stateManager else { return }
         let wmState = await stateManager.getState()
         guard let windowState = wmState.windows[String(windowID)] else { return }
+
+        // Full isTileable check before unrejecting — prevents reject-unreject
+        // loops for windows with valid dimensions but non-standard subrole
+        // (e.g. Chrome AXUnknown dropdowns).
+        guard isTileable(window: windowState) else { return }
 
         await gridState.unrejectWindow(windowID)
         jlog("reconcile.win.unrejected", data: ["wid": windowID, "w": frame.width, "h": frame.height])
@@ -1227,6 +1234,25 @@ class GridReconciler: StateEventHandler {
             }
         }
         return nil
+    }
+
+    // Determine which tracked space a window belongs to using its OS-level
+    // space list. Picks the first space that has an active layout in GridState.
+    // Falls back to the focused space if the window's spaces are empty or
+    // none have layouts (e.g. window just created, spaces not yet populated).
+    private func resolveWindowSpace(
+        _ windowState: WindowState,
+        gridState: GridState,
+        wmState: WindowManagerState
+    ) async -> String? {
+        for osSpace in windowState.spaces {
+            let sid = String(osSpace)
+            let layout = await gridState.getCurrentLayout(spaceID: sid)
+            if !layout.isEmpty {
+                return sid
+            }
+        }
+        return findCurrentSpaceID(from: wmState)
     }
 
     private func findDisplayUUIDForSpace(_ spaceID: String, from wmState: WindowManagerState) -> String? {
