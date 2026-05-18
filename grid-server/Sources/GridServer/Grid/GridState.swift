@@ -642,9 +642,7 @@ actor GridState {
         guard let space = spaces[spaceID] else { return [:] }
         var assignments: [String: [UInt32]] = [:]
         for (cellID, cell) in space.cells {
-            if !cell.windows.isEmpty {
-                assignments[cellID] = Array(cell.windows)
-            }
+            assignments[cellID] = Array(cell.windows)
         }
         return assignments
     }
