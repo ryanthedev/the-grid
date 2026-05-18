@@ -167,7 +167,7 @@ struct GridServerCommand: ParsableCommand {
                     gridState: gridState,
                     gridConfig: gridConfig,
                     stateProvider: StateManager.shared,
-                    simpleBorderManager: simpleBorderManager
+                    borderRenderer: simpleBorderManager
                 )
 
                 // Instantiate StateValidator and wire into reconciler for on-wake calls

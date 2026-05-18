@@ -141,7 +141,7 @@ final class WakeLayoutRestoreTests: XCTestCase {
             gridState: gridState,
             gridConfig: gridConfig,
             stateProvider: StateManager.shared,
-            simpleBorderManager: borderManager
+            borderRenderer: borderManager
         )
 
         let validator = StateValidator(

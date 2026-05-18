@@ -1283,7 +1283,7 @@ completion(Response(id: request.id, result: AnyCodable(["success": true])))
 
                 // Update border focus using the display UUID from CLI
                 if let borderManager = self.simpleBorderManager {
-                    borderManager.updateFocus(newFocusedWindow: wid, displayUUID: displayUUID)
+                    await borderManager.updateFocus(newFocusedWindow: wid, displayUUID: displayUUID)
                 }
 
                 completion(Response(id: request.id, result: AnyCodable(["success": true, "windowId": wid])))

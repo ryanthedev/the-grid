@@ -909,4 +909,16 @@ actor GridState {
         }
         spaces[spaceID] = space
     }
+
+    // Assign a window to a cell. Used by tests to seed window assignments
+    // without going through the full layout application flow.
+    func _test_assignWindow(spaceID: String, cellID: String, windowID: UInt32) {
+        var space = spaces[spaceID] ?? GridSpaceStateData()
+        var cell = space.cells[cellID] ?? GridCellStateData(cellId: cellID)
+        if !cell.windows.contains(windowID) {
+            cell.windows.append(windowID)
+        }
+        space.cells[cellID] = cell
+        spaces[spaceID] = space
+    }
 }

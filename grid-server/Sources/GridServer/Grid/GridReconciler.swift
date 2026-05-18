@@ -24,7 +24,7 @@ class GridReconciler: StateEventHandler {
     private weak var gridState: GridState?
     private weak var gridConfig: GridConfig?
     private weak var stateProvider: (any StateProvider)?
-    private weak var simpleBorderManager: SimpleBorderManager?
+    private weak var borderRenderer: (any BorderRendering)?
 
     // Weak references to GridApply and GridFocus for picker-launched window handling
     private weak var gridApply: GridApply?
@@ -289,12 +289,12 @@ class GridReconciler: StateEventHandler {
         gridState: GridState,
         gridConfig: GridConfig,
         stateProvider: any StateProvider,
-        simpleBorderManager: SimpleBorderManager
+        borderRenderer: any BorderRendering
     ) {
         self.gridState = gridState
         self.gridConfig = gridConfig
         self.stateProvider = stateProvider
-        self.simpleBorderManager = simpleBorderManager
+        self.borderRenderer = borderRenderer
 
         Task {
             await EventRouter.shared.register(self)
@@ -356,7 +356,7 @@ class GridReconciler: StateEventHandler {
             ?? findCurrentDisplayUUID(from: wmState)
         guard let displayUUID else { return }
 
-        simpleBorderManager?.updateFocus(
+        await borderRenderer?.updateFocus(
             newFocusedWindow: osWindowID,
             displayUUID: displayUUID
         )
@@ -500,8 +500,8 @@ class GridReconciler: StateEventHandler {
         // Remove window from GridState (all spaces)
         await gridState?.removeWindowFromAllSpaces(windowID)
 
-        // Tell border manager to clean up borders for this window
-        simpleBorderManager?.handleWindowDestroyed(windowID: windowID)
+        // Tell border renderer to clean up borders for this window
+        await borderRenderer?.handleWindowDestroyed(windowID: windowID)
 
         // Sync borders for current space (assignments changed)
         await syncBordersForCurrentSpace()
@@ -832,7 +832,7 @@ class GridReconciler: StateEventHandler {
 
         // Update border focus and sync
         if !displayUUID.isEmpty {
-            simpleBorderManager?.updateFocus(
+            await borderRenderer?.updateFocus(
                 newFocusedWindow: windowID,
                 displayUUID: displayUUID
             )
@@ -966,7 +966,7 @@ class GridReconciler: StateEventHandler {
     }
 
     private func handleWindowMoved(_ windowID: UInt32, _ frame: CGRect) async {
-        simpleBorderManager?.handleWindowMoved(windowID: windowID, newFrame: frame)
+        await borderRenderer?.handleWindowMoved(windowID: windowID, newFrame: frame)
 
         // Re-evaluate rejected windows that may now be tileable (e.g. Ghostty
         // emits a 0x0 AX window at creation, then resizes to real dimensions).
@@ -1056,7 +1056,7 @@ class GridReconciler: StateEventHandler {
         jlog("reconcile.display.disconnect", data: ["display": displayUUID])
 
         // Existing: clean up border state for this display
-        simpleBorderManager?.handleDisplayDisconnected(displayUUID: displayUUID)
+        await borderRenderer?.handleDisplayDisconnected(displayUUID: displayUUID)
 
         // New: prune GridState window assignments for spaces on this display
         guard let gridState, let stateProvider else { return }
@@ -1122,24 +1122,23 @@ class GridReconciler: StateEventHandler {
         let layoutID = await gridState.getCurrentLayout(spaceID: spaceID)
         guard !layoutID.isEmpty else {
             // No layout -- clear borders by sending empty assignments
-            if let borderManager = simpleBorderManager {
-                let liveWids: [UInt32]
-                if let stateProvider {
-                    let wmState = await stateProvider.getState()
-                    liveWids = computeLiveWids(displayUUID: displayUUID, wmState: wmState)
-                } else {
-                    liveWids = []
-                }
-                await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-                    borderManager.setCellAssignments(
-                        [:],
-                        forDisplay: displayUUID,
-                        source: "no_layout:\(source)",
-                        liveWids: liveWids,
-                        completion: { continuation.resume() }
-                    )
-                }
+            let liveWids: [UInt32]
+            if let stateProvider {
+                let wmState = await stateProvider.getState()
+                liveWids = computeLiveWids(displayUUID: displayUUID, wmState: wmState)
+            } else {
+                liveWids = []
             }
+            await borderRenderer?.setCellAssignments(
+                [:],
+                forDisplay: displayUUID,
+                focusedWindowID: nil,
+                cellStackModes: [:],
+                windowOrder: nil,
+                displayFrame: nil,
+                source: "no_layout:\(source)",
+                liveWids: liveWids
+            )
             return
         }
 
@@ -1191,25 +1190,20 @@ class GridReconciler: StateEventHandler {
         // Get focused window
         let focusedWID = await gridState.getFocusedWindow(spaceID: spaceID)
 
-        // Send to SimpleBorderManager and await completion on main queue.
-        // withCheckedContinuation bridges the DispatchQueue.main.async boundary
-        // so that fence releases in GridWindowMove wait for border work to finish.
-        if let borderManager = simpleBorderManager {
-            let liveWids = computeLiveWids(displayUUID: displayUUID, wmState: wmState)
-            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-                borderManager.setCellAssignments(
-                    windowToCellMap,
-                    forDisplay: displayUUID,
-                    focusedWindowID: focusedWID != 0 ? focusedWID : nil,
-                    cellStackModes: cellStackModes,
-                    windowOrder: windowOrder,
-                    displayFrame: bounds,
-                    source: source,
-                    liveWids: liveWids,
-                    completion: { continuation.resume() }
-                )
-            }
-        }
+        // Send to border renderer. The async protocol replaces the old
+        // withCheckedContinuation + completion callback pattern -- the
+        // conformance bridges DispatchQueue.main internally.
+        let liveWids = computeLiveWids(displayUUID: displayUUID, wmState: wmState)
+        await borderRenderer?.setCellAssignments(
+            windowToCellMap,
+            forDisplay: displayUUID,
+            focusedWindowID: focusedWID != 0 ? focusedWID : nil,
+            cellStackModes: cellStackModes,
+            windowOrder: windowOrder,
+            displayFrame: bounds,
+            source: source,
+            liveWids: liveWids
+        )
     }
 
     // MARK: - Helpers
@@ -1419,11 +1413,19 @@ class GridReconciler: StateEventHandler {
     func _test_setup(
         stateProvider: any StateProvider,
         gridState: GridState,
-        lockedRules: [GridAppRule]? = nil
+        gridConfig: GridConfig? = nil,
+        lockedRules: [GridAppRule]? = nil,
+        borderRenderer: (any BorderRendering)? = nil
     ) {
         self.stateProvider = stateProvider
         self.gridState = gridState
         self._test_appRuleOverride = lockedRules
+        if let gridConfig {
+            self.gridConfig = gridConfig
+        }
+        if let borderRenderer {
+            self.borderRenderer = borderRenderer
+        }
     }
 
     // Test-only override for app rules. When non-nil, handleWindowCreated
@@ -1434,5 +1436,29 @@ class GridReconciler: StateEventHandler {
     // so tests can exercise the full orchestration path with injected fakes.
     func _test_triggerWindowCreated(windowID: UInt32, pid: pid_t) async {
         await handleWindowCreated(windowID, pid)
+    }
+
+    // _test_triggerWindowDestroyed: delegates to the private handleWindowDestroyed
+    // so tests can verify border port wiring.
+    func _test_triggerWindowDestroyed(windowID: UInt32) async {
+        await handleWindowDestroyed(windowID)
+    }
+
+    // _test_triggerFocusChanged: delegates to the private handleFocusChanged
+    // so tests can verify border port wiring for focus events.
+    func _test_triggerFocusChanged(windowID: UInt32, spaceID: UInt64, displayUUID: String) async {
+        let focusState = FocusState(
+            windowID: windowID,
+            spaceID: spaceID,
+            displayUUID: displayUUID,
+            trigger: .windowActivated
+        )
+        await handleFocusChanged(focusState)
+    }
+
+    // _test_triggerSyncBorders: delegates to syncBordersForSpace
+    // so tests can verify setCellAssignments port wiring.
+    func _test_triggerSyncBorders(spaceID: String, displayUUID: String) async {
+        await syncBordersForSpace(spaceID, displayUUID: displayUUID, source: "test")
     }
 }

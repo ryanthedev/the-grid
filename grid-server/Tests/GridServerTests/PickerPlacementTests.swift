@@ -44,7 +44,7 @@ final class PickerPlacementTests: XCTestCase {
             gridState: gridState,
             gridConfig: gridConfig,
             stateProvider: stateManager,
-            simpleBorderManager: borderManager
+            borderRenderer: borderManager
         )
         return reconciler
     }
