@@ -50,7 +50,7 @@ class GridFocus {
     private weak var gridState: GridState?
     private weak var gridConfig: GridConfig?
     private weak var stateProvider: (any StateProvider)?
-    private weak var windowManipulator: WindowManipulator?
+    private weak var windowController: (any WindowController)?
     private weak var gridReconciler: GridReconciler?
 
     // Concrete StateManager ref for overrideActiveSpace (not on StateProvider).
@@ -68,13 +68,13 @@ class GridFocus {
         gridState: GridState,
         gridConfig: GridConfig,
         stateProvider: any StateProvider,
-        windowManipulator: WindowManipulator,
+        windowController: any WindowController,
         stateManagerForOverride: StateManager? = nil
     ) {
         self.gridState = gridState
         self.gridConfig = gridConfig
         self.stateProvider = stateProvider
-        self.windowManipulator = windowManipulator
+        self.windowController = windowController
         self.stateManagerForOverride = stateManagerForOverride
         jlog("focus.init")
     }
@@ -375,7 +375,7 @@ class GridFocus {
     @discardableResult
     func focusWindowByID(_ windowID: UInt32) async throws -> UInt32 {
         guard let stateProvider = stateProvider,
-              let windowManipulator = windowManipulator else {
+              let windowController = windowController else {
             throw GridFocusError.windowNotFound(windowID)
         }
 
@@ -399,7 +399,7 @@ class GridFocus {
         }
 
         // Attempt 1: AX focus
-        let success = windowManipulator.focusWindow(pid: windowState.pid, windowID: windowID)
+        let success = await windowController.focusWindow(windowID: windowID, pid: windowState.pid)
         if !success {
             throw GridFocusError.focusFailed(windowID)
         }
@@ -449,7 +449,7 @@ class GridFocus {
             }
 
             // Attempt 2: retry AX focus
-            _ = windowManipulator.focusWindow(pid: windowState.pid, windowID: windowID)
+            _ = await windowController.focusWindow(windowID: windowID, pid: windowState.pid)
 
             // Check again after retry
             let retryState = await stateProvider.getState()
@@ -1033,5 +1033,22 @@ class GridFocus {
             direction: direction,
             displays: displays
         )
+    }
+}
+
+// MARK: - Test Helpers
+
+extension GridFocus {
+
+    // _test_setup: minimal wiring for tests -- injects windowController port
+    // without full GridCommandRouter wiring.
+    func _test_setup(
+        gridState: GridState,
+        stateProvider: any StateProvider,
+        windowController: any WindowController
+    ) {
+        self.gridState = gridState
+        self.stateProvider = stateProvider
+        self.windowController = windowController
     }
 }

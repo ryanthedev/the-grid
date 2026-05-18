@@ -43,7 +43,7 @@ class GridApply {
     private weak var gridState: GridState?
     private weak var gridConfig: GridConfig?
     private weak var stateProvider: (any StateProvider)?
-    private weak var windowManipulator: WindowManipulator?
+    private weak var windowController: (any WindowController)?
     private weak var gridReconciler: GridReconciler?
     private weak var simpleBorderManager: SimpleBorderManager?
     private weak var gridFocus: GridFocus?
@@ -54,7 +54,7 @@ class GridApply {
         gridState: GridState,
         gridConfig: GridConfig,
         stateProvider: any StateProvider,
-        windowManipulator: WindowManipulator,
+        windowController: any WindowController,
         gridReconciler: GridReconciler,
         simpleBorderManager: SimpleBorderManager,
         gridFocus: GridFocus
@@ -62,7 +62,7 @@ class GridApply {
         self.gridState = gridState
         self.gridConfig = gridConfig
         self.stateProvider = stateProvider
-        self.windowManipulator = windowManipulator
+        self.windowController = windowController
         self.gridReconciler = gridReconciler
         self.simpleBorderManager = simpleBorderManager
         self.gridFocus = gridFocus
@@ -500,9 +500,10 @@ class GridApply {
                         return nil
                     }
 
-                    guard let manipulator = self?.windowManipulator else { return placement.windowID }
-                    let success = await manipulator.setWindowFrame(
-                        context: context,
+                    guard let controller = self?.windowController else { return placement.windowID }
+                    let success = await controller.setWindowFrame(
+                        windowID: placement.windowID,
+                        pid: context.pid,
                         frame: placement.bounds
                     )
                     if !success {
@@ -589,5 +590,28 @@ class GridApply {
             }
         }
         return ""
+    }
+}
+
+// MARK: - Test Helpers
+
+extension GridApply {
+
+    // _test_setup: minimal wiring for tests -- injects windowController port
+    // without full GridCommandRouter wiring.
+    func _test_setup(
+        gridState: GridState,
+        stateProvider: any StateProvider,
+        windowController: any WindowController
+    ) {
+        self.gridState = gridState
+        self.stateProvider = stateProvider
+        self.windowController = windowController
+    }
+
+    // _test_applyPlacements: delegates to applyPlacementsViaAX so tests
+    // can verify WindowController port wiring without full layout setup.
+    func _test_applyPlacements(_ placements: [GridWindowPlacement]) async -> Set<UInt32> {
+        return await applyPlacementsViaAX(placements)
     }
 }

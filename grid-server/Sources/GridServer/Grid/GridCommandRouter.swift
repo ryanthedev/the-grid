@@ -96,7 +96,7 @@ class GridCommandRouter {
             gridState: gridState,
             gridConfig: gridConfig,
             stateProvider: stateManager,
-            windowManipulator: windowManipulator,
+            windowController: windowManipulator,
             stateManagerForOverride: stateManager
         )
         gridFocus.setReconciler(gridReconciler)
@@ -121,7 +121,7 @@ class GridCommandRouter {
             gridState: gridState,
             gridConfig: gridConfig,
             stateProvider: stateManager,
-            windowManipulator: windowManipulator,
+            windowController: windowManipulator,
             gridReconciler: gridReconciler,
             simpleBorderManager: simpleBorderManager,
             gridFocus: gridFocus
