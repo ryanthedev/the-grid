@@ -886,4 +886,27 @@ actor GridState {
 
         return normalizeRatios(newRatios)
     }
+
+    // MARK: - Test Helpers
+
+    // Seed a space with a layout ID. Used by tests to set up state without
+    // triggering the full layout application flow.
+    func _test_setLayout(spaceID: String, layoutID: String) {
+        var space = spaces[spaceID] ?? GridSpaceStateData()
+        space.spaceId = spaceID
+        space.currentLayoutId = layoutID
+        spaces[spaceID] = space
+    }
+
+    // Seed a space with empty cells. Used by tests to set up cell structure
+    // without needing a real layout definition.
+    func _test_setCells(spaceID: String, cellIDs: [String]) {
+        var space = spaces[spaceID] ?? GridSpaceStateData()
+        for cellID in cellIDs {
+            if space.cells[cellID] == nil {
+                space.cells[cellID] = GridCellStateData(cellId: cellID)
+            }
+        }
+        spaces[spaceID] = space
+    }
 }

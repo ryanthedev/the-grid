@@ -23,7 +23,7 @@ class GridReconciler: StateEventHandler {
     // Dependencies (set via setup)
     private weak var gridState: GridState?
     private weak var gridConfig: GridConfig?
-    private weak var stateManager: StateManager?
+    private weak var stateProvider: (any StateProvider)?
     private weak var simpleBorderManager: SimpleBorderManager?
 
     // Weak references to GridApply and GridFocus for picker-launched window handling
@@ -288,12 +288,12 @@ class GridReconciler: StateEventHandler {
     func setup(
         gridState: GridState,
         gridConfig: GridConfig,
-        stateManager: StateManager,
+        stateProvider: any StateProvider,
         simpleBorderManager: SimpleBorderManager
     ) {
         self.gridState = gridState
         self.gridConfig = gridConfig
-        self.stateManager = stateManager
+        self.stateProvider = stateProvider
         self.simpleBorderManager = simpleBorderManager
 
         Task {
@@ -331,9 +331,9 @@ class GridReconciler: StateEventHandler {
     private func focusSweep() async {
         // Skip during suppressed actions — the action owns focus
         guard !suppressReconciliation else { return }
-        guard let gridState, let stateManager else { return }
+        guard let gridState, let stateProvider else { return }
 
-        let wmState = await stateManager.getState()
+        let wmState = await stateProvider.getState()
         guard let osWindowID = wmState.metadata.focusedWindowID, osWindowID != 0 else { return }
 
         // Resolve which display/space the OS-focused window is on
@@ -457,7 +457,7 @@ class GridReconciler: StateEventHandler {
     // correlated with cells still referencing wids owned by the dying pid.
     // Does NOT mutate state — the per-window AX destroy flow still runs.
     private func handleAppTerminated(_ app: NSRunningApplication) async {
-        guard let gridState, let stateManager else { return }
+        guard let gridState, let stateProvider else { return }
         let pid = app.processIdentifier
 
         // Collect the per-space assignments snapshot from GridState.
@@ -468,7 +468,7 @@ class GridReconciler: StateEventHandler {
         }
 
         // Build space→display map from wmState.
-        let wmState = await stateManager.getState()
+        let wmState = await stateProvider.getState()
         var spaceToDisplay: [String: String] = [:]
         for (spaceID, space) in wmState.spaces {
             spaceToDisplay[spaceID] = space.displayUUID
@@ -510,11 +510,11 @@ class GridReconciler: StateEventHandler {
     }
 
     private func handleWindowCreated(_ windowID: UInt32, _ pid: pid_t) async {
-        guard let stateManager else {
-            jlog("reconcile.win.create.bail", data: ["wid": windowID, "reason": "no_stateManager"])
+        guard let stateProvider else {
+            jlog("reconcile.win.create.bail", data: ["wid": windowID, "reason": "no_stateProvider"])
             return
         }
-        let wmState = await stateManager.getState()
+        let wmState = await stateProvider.getState()
 
         guard let gridState else {
             jlog("reconcile.win.create.bail", data: ["wid": windowID, "reason": "no_gridState"])
@@ -583,7 +583,12 @@ class GridReconciler: StateEventHandler {
 
         // Check locked rules: if window matches a locked app rule, assign to its reserved cell.
         // Search current space first, then all spaces (the locked cell may be on another display).
-        let appRules = await MainActor.run { gridConfig?.appRules ?? [] }
+        let appRules: [GridAppRule]
+        if let override = _test_appRuleOverride {
+            appRules = override
+        } else {
+            appRules = await MainActor.run { gridConfig?.appRules ?? [] }
+        }
         let bundleID = wmState.applications[String(windowState.pid)]?.bundleIdentifier
         let lockedCell = getLockedCell(
             appName: appName,
@@ -682,8 +687,8 @@ class GridReconciler: StateEventHandler {
         }
 
         // Get window state from StateManager
-        guard let stateManager else { return }
-        let wmState = await stateManager.getState()
+        guard let stateProvider else { return }
+        let wmState = await stateProvider.getState()
         guard let windowState = wmState.windows[String(windowID)] else {
             // Window not in state yet -- skip (don't consume), let a later event retry
             jlog("reconcile.pending.skip", data: ["wid": windowID, "reason": "not_in_state"])
@@ -756,7 +761,7 @@ class GridReconciler: StateEventHandler {
     }
 
     private func handleFocusChanged(_ focusState: FocusState) async {
-        guard let gridState, let stateManager, let windowID = focusState.windowID else { return }
+        guard let gridState, let stateProvider, let windowID = focusState.windowID else { return }
 
         // During suppression (bulk ops: layout apply, picker, terminal, focus),
         // skip entirely -- the caller sets GridState focus explicitly.
@@ -791,7 +796,7 @@ class GridReconciler: StateEventHandler {
         if let gridSpaceID = await gridState.findSpaceContaining(windowID: windowID) {
             // Window is tracked in GridState — use its actual space
             spaceID = gridSpaceID
-            let wmState = await stateManager.getState()
+            let wmState = await stateProvider.getState()
             displayUUID = findDisplayUUIDForSpace(gridSpaceID, from: wmState) ?? ""
         } else if focusState.spaceID != 0 {
             // Event carries space info (rare but handle it)
@@ -799,7 +804,7 @@ class GridReconciler: StateEventHandler {
             displayUUID = focusState.displayUUID
         } else {
             // Window not in GridState — fall back to metadata
-            let wmState = await stateManager.getState()
+            let wmState = await stateProvider.getState()
             guard let resolved = findCurrentSpaceID(from: wmState) else { return }
             spaceID = resolved
             displayUUID = findCurrentDisplayUUID(from: wmState) ?? ""
@@ -887,12 +892,12 @@ class GridReconciler: StateEventHandler {
     }
 
     private func handleSystemWake() async {
-        guard let stateManager, let gridState else { return }
+        guard let stateProvider, let gridState else { return }
 
         jlog("reconcile.wake.start")
 
         // Capture wmState once for consistency across all steps
-        let wmState = await stateManager.getState()
+        let wmState = await stateProvider.getState()
 
         // Store the validation work as a tracked task so commands can await completion
         // via awaitWakeCompletion(). The task reference is cleared on completion.
@@ -929,7 +934,7 @@ class GridReconciler: StateEventHandler {
 
             // Step 2: Full state validation after migration.
             // Re-fetch wmState so validator sees correct space IDs post-migration.
-            let freshWmState = await stateManager.getState()
+            let freshWmState = await stateProvider.getState()
             await self.stateValidator?.validate(wmState: freshWmState)
 
             // Step 2.5: Reapply layouts on every active space. Display
@@ -969,8 +974,8 @@ class GridReconciler: StateEventHandler {
         let nowTileable = frame.width >= 100 && frame.height >= 100
         guard nowTileable else { return }
 
-        guard let stateManager else { return }
-        let wmState = await stateManager.getState()
+        guard let stateProvider else { return }
+        let wmState = await stateProvider.getState()
         guard let windowState = wmState.windows[String(windowID)] else { return }
 
         // Full isTileable check before unrejecting — prevents reject-unreject
@@ -1003,8 +1008,8 @@ class GridReconciler: StateEventHandler {
 
     private func handleWindowDeminimized(_ windowID: UInt32) async {
         // Treat like a new window creation for tiling purposes
-        guard let stateManager else { return }
-        let wmState = await stateManager.getState()
+        guard let stateProvider else { return }
+        let wmState = await stateProvider.getState()
         guard let windowState = wmState.windows[String(windowID)] else { return }
 
         let pid = windowState.pid
@@ -1054,8 +1059,8 @@ class GridReconciler: StateEventHandler {
         simpleBorderManager?.handleDisplayDisconnected(displayUUID: displayUUID)
 
         // New: prune GridState window assignments for spaces on this display
-        guard let gridState, let stateManager else { return }
-        let wmState = await stateManager.getState()
+        guard let gridState, let stateProvider else { return }
+        let wmState = await stateProvider.getState()
 
         // Find all space IDs that belong to this display in the current wmState
         let affectedSpaceIDs = wmState.spaces.compactMap { (spaceID, space) -> String? in
@@ -1086,9 +1091,9 @@ class GridReconciler: StateEventHandler {
 
     private func syncBordersForCurrentSpace(source: String = "reconcile") async {
         // Get current space and display from StateManager
-        guard let stateManager else { return }
+        guard let stateProvider else { return }
 
-        let wmState = await stateManager.getState()
+        let wmState = await stateProvider.getState()
         guard let spaceID = findCurrentSpaceID(from: wmState),
               let displayUUID = findCurrentDisplayUUID(from: wmState) else {
             return
@@ -1119,8 +1124,8 @@ class GridReconciler: StateEventHandler {
             // No layout -- clear borders by sending empty assignments
             if let borderManager = simpleBorderManager {
                 let liveWids: [UInt32]
-                if let stateManager {
-                    let wmState = await stateManager.getState()
+                if let stateProvider {
+                    let wmState = await stateProvider.getState()
                     liveWids = computeLiveWids(displayUUID: displayUUID, wmState: wmState)
                 } else {
                     liveWids = []
@@ -1147,8 +1152,8 @@ class GridReconciler: StateEventHandler {
         }
 
         // Get display bounds for layout calculation
-        guard let stateManager else { return }
-        let wmState = await stateManager.getState()
+        guard let stateProvider else { return }
+        let wmState = await stateProvider.getState()
         guard let bounds = findDisplayBounds(displayUUID: displayUUID, from: wmState) else {
             return
         }
@@ -1341,9 +1346,9 @@ class GridReconciler: StateEventHandler {
     //   - window is on multiple tracked spaces simultaneously (ambiguous)
     //   - window moved to a space not tracked by GridState (unmanaged space)
     private func sweepDisplacedWindows() async {
-        guard let gridState, let stateManager else { return }
+        guard let gridState, let stateProvider else { return }
 
-        let wmState = await stateManager.getState()
+        let wmState = await stateProvider.getState()
         let trackedSpaceIDs = Set(await gridState.getSpaceIDs())
         var affectedSpaces = Set<String>()
 
@@ -1395,8 +1400,8 @@ class GridReconciler: StateEventHandler {
     }
 
     private func findCurrentSpaceIDAsync() async -> String? {
-        guard let stateManager else { return nil }
-        let wmState = await stateManager.getState()
+        guard let stateProvider else { return nil }
+        let wmState = await stateProvider.getState()
         return findCurrentSpaceID(from: wmState)
     }
 
@@ -1406,5 +1411,28 @@ class GridReconciler: StateEventHandler {
     // Used only in tests to assert target-survival (skip-not-consume) behavior.
     func _test_pendingLaunchTarget() -> PendingLaunchTarget? {
         pendingLaunchTarget
+    }
+
+    // _test_setup: minimal wiring for tests -- sets stateProvider and gridState
+    // without registering with EventRouter or starting sweep timers.
+    // Optional appRules override bypasses the gridConfig lookup in handleWindowCreated.
+    func _test_setup(
+        stateProvider: any StateProvider,
+        gridState: GridState,
+        lockedRules: [GridAppRule]? = nil
+    ) {
+        self.stateProvider = stateProvider
+        self.gridState = gridState
+        self._test_appRuleOverride = lockedRules
+    }
+
+    // Test-only override for app rules. When non-nil, handleWindowCreated
+    // reads from here instead of querying gridConfig on MainActor.
+    var _test_appRuleOverride: [GridAppRule]?
+
+    // _test_triggerWindowCreated: delegates to the private handleWindowCreated
+    // so tests can exercise the full orchestration path with injected fakes.
+    func _test_triggerWindowCreated(windowID: UInt32, pid: pid_t) async {
+        await handleWindowCreated(windowID, pid)
     }
 }

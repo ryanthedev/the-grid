@@ -43,7 +43,7 @@ final class PickerPlacementTests: XCTestCase {
         reconciler.setup(
             gridState: gridState,
             gridConfig: gridConfig,
-            stateManager: stateManager,
+            stateProvider: stateManager,
             simpleBorderManager: borderManager
         )
         return reconciler

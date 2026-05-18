@@ -163,6 +163,31 @@ struct ApplicationState: Codable {
             return "unknown(\(arch))"
         }
     }
+
+    // Test-only factory: build a minimal ApplicationState without NSRunningApplication.
+    static func _test_make(pid: pid_t, name: String, bundleID: String? = nil) -> ApplicationState {
+        var app = ApplicationState(pid: pid)
+        app.localizedName = name
+        app.bundleIdentifier = bundleID
+        return app
+    }
+
+    // Minimal init for tests (avoids NSRunningApplication requirement).
+    init(pid: pid_t) {
+        self.pid = pid
+        self.bundleIdentifier = nil
+        self.bundleURL = nil
+        self.executableURL = nil
+        self.localizedName = nil
+        self.launchDate = nil
+        self.activationPolicy = "regular"
+        self.isHidden = false
+        self.isActive = false
+        self.isFinishedLaunching = true
+        self.executableArchitecture = "arm64"
+        self.windows = []
+        self.metadata = [:]
+    }
 }
 
 // MARK: - Window State

@@ -18,7 +18,7 @@ actor StateValidator {
     // MARK: - Properties
 
     private weak var gridState: GridState?
-    private weak var stateManager: StateManager?
+    private weak var stateProvider: (any StateProvider)?
 
     // SkyLight connection for SLSGetWindowBounds liveness checks
     private let connectionID: Int32
@@ -47,9 +47,9 @@ actor StateValidator {
 
     // MARK: - Initialization
 
-    init(gridState: GridState, stateManager: StateManager, connectionID: Int32) {
+    init(gridState: GridState, stateProvider: any StateProvider, connectionID: Int32) {
         self.gridState = gridState
-        self.stateManager = stateManager
+        self.stateProvider = stateProvider
         self.connectionID = connectionID
     }
 
@@ -147,8 +147,8 @@ actor StateValidator {
         source.setEventHandler { [weak self] in
             guard let self else { return }
             Task {
-                guard let stateManager = await self.stateManager else { return }
-                let wmState = await stateManager.getState()
+                guard let stateProvider = await self.stateProvider else { return }
+                let wmState = await stateProvider.getState()
                 await self.validate(wmState: wmState)
             }
         }

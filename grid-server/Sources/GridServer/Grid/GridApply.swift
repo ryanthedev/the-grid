@@ -42,7 +42,7 @@ class GridApply {
     // Dependencies (weak references, set via setup)
     private weak var gridState: GridState?
     private weak var gridConfig: GridConfig?
-    private weak var stateManager: StateManager?
+    private weak var stateProvider: (any StateProvider)?
     private weak var windowManipulator: WindowManipulator?
     private weak var gridReconciler: GridReconciler?
     private weak var simpleBorderManager: SimpleBorderManager?
@@ -53,7 +53,7 @@ class GridApply {
     func setup(
         gridState: GridState,
         gridConfig: GridConfig,
-        stateManager: StateManager,
+        stateProvider: any StateProvider,
         windowManipulator: WindowManipulator,
         gridReconciler: GridReconciler,
         simpleBorderManager: SimpleBorderManager,
@@ -61,7 +61,7 @@ class GridApply {
     ) {
         self.gridState = gridState
         self.gridConfig = gridConfig
-        self.stateManager = stateManager
+        self.stateProvider = stateProvider
         self.windowManipulator = windowManipulator
         self.gridReconciler = gridReconciler
         self.simpleBorderManager = simpleBorderManager
@@ -80,7 +80,7 @@ class GridApply {
     ) async throws {
         guard let gridState = gridState,
               let gridConfig = gridConfig,
-              let stateManager = stateManager,
+              let stateProvider = stateProvider,
               let gridFocus = gridFocus else {
             throw GridApplyError.noLayout
         }
@@ -98,7 +98,7 @@ class GridApply {
                     strategy: strategy,
                     gridState: gridState,
                     gridConfig: gridConfig,
-                    stateManager: stateManager,
+                    stateProvider: stateProvider,
                     gridFocus: gridFocus
                 )
             }
@@ -109,7 +109,7 @@ class GridApply {
                 strategy: strategy,
                 gridState: gridState,
                 gridConfig: gridConfig,
-                stateManager: stateManager,
+                stateProvider: stateProvider,
                 gridFocus: gridFocus
             )
         }
@@ -123,7 +123,7 @@ class GridApply {
         strategy: GridAssignmentStrategy,
         gridState: GridState,
         gridConfig: GridConfig,
-        stateManager: StateManager,
+        stateProvider: any StateProvider,
         gridFocus: GridFocus
     ) async throws {
         jlog("layout.apply.start", data: ["lid": layoutID, "sid": spaceID])
@@ -132,7 +132,7 @@ class GridApply {
         let layoutDef = try await MainActor.run { try gridConfig.getLayout(id: layoutID) }
 
         // 2. Get display bounds for this space
-        let wmState = await stateManager.getState()
+        let wmState = await stateProvider.getState()
         let displayBounds = gridFocus.getDisplayBoundsForSpace(spaceID, wmState: wmState)
 
         // 3. Get existing track ratios (preserve when reapplying same layout)
@@ -300,7 +300,7 @@ class GridApply {
     func applyCellLayout(spaceID: String, cellID: String) async throws {
         guard let gridState = gridState,
               let gridConfig = gridConfig,
-              let stateManager = stateManager,
+              let stateProvider = stateProvider,
               let gridFocus = gridFocus else {
             throw GridApplyError.noLayout
         }
@@ -315,7 +315,7 @@ class GridApply {
         let layoutDef = try await MainActor.run { try gridConfig.getLayout(id: layoutID) }
 
         // 2. Get display bounds
-        let wmState = await stateManager.getState()
+        let wmState = await stateProvider.getState()
         let displayBounds = gridFocus.getDisplayBoundsForSpace(spaceID, wmState: wmState)
 
         // 3. Calculate full layout (needed for cell bounds with track ratios)
@@ -393,7 +393,7 @@ class GridApply {
     // ============================================================
 
     func refreshAllDisplays(displayFilter: String? = nil) async -> [GridDisplayError] {
-        guard let stateManager = stateManager,
+        guard let stateProvider = stateProvider,
               let gridState = gridState,
               let gridConfig = gridConfig else {
             return []
@@ -401,7 +401,7 @@ class GridApply {
 
         jlog("layout.refresh_all.start")
 
-        let wmState = await stateManager.getState()
+        let wmState = await stateProvider.getState()
         var errors: [GridDisplayError] = []
         var processedCount = 0
 
