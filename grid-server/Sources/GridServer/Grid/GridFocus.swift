@@ -49,9 +49,13 @@ class GridFocus {
     // Dependencies (weak references, set via setup)
     private weak var gridState: GridState?
     private weak var gridConfig: GridConfig?
-    private weak var stateManager: StateManager?
-    private weak var windowManipulator: WindowManipulator?
+    private weak var stateProvider: (any StateProvider)?
+    private weak var windowController: (any WindowController)?
     private weak var gridReconciler: GridReconciler?
+
+    // Concrete StateManager ref for overrideActiveSpace (not on StateProvider).
+    // Used only by cross-display focus navigation.
+    private weak var stateManagerForOverride: StateManager?
 
     // Tracks recent focus-mismatch pairs to detect ping-pong loops across
     // repeated focusWindowByID calls. Bails to accept-OS-reality when the
@@ -63,13 +67,15 @@ class GridFocus {
     func setup(
         gridState: GridState,
         gridConfig: GridConfig,
-        stateManager: StateManager,
-        windowManipulator: WindowManipulator
+        stateProvider: any StateProvider,
+        windowController: any WindowController,
+        stateManagerForOverride: StateManager? = nil
     ) {
         self.gridState = gridState
         self.gridConfig = gridConfig
-        self.stateManager = stateManager
-        self.windowManipulator = windowManipulator
+        self.stateProvider = stateProvider
+        self.windowController = windowController
+        self.stateManagerForOverride = stateManagerForOverride
         jlog("focus.init")
     }
 
@@ -86,12 +92,12 @@ class GridFocus {
     func moveFocus(direction: GridDirection, opts: MoveFocusOpts) async throws -> UInt32 {
         guard let gridState = gridState,
               let gridConfig = gridConfig,
-              let stateManager = stateManager else {
+              let stateProvider = stateProvider else {
             throw GridFocusError.noLayout
         }
 
         // Get current OS state from StateManager
-        let wmState = await stateManager.getState()
+        let wmState = await stateProvider.getState()
         guard let spaceID = findActiveSpaceID(wmState) else {
             throw GridFocusError.noLayout
         }
@@ -192,12 +198,12 @@ class GridFocus {
     // cycleFocus: cycle to next/prev window within focused cell
     func cycleFocus(forward: Bool) async throws -> UInt32 {
         guard let gridState = gridState,
-              let stateManager = stateManager else {
+              let stateProvider = stateProvider else {
             throw GridFocusError.noLayout
         }
 
         // Get current space
-        let wmState = await stateManager.getState()
+        let wmState = await stateProvider.getState()
         guard let spaceID = findActiveSpaceID(wmState) else {
             throw GridFocusError.noLayout
         }
@@ -302,12 +308,12 @@ class GridFocus {
     // focusCellByID: focus a cell, restoring last-focused window
     private func focusCellByID(spaceID: String, cellID: String) async throws -> UInt32 {
         guard let gridState = gridState,
-              let stateManager = stateManager else {
+              let stateProvider = stateProvider else {
             throw GridFocusError.noLayout
         }
 
         // Prune dead windows before focusing
-        let wmState = await stateManager.getState()
+        let wmState = await stateProvider.getState()
         var cellWindows = await gridState.getCellWindows(spaceID: spaceID, cellID: cellID)
         cellWindows = cellWindows.filter { wid in
             if wmState.windows[String(wid)] != nil { return true }
@@ -368,13 +374,13 @@ class GridFocus {
     // the OS actually focused if mismatch was accepted after retry).
     @discardableResult
     func focusWindowByID(_ windowID: UInt32) async throws -> UInt32 {
-        guard let stateManager = stateManager,
-              let windowManipulator = windowManipulator else {
+        guard let stateProvider = stateProvider,
+              let windowController = windowController else {
             throw GridFocusError.windowNotFound(windowID)
         }
 
         // Look up window PID from StateManager
-        let wmState = await stateManager.getState()
+        let wmState = await stateProvider.getState()
         guard let windowState = wmState.windows[String(windowID)] else {
             throw GridFocusError.windowNotFound(windowID)
         }
@@ -393,7 +399,7 @@ class GridFocus {
         }
 
         // Attempt 1: AX focus
-        let success = windowManipulator.focusWindow(pid: windowState.pid, windowID: windowID)
+        let success = await windowController.focusWindow(windowID: windowID, pid: windowState.pid)
         if !success {
             throw GridFocusError.focusFailed(windowID)
         }
@@ -409,7 +415,7 @@ class GridFocus {
 
         // Verify: read cached focused window ID (no OS call).
         // Re-read state after the focus call to see what the OS reports.
-        let postState = await stateManager.getState()
+        let postState = await stateProvider.getState()
         let actualFocusedWID = postState.metadata.focusedWindowID
 
         if let actualWID = actualFocusedWID, actualWID != windowID {
@@ -443,10 +449,10 @@ class GridFocus {
             }
 
             // Attempt 2: retry AX focus
-            _ = windowManipulator.focusWindow(pid: windowState.pid, windowID: windowID)
+            _ = await windowController.focusWindow(windowID: windowID, pid: windowState.pid)
 
             // Check again after retry
-            let retryState = await stateManager.getState()
+            let retryState = await stateProvider.getState()
             let retryActualWID = retryState.metadata.focusedWindowID
 
             if let retryWID = retryActualWID, retryWID != windowID {
@@ -552,11 +558,11 @@ class GridFocus {
         // the correct display. Without this, macOS metadata still reports
         // the source display as active (appActivated doesn't fire for
         // same-app cross-display focus).
-        await stateManager?.overrideActiveSpace(UInt64(targetSpaceID))
+        await stateManagerForOverride?.overrideActiveSpace(UInt64(targetSpaceID))
 
         // Check what the OS actually focused — AX may raise a different
         // window of the same app. Update GridState to match reality.
-        let postState = await stateManager?.getState()
+        let postState = await stateProvider?.getState()
         if let actualWID = postState?.metadata.focusedWindowID,
            actualWID != windowID {
             // OS focused a different window. Find it in the target cell
@@ -1027,5 +1033,22 @@ class GridFocus {
             direction: direction,
             displays: displays
         )
+    }
+}
+
+// MARK: - Test Helpers
+
+extension GridFocus {
+
+    // _test_setup: minimal wiring for tests -- injects windowController port
+    // without full GridCommandRouter wiring.
+    func _test_setup(
+        gridState: GridState,
+        stateProvider: any StateProvider,
+        windowController: any WindowController
+    ) {
+        self.gridState = gridState
+        self.stateProvider = stateProvider
+        self.windowController = windowController
     }
 }

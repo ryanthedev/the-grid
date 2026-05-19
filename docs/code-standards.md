@@ -1,5 +1,5 @@
-<!-- base-commit: c7677f3 -->
-<!-- generated: 2026-04-27 -->
+<!-- base-commit: 89adf80 -->
+<!-- generated: 2026-05-18 -->
 
 # Code Standards
 
@@ -171,6 +171,12 @@ Actor test helpers use the `_test_` prefix to signal they exist only for tests (
 // From StateValidator — seed data without real AX queries
 func _test_seedOrphanCounts(_ counts: [UInt32: Int]) { ... }
 func _test_orphanCountForWid(_ wid: UInt32) -> Int { ... }
+
+// From StateManager — inject canned wmState without AX/SkyLight
+func _test_setState(_ state: WindowManagerState) { ... }
+
+// From GridReconciler — read private pending launch target for assertions
+func _test_pendingLaunchTarget() -> PendingLaunchTarget? { ... }
 ```
 
 Per project `CLAUDE.md`: 3-5 targeted tests per feature, prove the approach. Temporary tests are fine; delete after validation if not load-bearing.

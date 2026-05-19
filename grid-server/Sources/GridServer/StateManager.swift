@@ -13,7 +13,7 @@ import AppKit
 @_silgen_name("_AXUIElementGetWindow")
 private func _AXUIElementGetWindow(_ element: AXUIElement, _ windowID: UnsafeMutablePointer<UInt32>) -> AXError
 
-actor StateManager: StateEventHandler {
+actor StateManager: StateEventHandler, StateProvider {
     // MARK: - Shared Instance
     // Thread-safe lazy initialization - actor ensures all access is serialized
     private static let _shared = StateManager()

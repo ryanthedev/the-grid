@@ -91,7 +91,7 @@ actor GridState {
     // acquire a frame but remain unfocusable. In-memory only.
     private var rejectedWindows: Set<UInt32> = []
 
-    private let statePath: String
+    private var storage: any GridStorage
     private var saveTask: Task<Void, Never>?
     private var isDirty: Bool = false
     private let debounceInterval: Duration = .milliseconds(500)
@@ -100,66 +100,28 @@ actor GridState {
 
     // MARK: - Initialization + Load
 
+    // Production init: uses FileGridStorage at the XDG state path.
     init() {
-        statePath = "\(XDG.stateHome)/thegrid/state.json"
+        storage = FileGridStorage(path: "\(XDG.stateHome)/thegrid/state.json")
     }
 
-    func load() {
-        let fm = FileManager.default
-        guard fm.fileExists(atPath: statePath) else {
-            jlog("grid.state.load.new")
-            return
-        }
+    // Injection init: accepts any GridStorage (used by tests with InMemoryGridStorage).
+    init(storage: any GridStorage) {
+        self.storage = storage
+    }
 
+    func load() async {
         do {
-            let data = try Data(contentsOf: URL(fileURLWithPath: statePath))
-            let decoder = JSONDecoder()
-            decoder.dateDecodingStrategy = .custom { decoder in
-                let container = try decoder.singleValueContainer()
-                let dateStr = try container.decode(String.self)
-                if let date = GridState.dateFormatter.date(from: dateStr) {
-                    return date
-                }
-                if let date = GridState.dateFormatterFallback.date(from: dateStr) {
-                    return date
-                }
-                throw DecodingError.dataCorruptedError(
-                    in: container,
-                    debugDescription: "cannot parse date: \(dateStr)"
-                )
+            guard let decoded = try await storage.load() else {
+                return
             }
-            let decoded = try decoder.decode(GridRuntimeStateData.self, from: data)
             spaces = decoded.spaces
             displaySpaces = decoded.displaySpaces
             lastUpdated = decoded.lastUpdated
-
-            for key in spaces.keys {
-                if spaces[key]?.cells == nil {
-                    spaces[key]?.cells = [:]
-                }
-            }
-
-            jlog("grid.state.load", data: ["spaceCount": spaces.count])
         } catch {
             jlog("err.grid.state.load", msg: "\(error)")
         }
     }
-
-    // MARK: - Date Formatters
-
-    private static let dateFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSSSSSXXXXX"
-        f.locale = Locale(identifier: "en_US_POSIX")
-        return f
-    }()
-
-    private static let dateFormatterFallback: DateFormatter = {
-        let f = DateFormatter()
-        f.dateFormat = "yyyy-MM-dd'T'HH:mm:ssXXXXX"
-        f.locale = Locale(identifier: "en_US_POSIX")
-        return f
-    }()
 
     // MARK: - Persistence (debounced)
 
@@ -169,14 +131,14 @@ actor GridState {
         saveTask = Task {
             do {
                 try await Task.sleep(for: debounceInterval)
-                self.persistNow()
+                await self.persistNow()
             } catch {
                 // Cancelled — a newer save is pending
             }
         }
     }
 
-    private func persistNow() {
+    private func persistNow() async {
         guard isDirty else { return }
         isDirty = false
         lastUpdated = Date()
@@ -189,44 +151,24 @@ actor GridState {
         )
 
         do {
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            encoder.dateEncodingStrategy = .custom { date, encoder in
-                var container = encoder.singleValueContainer()
-                let str = GridState.dateFormatter.string(from: date)
-                try container.encode(str)
-            }
-            let data = try encoder.encode(stateData)
-
-            let fm = FileManager.default
-            let dir = (statePath as NSString).deletingLastPathComponent
-            try fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
-
-            let tmpPath = statePath + ".tmp"
-            try data.write(to: URL(fileURLWithPath: tmpPath))
-            // POSIX rename atomically replaces destination
-            if rename(tmpPath, statePath) != 0 {
-                throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
-            }
-
-            jlog("grid.state.save")
+            try await storage.save(stateData)
         } catch {
             jlog("err.grid.state.save", msg: "\(error)")
             isDirty = true
         }
     }
 
-    func flush() {
+    func flush() async {
         if isDirty {
-            persistNow()
+            await persistNow()
         }
     }
 
-    func reset() {
+    func reset() async {
         spaces = [:]
         displaySpaces = [:]
         isDirty = true
-        persistNow()
+        await persistNow()
     }
 
     // MARK: - Space Access
@@ -506,6 +448,10 @@ actor GridState {
         rejectedWindows.insert(windowID)
     }
 
+    func unrejectWindow(_ windowID: UInt32) {
+        rejectedWindows.remove(windowID)
+    }
+
     func isWindowRejected(_ windowID: UInt32) -> Bool {
         rejectedWindows.contains(windowID)
     }
@@ -638,9 +584,7 @@ actor GridState {
         guard let space = spaces[spaceID] else { return [:] }
         var assignments: [String: [UInt32]] = [:]
         for (cellID, cell) in space.cells {
-            if !cell.windows.isEmpty {
-                assignments[cellID] = Array(cell.windows)
-            }
+            assignments[cellID] = Array(cell.windows)
         }
         return assignments
     }
@@ -883,5 +827,40 @@ actor GridState {
         }
 
         return normalizeRatios(newRatios)
+    }
+
+    // MARK: - Test Helpers
+
+    // Seed a space with a layout ID. Used by tests to set up state without
+    // triggering the full layout application flow.
+    func _test_setLayout(spaceID: String, layoutID: String) {
+        var space = spaces[spaceID] ?? GridSpaceStateData()
+        space.spaceId = spaceID
+        space.currentLayoutId = layoutID
+        spaces[spaceID] = space
+    }
+
+    // Seed a space with empty cells. Used by tests to set up cell structure
+    // without needing a real layout definition.
+    func _test_setCells(spaceID: String, cellIDs: [String]) {
+        var space = spaces[spaceID] ?? GridSpaceStateData()
+        for cellID in cellIDs {
+            if space.cells[cellID] == nil {
+                space.cells[cellID] = GridCellStateData(cellId: cellID)
+            }
+        }
+        spaces[spaceID] = space
+    }
+
+    // Assign a window to a cell. Used by tests to seed window assignments
+    // without going through the full layout application flow.
+    func _test_assignWindow(spaceID: String, cellID: String, windowID: UInt32) {
+        var space = spaces[spaceID] ?? GridSpaceStateData()
+        var cell = space.cells[cellID] ?? GridCellStateData(cellId: cellID)
+        if !cell.windows.contains(windowID) {
+            cell.windows.append(windowID)
+        }
+        space.cells[cellID] = cell
+        spaces[spaceID] = space
     }
 }

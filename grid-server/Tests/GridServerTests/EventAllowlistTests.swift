@@ -128,7 +128,7 @@ final class EventAllowlistTests: XCTestCase {
         "reconcile.win.create", "reconcile.win.create.bail",
         "reconcile.win.create.locked", "reconcile.win.create.picker",
         "reconcile.win.create.skip",
-        "reconcile.win.destroy", "reconcile.win.min", "reconcile.win.unmin",
+        "reconcile.win.destroy", "reconcile.win.min", "reconcile.win.unmin", "reconcile.win.unrejected",
         "record.cancel", "record.capture.follow", "record.capture.multi",
         "record.capture.single", "record.countdown", "record.done",
         "record.ffmpeg.missing", "record.start", "record.start.indefinite",

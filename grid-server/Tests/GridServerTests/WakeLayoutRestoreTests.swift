@@ -47,7 +47,7 @@ final class WakeLayoutRestoreTests: XCTestCase {
         let gridState = GridState()
         let validator = StateValidator(
             gridState: gridState,
-            stateManager: StateManager.shared,
+            stateProvider: StateManager.shared,
             connectionID: 0
         )
 
@@ -77,7 +77,7 @@ final class WakeLayoutRestoreTests: XCTestCase {
         let gridState = GridState()
         let validator = StateValidator(
             gridState: gridState,
-            stateManager: StateManager.shared,
+            stateProvider: StateManager.shared,
             connectionID: 0
         )
 
@@ -107,7 +107,7 @@ final class WakeLayoutRestoreTests: XCTestCase {
         let gridState = GridState()
         let validator = StateValidator(
             gridState: gridState,
-            stateManager: StateManager.shared,
+            stateProvider: StateManager.shared,
             connectionID: 0
         )
 
@@ -140,13 +140,13 @@ final class WakeLayoutRestoreTests: XCTestCase {
         reconciler.setup(
             gridState: gridState,
             gridConfig: gridConfig,
-            stateManager: StateManager.shared,
-            simpleBorderManager: borderManager
+            stateProvider: StateManager.shared,
+            borderRenderer: borderManager
         )
 
         let validator = StateValidator(
             gridState: gridState,
-            stateManager: StateManager.shared,
+            stateProvider: StateManager.shared,
             connectionID: 0
         )
         reconciler.setValidator(validator)

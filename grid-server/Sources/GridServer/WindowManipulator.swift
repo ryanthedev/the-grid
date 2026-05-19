@@ -40,9 +40,11 @@ struct ManipulationContext {
 }
 
 /// Helper class for window manipulation operations
-class WindowManipulator {
+// @unchecked Sendable: connectionID and mssClient are write-once at init;
+// all AX/SkyLight calls are safe to issue from any thread.
+class WindowManipulator: @unchecked Sendable {
     private let connectionID: Int32
-    let mssClient: MSSClient  // Internal access for MessageHandler
+    let mssClient: MSSClient
 
     init(connectionID: Int32) {
         self.connectionID = connectionID
@@ -538,3 +540,21 @@ return true
 // External C function for getting window ID from AX element
 @_silgen_name("_AXUIElementGetWindow")
 private func _AXUIElementGetWindow(_ element: AXUIElement, _ wid: UnsafeMutablePointer<UInt32>) -> AXError
+
+// MARK: - WindowController Conformance
+
+extension WindowManipulator: WindowController {
+
+    // Focus window via the WindowController port.
+    // Wraps the synchronous focusWindow(pid:windowID:) as async.
+    func focusWindow(windowID: UInt32, pid: pid_t) async -> Bool {
+        return focusWindow(pid: pid, windowID: windowID)
+    }
+
+    // Set window frame via the WindowController port.
+    // Builds a ManipulationContext internally so callers do not depend on that type.
+    func setWindowFrame(windowID: UInt32, pid: pid_t, frame: CGRect) async -> Bool {
+        let context = ManipulationContext(windowID: windowID, pid: pid)
+        return await setWindowFrame(context: context, frame: frame)
+    }
+}

@@ -95,8 +95,9 @@ class GridCommandRouter {
         gridFocus.setup(
             gridState: gridState,
             gridConfig: gridConfig,
-            stateManager: stateManager,
-            windowManipulator: windowManipulator
+            stateProvider: stateManager,
+            windowController: windowManipulator,
+            stateManagerForOverride: stateManager
         )
         gridFocus.setReconciler(gridReconciler)
 
@@ -119,8 +120,8 @@ class GridCommandRouter {
         gridApply.setup(
             gridState: gridState,
             gridConfig: gridConfig,
-            stateManager: stateManager,
-            windowManipulator: windowManipulator,
+            stateProvider: stateManager,
+            windowController: windowManipulator,
             gridReconciler: gridReconciler,
             simpleBorderManager: simpleBorderManager,
             gridFocus: gridFocus
@@ -800,13 +801,13 @@ class GridCommandRouter {
                     // onNudge fires on main thread; bridge to async actor context
                     Task {
                         if let (wid, frame) = try? await self.gridNudge.move(spaceID: spaceID, direction: direction) {
-                            borderManager.handleWindowMoved(windowID: wid, newFrame: frame)
+                            await borderManager.handleWindowMoved(windowID: wid, newFrame: frame)
                         }
                     }
                 case .resize(let direction):
                     Task {
                         if let (wid, frame) = try? await self.gridNudge.resize(spaceID: spaceID, direction: direction) {
-                            borderManager.handleWindowMoved(windowID: wid, newFrame: frame)
+                            await borderManager.handleWindowMoved(windowID: wid, newFrame: frame)
                         }
                     }
                 case .exit:

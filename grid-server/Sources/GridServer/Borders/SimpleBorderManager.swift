@@ -23,7 +23,9 @@ private func _AXUIElementGetWindow(_ element: AXUIElement, _ windowID: UnsafeMut
 /// - Windows in inactive cells have no borders
 ///
 /// **Thread Safety**: All methods must be called on the main queue.
-class SimpleBorderManager {
+// @unchecked Sendable: all mutable state is accessed on DispatchQueue.main.
+// The class is not an actor but guarantees thread safety via main queue dispatch.
+class SimpleBorderManager: @unchecked Sendable {
     private let connectionID: Int32
 
     // MARK: - State from CLI (via IPC) - Per-Display Storage
@@ -1078,5 +1080,87 @@ class SimpleBorderManager {
         }
 
         return windowID
+    }
+}
+
+// MARK: - BorderRendering Conformance
+
+// Async protocol wrappers that bridge DispatchQueue.main.async into
+// structured concurrency. Each method dispatches to the existing
+// synchronous implementation on main and resumes the continuation
+// when the work completes.
+extension SimpleBorderManager: BorderRendering {
+
+    func setCellAssignments(
+        _ assignments: [UInt32: String],
+        forDisplay displayUUID: String,
+        focusedWindowID: UInt32?,
+        cellStackModes: [String: String],
+        windowOrder: [String: [UInt32]]?,
+        displayFrame: CGRect?,
+        source: String,
+        liveWids: [UInt32]?
+    ) async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            self.setCellAssignments(
+                assignments,
+                forDisplay: displayUUID,
+                focusedWindowID: focusedWindowID,
+                cellStackModes: cellStackModes,
+                windowOrder: windowOrder,
+                displayFrame: displayFrame,
+                source: source,
+                liveWids: liveWids,
+                completion: { continuation.resume() }
+            )
+        }
+    }
+
+    func updateFocus(newFocusedWindow: UInt32, displayUUID: String) async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let span = CurrentSpan.current
+            DispatchQueue.main.async { [weak self, span] in
+                CurrentSpan.$current.withValue(span) {
+                    self?.updateFocusImpl(newFocusedWindow: newFocusedWindow, displayUUID: displayUUID)
+                    continuation.resume()
+                }
+            }
+        }
+    }
+
+    func handleWindowDestroyed(windowID: UInt32) async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let span = CurrentSpan.current
+            DispatchQueue.main.async { [weak self, span] in
+                CurrentSpan.$current.withValue(span) {
+                    self?.handleWindowDestroyedImpl(windowID: windowID)
+                    continuation.resume()
+                }
+            }
+        }
+    }
+
+    func handleWindowMoved(windowID: UInt32, newFrame: CGRect) async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let span = CurrentSpan.current
+            DispatchQueue.main.async { [weak self, span] in
+                CurrentSpan.$current.withValue(span) {
+                    self?.handleWindowMovedImpl(windowID: windowID, newFrame: newFrame)
+                    continuation.resume()
+                }
+            }
+        }
+    }
+
+    func handleDisplayDisconnected(displayUUID: String) async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let span = CurrentSpan.current
+            DispatchQueue.main.async { [weak self, span] in
+                CurrentSpan.$current.withValue(span) {
+                    self?.handleDisplayDisconnectedImpl(displayUUID: displayUUID)
+                    continuation.resume()
+                }
+            }
+        }
     }
 }
