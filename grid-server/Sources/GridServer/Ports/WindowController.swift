@@ -20,4 +20,8 @@ protocol WindowController: AnyObject, Sendable {
     // Set a window's frame via AX API.
     // Returns true if the frame was applied successfully.
     func setWindowFrame(windowID: UInt32, pid: pid_t, frame: CGRect) async -> Bool
+
+    // Move a window to a different space (MSS → SLS → compat fallback chain).
+    // Returns true if the move succeeded.
+    func moveWindowToSpace(windowID: UInt32, spaceID: UInt64) -> Bool
 }

@@ -248,14 +248,12 @@ class GridApply {
         // 11. Apply placements via WindowManipulator (parallel via TaskGroup)
         let failedIDs = await applyPlacementsViaAX(placements)
 
-        // 12. Strip windows that failed AX placement from assignments
-        var finalAssignments = assignment.assignments
+        // 12. Keep assignments even if AX placement failed — windows that can't be
+        //     resized (e.g. iOS Simulator) still belong to their cell. Dead windows
+        //     are cleaned up by reconciler destroy events.
+        let finalAssignments = assignment.assignments
         if !failedIDs.isEmpty {
-            for (cellID, windowIDs) in finalAssignments {
-                let filtered = windowIDs.filter { !failedIDs.contains($0) }
-                finalAssignments[cellID] = filtered.isEmpty ? nil : filtered
-            }
-            finalAssignments = finalAssignments.compactMapValues { $0 }
+            jlog("layout.apply.ax_partial", data: ["failed": failedIDs.sorted()])
         }
 
         // 13. Update GridState
@@ -270,7 +268,7 @@ class GridApply {
         // 14. Sync borders (explicit space/display -- not generic "current space")
         await gridReconciler?.syncBordersForSpace(spaceID, displayUUID: displayUUID)
 
-        jlog("layout.apply.done", data: ["lid": layoutID, "placements": placements.count - failedIDs.count])
+        jlog("layout.apply.done", data: ["lid": layoutID, "placements": placements.count])
     }
 
     // ============================================================

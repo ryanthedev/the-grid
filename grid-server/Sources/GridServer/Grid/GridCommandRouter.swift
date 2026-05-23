@@ -146,6 +146,7 @@ class GridCommandRouter {
         gridWindowMove.setApply(gridApply)
         gridReconciler.setApply(gridApply)
         gridReconciler.setFocus(gridFocus)
+        gridReconciler.setWindowController(windowManipulator)
 
         jlog("router.init")
     }
