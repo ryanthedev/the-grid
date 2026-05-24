@@ -11,6 +11,7 @@ final class MockWindowController: WindowController, @unchecked Sendable {
     enum Call: Equatable {
         case focusWindow(windowID: UInt32, pid: pid_t)
         case setWindowFrame(windowID: UInt32, pid: pid_t, frame: CGRect)
+        case moveWindowToSpace(windowID: UInt32, spaceID: UInt64)
     }
 
     // All recorded calls in order
@@ -19,6 +20,7 @@ final class MockWindowController: WindowController, @unchecked Sendable {
     // Configurable return values
     var focusResult: Bool = true
     var setFrameResult: Bool = true
+    var moveToSpaceResult: Bool = true
 
     func focusWindow(windowID: UInt32, pid: pid_t) async -> Bool {
         calls.append(.focusWindow(windowID: windowID, pid: pid))
@@ -28,6 +30,11 @@ final class MockWindowController: WindowController, @unchecked Sendable {
     func setWindowFrame(windowID: UInt32, pid: pid_t, frame: CGRect) async -> Bool {
         calls.append(.setWindowFrame(windowID: windowID, pid: pid, frame: frame))
         return setFrameResult
+    }
+
+    func moveWindowToSpace(windowID: UInt32, spaceID: UInt64) -> Bool {
+        calls.append(.moveWindowToSpace(windowID: windowID, spaceID: spaceID))
+        return moveToSpaceResult
     }
 }
 
