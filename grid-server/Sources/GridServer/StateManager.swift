@@ -1317,6 +1317,22 @@ var windows: [String: WindowState] = [:]
             window.title = name
         }
 
+        // Re-query AX properties when role is nil (phantom windows that
+        // started with no AX data may now have real properties).
+        if window.role == nil {
+            let axProps = getAXProperties(pid: window.pid, windowID: windowID)
+            if let role = axProps.role {
+                window.role = role
+                window.subrole = axProps.subrole
+                window.parent = axProps.parent
+                window.hasCloseButton = axProps.hasCloseButton
+                window.hasFullscreenButton = axProps.hasFullscreenButton
+                window.hasMinimizeButton = axProps.hasMinimizeButton
+                window.hasZoomButton = axProps.hasZoomButton
+                window.isModal = axProps.isModal
+            }
+        }
+
         // Recompute displayUUID and derive space from display
         let originalSpaces = window.spaces
         window.displayUUID = computeDisplayUUID(for: window)
