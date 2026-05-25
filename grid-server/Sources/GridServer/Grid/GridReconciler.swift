@@ -29,6 +29,7 @@ class GridReconciler: StateEventHandler {
     // Weak references to GridApply and GridFocus for picker-launched window handling
     private weak var gridApply: GridApply?
     private weak var gridFocus: GridFocus?
+    private weak var windowController: (any WindowController)?
 
     // Strong reference to StateValidator — GridReconciler is the owning reference
     // that keeps the validator (and its periodic timer) alive for process lifetime
@@ -207,6 +208,10 @@ class GridReconciler: StateEventHandler {
         self.gridFocus = focus
     }
 
+    func setWindowController(_ controller: any WindowController) {
+        self.windowController = controller
+    }
+
     func setValidator(_ validator: StateValidator) {
         self.stateValidator = validator
     }
@@ -319,7 +324,10 @@ class GridReconciler: StateEventHandler {
         )
         source.setEventHandler { [weak self] in
             guard let self else { return }
-            Task { await self.focusSweep() }
+            Task {
+                await self.focusSweep()
+                await self.rejectedWindowSweep()
+            }
         }
         sweepTimer = source
         source.resume()
@@ -368,6 +376,37 @@ class GridReconciler: StateEventHandler {
             "cell": cellID,
             "space": spaceID,
         ])
+    }
+
+    // Re-check rejected windows that may now be tileable.
+    // Catches apps (Chrome, Ghostty) that create phantom 0x0 windows at launch
+    // then fill in real dimensions without firing AX move/resize notifications.
+    private func rejectedWindowSweep() async {
+        guard !suppressReconciliation else { return }
+        guard let gridState, let stateProvider else { return }
+
+        let rejected = await gridState.getRejectedWindows()
+        guard !rejected.isEmpty else { return }
+
+        let wmState = await stateProvider.getState()
+
+        for wid in rejected {
+            guard let windowState = wmState.windows[String(wid)] else { continue }
+            guard isTileable(window: windowState) else { continue }
+
+            await gridState.unrejectWindow(wid)
+            jlog("sweep.unrejected", data: [
+                "wid": wid,
+                "w": windowState.frame.width,
+                "h": windowState.frame.height,
+            ])
+
+            if pendingLaunchTarget != nil {
+                await handlePendingLaunchWindow(wid, windowState.pid)
+            } else {
+                await handleWindowCreated(wid, windowState.pid)
+            }
+        }
     }
 
     // MARK: - StateEventHandler
@@ -720,18 +759,31 @@ class GridReconciler: StateEventHandler {
             return
         }
 
-        // Consume target: window appeared on the wrong space (unrecoverable mismatch).
-        // Use the window's actual OS-level space, not the focused space.
+        // Window appeared on the wrong space — try to move it to the target space.
         let actualSpaceID = windowState.spaces.first.map { String($0) }
             ?? findCurrentSpaceID(from: wmState)
         if actualSpaceID == nil || actualSpaceID != target.spaceID {
-            pendingLaunchTarget = nil
-            jlog("reconcile.pending.space.mismatch", data: [
+            guard let targetSpaceNum = UInt64(target.spaceID) else {
+                pendingLaunchTarget = nil
+                await handleWindowCreated(windowID, pid)
+                return
+            }
+            let moved = windowController?.moveWindowToSpace(windowID: windowID, spaceID: targetSpaceNum) ?? false
+            if !moved {
+                pendingLaunchTarget = nil
+                jlog("reconcile.pending.space.mismatch", data: [
+                    "expected": target.spaceID,
+                    "actual": actualSpaceID ?? "nil",
+                    "move": "failed",
+                ])
+                await handleWindowCreated(windowID, pid)
+                return
+            }
+            jlog("reconcile.pending.space.moved", data: [
                 "expected": target.spaceID,
                 "actual": actualSpaceID ?? "nil",
+                "wid": windowID,
             ])
-            await handleWindowCreated(windowID, pid)
-            return
         }
 
         // Consume target: target space lost its layout (unrecoverable)
