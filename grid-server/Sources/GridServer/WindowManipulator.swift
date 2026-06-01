@@ -123,10 +123,32 @@ class WindowManipulator: @unchecked Sendable {
         return true
     }
 
+    /// Returns true if the window's AX size attribute can be set.
+    /// Fixed-size windows (e.g. the iOS Simulator, which keeps a device aspect
+    /// ratio) report the size attribute as non-settable and return
+    /// kAXErrorFailure if asked to resize. On query failure we assume settable
+    /// to preserve the prior best-effort behavior.
+    func isSizeSettable(element: AXUIElement) -> Bool {
+        var settable: DarwinBoolean = false
+        let err = AXUIElementIsAttributeSettable(element, kAXSizeAttribute as CFString, &settable)
+        guard err == .success else { return true }
+        return settable.boolValue
+    }
+
     /// Set both window position and size via AX API
     func setWindowFrame(element: AXUIElement, frame: CGRect) -> Bool {
         // Set position and size separately
         let positionSuccess = setWindowPosition(element: element, point: frame.origin)
+
+        // Skip sizing fixed-size windows (e.g. iOS Simulator). Attempting it
+        // returns kAXErrorFailure, which would be logged as ax.fail and counted
+        // as a placement failure (layout.apply.ax_partial), even though there is
+        // nothing wrong — the window simply keeps its natural size in the cell.
+        if !isSizeSettable(element: element) {
+            JSONLogger.shared.log("win.size.fixed", data: ["w": frame.size.width, "h": frame.size.height])
+            return positionSuccess
+        }
+
         let sizeSuccess = setWindowSize(element: element, size: frame.size)
 
         return positionSuccess && sizeSuccess
