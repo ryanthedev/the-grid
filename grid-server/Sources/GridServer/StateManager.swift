@@ -530,6 +530,22 @@ actor StateManager: StateEventHandler, StateProvider {
 
     /// Get AX properties for a window (role, subrole, buttons, modal status)
     /// Used for client-side floating/popup detection
+    /// Pure decision for the single-AX-window fallback in getAXProperties.
+    ///
+    /// Returns true (promote the queried window using the sole AX window's
+    /// properties) only when that sole window's CG ID is unresolvable, zero, or
+    /// equals the queried ID. A resolvable ID that differs means the queried
+    /// window is a distinct phantom and must NOT inherit the real window's
+    /// tileable role. Extracted as a static pure helper so the branches can be
+    /// unit-tested without driving real AX queries.
+    static func shouldUseSoleWindowFallback(
+        resolved: AXError,
+        soleWindowID: UInt32,
+        queriedID: UInt32
+    ) -> Bool {
+        return resolved != .success || soleWindowID == 0 || soleWindowID == queriedID
+    }
+
     private func getAXProperties(pid: pid_t, windowID: UInt32) -> AXWindowProperties {
         let appElement = AXUIElementCreateApplication(pid)
 
@@ -556,10 +572,27 @@ actor StateManager: StateEventHandler, StateProvider {
             }
         }
 
-        // Fallback: If only one AX window exists, use it (handles apps like Ghostty
-        // where SkyLight reports multiple phantom window IDs but AX only sees one real window)
+        // Fallback: a single AX window whose own CGWindowID is UNRESOLVABLE is
+        // ambiguous — assume the queried ID refers to it. This handles apps like
+        // Ghostty where SkyLight reports phantom window IDs but AX exposes one
+        // real window that does not resolve back to a concrete CG window ID.
+        //
+        // But when that single AX window DOES resolve to a concrete ID different
+        // from the queried one, the queried window is a distinct phantom (e.g. the
+        // transient helper windows AnycubicSlicerNext spawns at launch). Promoting
+        // it would hand the phantom the real window's tileable role, letting it
+        // pollute a cell until the validator prunes it as ax_orphan — the source
+        // of the resize churn and focus storms. Reject it instead.
         if windows.count == 1 {
-            return extractAXProperties(from: windows[0])
+            var soleWindowID: UInt32 = 0
+            let resolved = _AXUIElementGetWindow(windows[0], &soleWindowID)
+            if StateManager.shouldUseSoleWindowFallback(
+                resolved: resolved,
+                soleWindowID: soleWindowID,
+                queriedID: windowID
+            ) {
+                return extractAXProperties(from: windows[0])
+            }
         }
 
         return AXWindowProperties()
