@@ -175,7 +175,7 @@ final class EventAllowlistTests: XCTestCase {
         "win.created", "win.deminimized", "win.destroyed",
         "win.focus", "win.focus.app", "win.focus.restore",
         "win.minimized", "win.move", "win.refresh",
-        "win.space.timing", "win.spaces",
+        "win.size.fixed", "win.space.timing", "win.spaces",
         "winmove.cross.timing", "winmove.init", "winmove.setup",
         "ws.lock", "ws.register", "ws.screen", "ws.space",
         "ws.stop", "ws.unlock", "ws.wake", "ws.willsleep",
