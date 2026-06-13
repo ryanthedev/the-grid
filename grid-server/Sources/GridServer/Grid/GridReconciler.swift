@@ -397,6 +397,11 @@ class GridReconciler: StateEventHandler {
         guard !suppressReconciliation else { return }
         guard let gridState, let stateProvider else { return }
 
+        // #13: snapshot the action generation BEFORE the awaits below. If an
+        // action begins while the sweep is suspended, this changes and the
+        // sweep's read is stale — bail before writing a reverted focus.
+        let genAtStart = generation
+
         let wmState = await stateProvider.getState()
         guard let osWindowID = wmState.metadata.focusedWindowID, osWindowID != 0 else { return }
 
@@ -413,6 +418,28 @@ class GridReconciler: StateEventHandler {
 
         let cellWindows = await gridState.getCellWindows(spaceID: spaceID, cellID: cellID)
         let windowIndex = cellWindows.firstIndex(of: osWindowID) ?? 0
+
+        // #13: re-check the guard immediately before the write. Skip if a move
+        // fenced this window (or a cell-mate), if an action began mid-sweep
+        // (generation changed), or if suppression turned on. Without this the
+        // sweep reverts focus to the pre-move window ~0-300ms after a command.
+        let osWindowFenced = isWindowFenced(osWindowID)
+        let cellMateFenced = osWindowFenced ? false : await isCellMateOfFencedWindow(osWindowID)
+        guard shouldSweepCorrect(
+            osWindowFenced: osWindowFenced,
+            cellMateFenced: cellMateFenced,
+            genAtStart: genAtStart,
+            genNow: generation,
+            suppressed: suppressReconciliation
+        ) else {
+            jlog("sweep.skip", data: [
+                "osWid": osWindowID,
+                "fenced": osWindowFenced || cellMateFenced,
+                "genChanged": genAtStart != generation,
+            ])
+            return
+        }
+
         await gridState.setFocus(spaceID: spaceID, cellID: cellID, windowIndex: windowIndex)
 
         // Find display for this space and sync borders
@@ -1173,14 +1200,19 @@ class GridReconciler: StateEventHandler {
     }
 
     private func handleWindowMinimized(_ windowID: UInt32) async {
-        // Minimized window should be removed from cell assignment
+        // Minimized window should be removed from cell assignment.
         guard let gridState else { return }
 
-        let currentSpaceID = await findCurrentSpaceIDAsync()
-        if let spaceID = currentSpaceID {
-            await gridState.removeWindow(windowID, fromSpace: spaceID)
-            await syncBordersForCurrentSpace()
+        // #30: resolve the window's TRACKED space, not the focused display's
+        // active space. A window minimized on another display/space (or via
+        // CLI) was previously removed from the wrong space (a silent no-op),
+        // leaving its cell slot reserved forever. Fall back to all-spaces.
+        if let trackedSpaceID = await gridState.findSpaceContaining(windowID: windowID) {
+            await gridState.removeWindow(windowID, fromSpace: trackedSpaceID)
+        } else {
+            await gridState.removeWindowFromAllSpaces(windowID)
         }
+        await syncBordersForCurrentSpace()
 
         jlog("reconcile.win.min", data: ["wid": windowID])
     }

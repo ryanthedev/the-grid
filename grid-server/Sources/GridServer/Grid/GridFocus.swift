@@ -57,10 +57,11 @@ class GridFocus {
     // Used only by cross-display focus navigation.
     private weak var stateManagerForOverride: StateManager?
 
-    // Tracks recent focus-mismatch pairs to detect ping-pong loops across
-    // repeated focusWindowByID calls. Bails to accept-OS-reality when the
-    // same (requested, actual) pair flips >3 times within 2s.
-    private var focusLoopDetector = FocusLoopDetector()
+    // Tracks recent focus attempts to detect ping-pong loops across repeated
+    // focusWindowByID calls. Actor-isolated (#35): GridFocus is a plain class
+    // invoked concurrently from the command path, the reconciler event path,
+    // and the 300ms sweep — a bare struct field raced its backing Array.
+    private let focusLoopActor = FocusLoopActor()
 
     init() {}
 
@@ -181,8 +182,23 @@ class GridFocus {
             }
         }
 
-        // Pick closest candidate by center distance
-        let targetCell = pickClosestCell(currentCell: currentCell, candidates: candidates, cellBounds: calculated.cellBounds)
+        // #8: order candidates by closeness, then pick the first that actually
+        // has windows. Pressing toward an empty cell (e.g. the usually-empty
+        // 'notify' cell) must skip to the next non-empty cell / wrap target
+        // instead of dead-ending on noWindowsInCell.
+        let orderedCandidates = orderCandidatesByCloseness(
+            currentCell: currentCell, candidates: candidates, cellBounds: calculated.cellBounds)
+        let candidateCounts = await cellWindowCounts(
+            spaceID: spaceID, cellIDs: orderedCandidates)
+        guard let targetCell = selectNonEmptyCandidate(
+            orderedCandidates: orderedCandidates, cellWindowCounts: candidateCounts) else {
+            jlog("focus.skip_empty", data: [
+                "dir": direction.rawValue,
+                "cell": currentCell,
+                "candidates": orderedCandidates.count,
+            ])
+            throw GridFocusError.noCellInDirection
+        }
 
         // Focus the target cell (updates GridState, triggers AX focus)
         let windowID = try await focusCellByID(spaceID: spaceID, cellID: targetCell)
@@ -221,16 +237,22 @@ class GridFocus {
             cellID = firstCell
         }
 
-        var cellWindows = await gridState.getCellWindows(spaceID: spaceID, cellID: cellID)
+        let rawCellWindows = await gridState.getCellWindows(spaceID: spaceID, cellID: cellID)
 
-        // Prune dead windows (closed but not yet cleaned up from GridState)
+        // Prune dead windows (closed but not yet cleaned up from GridState).
+        // #42: await the removeWindow BEFORE the later setFocus so setFocus
+        // indexes the pruned state — a detached Task could land after setFocus,
+        // which then recorded a dead/wrong successor.
+        var cellWindows: [UInt32] = []
         var pruned = false
-        cellWindows = cellWindows.filter { wid in
-            if wmState.windows[String(wid)] != nil { return true }
-            Task { await gridState.removeWindow(wid, fromSpace: spaceID) }
+        for wid in rawCellWindows {
+            if wmState.windows[String(wid)] != nil {
+                cellWindows.append(wid)
+                continue
+            }
+            await gridState.removeWindow(wid, fromSpace: spaceID)
             jlog("focus.prune", data: ["wid": wid, "cell": cellID])
             pruned = true
-            return false
         }
 
         guard !cellWindows.isEmpty else {
@@ -312,14 +334,19 @@ class GridFocus {
             throw GridFocusError.noLayout
         }
 
-        // Prune dead windows before focusing
+        // Prune dead windows before focusing.
+        // #42: await the removeWindow before the later setFocus so the focus
+        // index is computed against the pruned list (not a detached race).
         let wmState = await stateProvider.getState()
-        var cellWindows = await gridState.getCellWindows(spaceID: spaceID, cellID: cellID)
-        cellWindows = cellWindows.filter { wid in
-            if wmState.windows[String(wid)] != nil { return true }
-            Task { await gridState.removeWindow(wid, fromSpace: spaceID) }
+        let rawCellWindows = await gridState.getCellWindows(spaceID: spaceID, cellID: cellID)
+        var cellWindows: [UInt32] = []
+        for wid in rawCellWindows {
+            if wmState.windows[String(wid)] != nil {
+                cellWindows.append(wid)
+                continue
+            }
+            await gridState.removeWindow(wid, fromSpace: spaceID)
             jlog("focus.prune", data: ["wid": wid, "cell": cellID])
-            return false
         }
         guard !cellWindows.isEmpty else {
             throw GridFocusError.noWindowsInCell(cellID)
@@ -398,73 +425,68 @@ class GridFocus {
             return windowID
         }
 
-        // Attempt 1: AX focus
+        // Attempt 1: AX focus.
+        // #21: success now reflects the real AX/CG result. A false result means
+        // focus genuinely did not move — propagate it instead of pretending.
         let success = await windowController.focusWindow(windowID: windowID, pid: windowState.pid)
         if !success {
+            jlog("warn.focus", data: ["reason": "focus_returned_false", "wid": Int(windowID)])
             throw GridFocusError.focusFailed(windowID)
         }
 
-        // Yield one runloop tick before reading the verification state.
-        // The macOS appActivated notification delivers focusedWindowID
-        // updates asynchronously; without this yield, the verification
-        // read can fire before the notification lands and report the
-        // *previous* focused window as actual, producing a spurious
-        // mismatch. The cycleFocus same-cell race branch is a backstop
-        // for cases where a single yield isn't enough.
+        // #7: a successful port call is authoritative for the requested window —
+        // it IS now focused. The event-fed cache (metadata.focusedWindowID) lags
+        // a main-runloop round trip, so reading it here historically reported the
+        // PREVIOUS window and triggered a spurious second raise. We no longer
+        // double-raise off the stale cache.
+        //
+        // Record the focus synchronously where a StateManager is wired so the
+        // cache converges immediately (the cross-display path wires this; the
+        // command path's StateManager updates via the AX event).
+        await stateManagerForOverride?.setFocusedWindow(windowID)
+
+        // Yield one runloop tick so an in-flight appActivated notification for a
+        // genuine OS focus steal (not our own lagging event) can land before the
+        // loop-detection read below.
         await Task.yield()
 
-        // Verify: read cached focused window ID (no OS call).
-        // Re-read state after the focus call to see what the OS reports.
+        // Per-requested-window loop detection (#43): only used to bail out of a
+        // persistent OS re-steal. The detector observes the actual cache value
+        // (including the nil-actual case). On a trip we accept OS reality.
         let postState = await stateProvider.getState()
         let actualFocusedWID = postState.metadata.focusedWindowID
 
-        if let actualWID = actualFocusedWID, actualWID != windowID {
-            // Mismatch: OS focused a different window. Retry once.
-            jlog("focus.mismatch", data: [
-                "requested": Int(windowID),
-                "actual": Int(actualWID),
-                "retry": true,
-            ])
-
-            // Loop detection: if this pair has been flipping repeatedly across
-            // recent calls, skip the retry and accept OS reality instead of
-            // contributing to an unbounded ping-pong.
-            if let trip = focusLoopDetector.observe(
-                requested: windowID,
-                actual: actualWID,
-                now: CFAbsoluteTimeGetCurrent()
-            ) {
-                let lowWid = min(windowID, actualWID)
-                let highWid = max(windowID, actualWID)
-                jlog("focus.loop", data: [
-                    "pair": [Int(lowWid), Int(highWid)],
-                    "count": trip.count,
-                    "dur_ms": trip.durationMs,
-                ])
-                jlog("focus.mismatch.accept", data: [
-                    "requested": Int(windowID),
-                    "actual": Int(actualWID),
-                ])
-                return actualWID
-            }
-
-            // Attempt 2: retry AX focus
-            _ = await windowController.focusWindow(windowID: windowID, pid: windowState.pid)
-
-            // Check again after retry
-            let retryState = await stateProvider.getState()
-            let retryActualWID = retryState.metadata.focusedWindowID
-
-            if let retryWID = retryActualWID, retryWID != windowID {
-                // Still mismatched after retry. Accept OS reality.
-                jlog("focus.mismatch.accept", data: [
-                    "requested": Int(windowID),
-                    "actual": Int(retryWID),
-                ])
-                return retryWID
-            }
+        // Self-match (or cache not yet updated to a *different* window): the
+        // requested focus stands — return it without any retry.
+        if actualFocusedWID == nil || actualFocusedWID == windowID {
+            return windowID
         }
 
+        // The cache reports a DIFFERENT window. This is either our own lagging
+        // event (benign) or a real OS re-steal. Consult the per-requested-window
+        // detector; a sustained loop trips and we accept reality.
+        let actualWID = actualFocusedWID!
+        if let trip = await focusLoopActor.observeRequested(
+            requested: windowID,
+            actual: actualWID,
+            now: CFAbsoluteTimeGetCurrent()
+        ) {
+            jlog("focus.loop", data: [
+                "requested": Int(windowID),
+                "actual": Int(actualWID),
+                "count": trip.count,
+                "dur_ms": trip.durationMs,
+            ])
+            jlog("focus.mismatch.accept", data: [
+                "requested": Int(windowID),
+                "actual": Int(actualWID),
+            ])
+            return actualWID
+        }
+
+        // Not a sustained loop: trust our successful raise for the requested
+        // window. Downstream same-cell handling (cycleFocus.detectFocusRace)
+        // covers the genuine late-notification case.
         return windowID
     }
 
@@ -760,6 +782,43 @@ class GridFocus {
         }
 
         return candidates
+    }
+
+    // orderCandidatesByCloseness: sort candidate cells by center distance to the
+    // current cell (closest first), with a deterministic cellID tiebreaker.
+    // Feeds the #8 empty-cell skip so the nearest NON-EMPTY cell wins.
+    func orderCandidatesByCloseness(
+        currentCell: String,
+        candidates: [String],
+        cellBounds: [String: CGRect]
+    ) -> [String] {
+        guard let currentBounds = cellBounds[currentCell] else { return candidates }
+        let currentCenter = currentBounds.center
+        return candidates.sorted { a, b in
+            let da = distance(cellBounds[a]?.center, currentCenter)
+            let db = distance(cellBounds[b]?.center, currentCenter)
+            if da != db { return da < db }
+            return a < b
+        }
+    }
+
+    // distance: euclidean distance, or +inf for a missing point.
+    private func distance(_ p: CGPoint?, _ q: CGPoint) -> Double {
+        guard let p else { return .greatestFiniteMagnitude }
+        let dx = p.x - q.x
+        let dy = p.y - q.y
+        return sqrt(dx * dx + dy * dy)
+    }
+
+    // cellWindowCounts: live window count per candidate cell (for #8 skip).
+    private func cellWindowCounts(spaceID: String, cellIDs: [String]) async -> [String: Int] {
+        guard let gridState else { return [:] }
+        var counts: [String: Int] = [:]
+        for cellID in cellIDs {
+            let windows = await gridState.getCellWindows(spaceID: spaceID, cellID: cellID)
+            counts[cellID] = windows.count
+        }
+        return counts
     }
 
     // pickClosestCell: pick cell closest to current cell's center

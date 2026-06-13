@@ -3,7 +3,7 @@
 **Created:** 2026-06-12
 **Status:** in-progress
 **Started:** 2026-06-12 21:36
-**Current Phase:** 2
+**Current Phase:** 3
 **Complexity:** complex
 **Workspace:** worktree `.claude/worktrees/thegrid-concurrency-correctness-fixes` · branch `feature/thegrid-concurrency-correctness-fixes`
 
@@ -409,4 +409,11 @@ The residual races approach B does **not** fix for free — event-stream-vs-comm
 - [x] REVIEW: Verification passed (all 7 DW + 4 edge cases + 4 constraints, 131/131 suite)
 - [x] Committed
 Commit: 1b68a36
-Summary: Shipped the serial `CommandExecutor` (AsyncStream + single consumer; MessageHandler/BFD submit through it) and four reconciler primitives — `RefcountedFence`, `GenerationCounter` (monotonic `generation` bumped per action), `SuppressedEventQueue` (windowCreated/Destroyed queued+replayed at depth 0), consume-once `ActionToken` — plus a serial nudge-step pump. Fixed #3 #4 #5 #11 #12 #14 #50. The four primitives + `CommandRunning`/`CommandExecutor` seam are the contract P2–P7 consume; reconciler stays a class (Approach B). Build clean, 131 tests green.
+Summary: Shipped the serial `CommandExecutor` (AsyncStream + single consumer; MessageHandler/BFD submit through it) and four reconciler primitives — `RefcountedFence`, `GenerationCounter` (monotonic `generation` bumped per action), `SuppressedEventQueue` (windowCreated/Destroyed queued+replayed at depth 0), consume-once `ActionToken` — plus a serial nudge-step pump. Fixed #3 #4 #5 #11 #12 #14 #50. The four primitives + `CommandRunning`/`CommandExecutor` seam are the contract P2–P7 consume; reconciler stays a class (Approach B). Build clean, 131 tests green. UAT live-confirmed serialization (inflight≤1 over 41 cmds) + fence balance + zero errors; nudge double-enter (#4/#50) and suppressed-replay (#12) are hotkey-only, mechanism proven by tests.
+
+### Phase 2: Space & wake state migration (Gate: Full)
+- [x] BUILD: Discovery + design + TDD implementation complete
+- [x] REVIEW: fail→pass (1 retry — DW-2.3 stale-write abort predicate corrected); all 9 DW verified, 165/165 suite
+- [x] Committed
+Commit: db7d703
+Summary: Migration now fires only on true space-ID reassignment (new `spaceActivated` event for plain switches); `migrateSpaceIDs` numeric-sorts + guards a significant-state destination; added `displayGeometryChanged` (frame-diff, debounced reapply), lock-aware validator resume on wake, zero-bounds layout guard, per-handler active-space re-resolve, and a mid-apply zombie-write abort keyed on target-space disappearance. New pure policy module `Grid/SpaceMigrationPolicy.swift` (classifySpaceChange / canMigrate / confirmActiveSpace / shouldAbortStaleWrite / LayoutBoundsPolicy / DisplayGeometryPolicy). Fixed #2 #6 #20 #23 #24 #25 #26 #51 #52; #62s/#63s instrumented only. New events: `spaceActivated`, `displayGeometryChanged`. Build clean, 165 tests green.

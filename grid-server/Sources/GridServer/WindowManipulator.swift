@@ -463,9 +463,15 @@ return true
             return focusWindowFallback(pid: pid, windowID: windowID)
         }
 
-        // 2. Set front process with window context
+        // 2. Set front process with window context.
+        // #21: capture the CGError instead of discarding it.
+        var slpsFrontSucceeded = false
         withUnsafePointer(to: psn) { psnPtr in
-            _ = SLPSSetFrontProcessWithOptions(psnPtr, windowID, kCPSUserGenerated)
+            let err = SLPSSetFrontProcessWithOptions(psnPtr, windowID, kCPSUserGenerated)
+            slpsFrontSucceeded = (err == .success)
+        }
+        if !slpsFrontSucceeded {
+            JSONLogger.shared.log("warn.focus", data: ["reason": "slps_front_fail", "wid": windowID])
         }
 
         // 3. Synthesize key window events
@@ -473,12 +479,29 @@ return true
             makeKeyWindow(psn: psnPtr, windowID: windowID)
         }
 
-        // 4. AX raise as final step (same order as yabai)
+        // 4. AX raise as final step (same order as yabai).
+        // #21: a missing AX element means no raise happened — that is a real
+        // failure, not a silent success.
+        var axElementPresent = false
+        var axRaiseSucceeded = false
         if let element = getAXElement(pid: pid, windowID: windowID) {
-            AXUIElementPerformAction(element, kAXRaiseAction as CFString)
+            axElementPresent = true
+            let raiseErr = AXUIElementPerformAction(element, kAXRaiseAction as CFString)
+            axRaiseSucceeded = (raiseErr == .success)
+            if !axRaiseSucceeded {
+                JSONLogger.shared.log("warn.focus", data: ["reason": "ax_raise_fail", "wid": windowID])
+            }
+        } else {
+            JSONLogger.shared.log("warn.focus", data: ["reason": "no_ax_element", "wid": windowID])
         }
 
-        return true
+        // #21: classify the real outcome instead of returning true unconditionally.
+        return classifyFocusResult(FocusRaiseOutcome(
+            psnResolved: true,
+            slpsFrontSucceeded: slpsFrontSucceeded,
+            axElementPresent: axElementPresent,
+            axRaiseSucceeded: axRaiseSucceeded
+        ))
     }
 
     /// Fallback focus method (MSS + NSRunningApplication + AX)
@@ -490,8 +513,16 @@ return true
         if let app = NSRunningApplication(processIdentifier: pid) {
             app.activate(options: [.activateIgnoringOtherApps])
         }
-        if let element = getAXElement(pid: pid, windowID: windowID) {
-            AXUIElementPerformAction(element, kAXRaiseAction as CFString)
+        // #21: the AX raise is the only step whose outcome confirms focus
+        // actually moved. A missing element / failed raise is a real failure.
+        guard let element = getAXElement(pid: pid, windowID: windowID) else {
+            JSONLogger.shared.log("warn.focus", data: ["reason": "fallback_no_ax_element", "wid": windowID])
+            return false
+        }
+        let raiseErr = AXUIElementPerformAction(element, kAXRaiseAction as CFString)
+        if raiseErr != .success {
+            JSONLogger.shared.log("warn.focus", data: ["reason": "fallback_ax_raise_fail", "wid": windowID])
+            return false
         }
         return true
     }

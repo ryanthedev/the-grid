@@ -77,6 +77,11 @@ struct FocusState {
     let previousSpaceID: UInt64?
     let previousDisplayUUID: String?
     let trigger: FocusTrigger
+    // #17: monotonic sequence stamped in-order at notification-capture time.
+    // The per-callback Task{} can reorder events before they reach the actor;
+    // applyWindowFocus consults FocusSequenceGate to drop an older-than-current
+    // event so a stale focus cannot overwrite a newer one. 0 = unstamped.
+    let seq: UInt64
 
     /// Convenience initializer with defaults for previous state fields
     init(
@@ -86,7 +91,8 @@ struct FocusState {
         previousWindowID: UInt32? = nil,
         previousSpaceID: UInt64? = nil,
         previousDisplayUUID: String? = nil,
-        trigger: FocusTrigger
+        trigger: FocusTrigger,
+        seq: UInt64 = 0
     ) {
         self.windowID = windowID
         self.spaceID = spaceID
@@ -95,6 +101,25 @@ struct FocusState {
         self.previousSpaceID = previousSpaceID
         self.previousDisplayUUID = previousDisplayUUID
         self.trigger = trigger
+        self.seq = seq
+    }
+}
+
+// MARK: - FocusEventSequence (#17)
+
+// Thread-safe monotonic source for focus-event sequence numbers. Stamped
+// synchronously at the in-order notification-capture sites (AX callback /
+// workspace activation) BEFORE the reordering per-callback Task{}, so the
+// apply-side gate can reject a stale event that lost the race.
+enum FocusEventSequence {
+    private static let lock = NSLock()
+    private static var counter: UInt64 = 0
+
+    static func next() -> UInt64 {
+        lock.lock()
+        defer { lock.unlock() }
+        counter &+= 1
+        return counter
     }
 }
 

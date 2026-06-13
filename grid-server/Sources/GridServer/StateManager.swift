@@ -46,6 +46,11 @@ actor StateManager: StateEventHandler, StateProvider {
     // Used to distinguish CLI-initiated focus from external (click) focus
     private var cliFocusTimestamps: [UInt32: Date] = [:]
 
+    // #17: highest focus-event sequence applied so far. Stamped in-order at the
+    // notification-capture site; a strictly-older stamped event is rejected here
+    // so a reordered stale focus cannot invert a newer one.
+    private var lastFocusSeq: UInt64 = 0
+
     // How long to consider a focus as "CLI-initiated" (prevents loop)
     private let cliFocusWindow: TimeInterval = 0.5
 
@@ -226,7 +231,7 @@ actor StateManager: StateEventHandler, StateProvider {
 
         case .focusChanged(let state):
             if let windowID = state.windowID {
-                await handleWindowFocused(windowID)
+                await handleWindowFocused(windowID, seq: state.seq)
             }
             switch state.trigger {
             case .spaceSwitched:
@@ -1607,7 +1612,21 @@ var windows: [String: WindowState] = [:]
         // EventRouter handles logging and BorderEvents notification
     }
 
-    private func handleWindowFocused(_ windowID: UInt32) async {
+    private func handleWindowFocused(_ windowID: UInt32, seq: UInt64 = 0) async {
+        // #17: drop a stale (reordered-older) focus event. An unstamped event
+        // (seq == 0, e.g. internal/test path) always applies. Once a stamped
+        // event applies, a strictly-older stamped event is rejected so a focus
+        // that lost the executor race cannot overwrite a newer one.
+        if seq != 0 {
+            guard FocusSequenceGate.shouldApply(incomingSeq: seq, lastAppliedSeq: lastFocusSeq) else {
+                JSONLogger.shared.log("focus.seq.reject", data: [
+                    "wid": windowID, "seq": seq, "lastSeq": lastFocusSeq,
+                ])
+                return
+            }
+            lastFocusSeq = seq
+        }
+
         let stateSpan = await CurrentSpan.current?.startChild("state", data: ["wid": Int(windowID)])
 
         // Capture previous state BEFORE applyWindowFocus overwrites metadata
@@ -1883,6 +1902,21 @@ return
         guard let window = state.windows[String(windowID)],
               !window.isHidden && !window.isMinimized else {
 return
+        }
+
+        // #59s (suspected): instrument-only. If the last-focused window has since
+        // left this space, restoring it would AX-raise it and yank the user back
+        // to the window's CURRENT space. Log the skip signal so UAT can confirm
+        // or drop the finding; behavior is intentionally unchanged for now.
+        if shouldSkipRestore(windowSpaces: window.spaces, spaceID: spaceID) {
+            Task {
+                JSONLogger.shared.log("win.focus.restore.skip", data: [
+                    "sid": spaceID,
+                    "wid": windowID,
+                    "winSpaces": window.spaces.map { Int($0) },
+                    "app": window.appName ?? "unknown",
+                ])
+            }
         }
 
         Task {

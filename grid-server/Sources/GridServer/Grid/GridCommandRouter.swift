@@ -188,7 +188,13 @@ class GridCommandRouter {
             case "cell":
                 return try await handleCell(parsed)
             case "window":
-                return try await handleWindow(parsed)
+                // #13: wrap window commands (move/swap) in executeAction so the
+                // 300ms focusSweep is suppressed while the move runs. Without
+                // this the sweep fires mid-move, reads the not-yet-updated OS
+                // focus, and reverts GridState focus to the pre-move window.
+                return try await gridReconciler.executeAction(label: "window.\(parsed.action)") {
+                    try await handleWindow(parsed)
+                }
             case "resize":
                 return try await handleResize(parsed)
             case "mouse":
