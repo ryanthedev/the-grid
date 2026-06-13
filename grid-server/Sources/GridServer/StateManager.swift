@@ -676,6 +676,37 @@ actor StateManager: StateEventHandler, StateProvider {
         return AXWindowProperties()
     }
 
+    /// Re-query a single window's AX properties and update its cached WindowState.
+    ///
+    /// #41 Chrome torn-tab grace rescue: the fullscreen-button AX query can race
+    /// an app's window creation and cache `hasFullscreenButton == false`, which
+    /// classifyWindow reads as a floating PIP. classifyWindow is only re-run from
+    /// the reconciler's grace sweep, which previously re-classified the STALE
+    /// snapshot. Refreshing AX here lets the sweep classify live state so a
+    /// slow-button window tiles without a manual reopen.
+    ///
+    /// Returns the refreshed WindowState, or nil when the window is no longer
+    /// tracked (the grace sweep then drops it).
+    func refreshWindowAXProperties(_ windowID: UInt32) async -> WindowState? {
+        guard var window = state.windows[String(windowID)] else {
+            return nil
+        }
+        let axProps = getAXProperties(pid: window.pid, windowID: windowID)
+        window.role = axProps.role
+        window.subrole = axProps.subrole
+        window.parent = axProps.parent
+        window.hasCloseButton = axProps.hasCloseButton
+        window.hasFullscreenButton = axProps.hasFullscreenButton
+        window.hasMinimizeButton = axProps.hasMinimizeButton
+        window.hasZoomButton = axProps.hasZoomButton
+        window.isModal = axProps.isModal
+        if let axTitle = axProps.title, !axTitle.isEmpty {
+            window.axTitle = axTitle
+        }
+        state.windows[String(windowID)] = window
+        return window
+    }
+
     /// Check if a window from the given PID should be tracked
     /// Returns false if:
     /// 1. The app is not tracked (non-.regular activation policy)

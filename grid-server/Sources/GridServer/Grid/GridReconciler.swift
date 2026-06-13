@@ -577,7 +577,6 @@ class GridReconciler: StateEventHandler {
         guard !notStandardGrace.isEmpty else { return }
         guard let stateProvider else { return }
 
-        let wmState = await stateProvider.getState()
         let now = CFAbsoluteTimeGetCurrent()
         // Snapshot keys so re-classification can mutate the map underneath us.
         for (wid, firstSeen) in notStandardGrace {
@@ -586,9 +585,15 @@ class GridReconciler: StateEventHandler {
                 jlog("reconcile.not_standard.expired", data: ["wid": Int(wid)])
                 continue
             }
-            guard let windowState = wmState.windows[String(wid)] else {
-                // Window gone — drop the grace entry.
+            // Re-query AX so classification runs against LIVE state, not the
+            // stale snapshot (#41). The fullscreen-button query can race window
+            // creation and cache hasFullscreenButton=false, which classifyWindow
+            // reads as a floating PIP; once the query un-races the fresh state
+            // classifies standard.
+            guard let windowState = await stateProvider.refreshWindowAXProperties(wid) else {
+                // Window gone or AX element unresolvable — drop the grace entry.
                 notStandardGrace[wid] = nil
+                jlog("reconcile.not_standard.refresh_gone", data: ["wid": Int(wid)])
                 continue
             }
             let appName = windowState.appName ?? ""

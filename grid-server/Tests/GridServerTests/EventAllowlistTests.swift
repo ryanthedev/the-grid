@@ -216,6 +216,7 @@ final class EventAllowlistTests: XCTestCase {
         "ax.observer.create.failed",
         "reconcile.not_standard.expired",
         "reconcile.not_standard.reeval",
+        "reconcile.not_standard.refresh_gone",
         "validate.win.untracked",
         "warn.pick.launch_fail",
         // #29s/#60s/#61s instrumentation (confirm-or-drop in UAT).
