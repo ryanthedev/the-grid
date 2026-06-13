@@ -1320,14 +1320,18 @@ completion(Response(id: request.id, result: AnyCodable(["success": true])))
                 return
             }
 
-            if let info = borderManager.queryBorderInfo(forWindowID: wid) {
-                completion(Response(id: request.id, result: AnyCodable(info)))
-            } else {
-                completion(Response(id: request.id, result: AnyCodable([
-                    "windowId": wid,
-                    "hasBorder": false,
-                    "message": "No border found for this window"
-                ])))
+            // queryBorderInfo is now async (finding #55 fix: no more DispatchQueue.main.sync).
+            // Await it inside a Task so the completion-based handler is not blocked.
+            Task {
+                if let info = await borderManager.queryBorderInfo(forWindowID: wid) {
+                    completion(Response(id: request.id, result: AnyCodable(info)))
+                } else {
+                    completion(Response(id: request.id, result: AnyCodable([
+                        "windowId": wid,
+                        "hasBorder": false,
+                        "message": "No border found for this window"
+                    ])))
+                }
             }
         }
 

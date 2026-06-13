@@ -3,7 +3,7 @@
 **Created:** 2026-06-12
 **Status:** in-progress
 **Started:** 2026-06-12 21:36
-**Current Phase:** 5
+**Current Phase:** 6
 **Complexity:** complex
 **Workspace:** worktree `.claude/worktrees/thegrid-concurrency-correctness-fixes` · branch `feature/thegrid-concurrency-correctness-fixes`
 
@@ -431,3 +431,10 @@ Summary: One authoritative focus path. `focusWindow` returns real success/failur
 - [x] Committed
 Commit: a041356
 Summary: WindowManipulator.getAXElement reuses `StateManager.shouldUseSoleWindowFallback` (no fork; phantom no longer substituted). Pending-launch target consumed-before-await + bundle-id match + clear-on-fail; locked-cell-on-inactive-space moves the window; observer-register retry w/ backoff; not_standard grace re-eval; depth-0 adoption of untracked tileables (`validate.win.untracked`). New pure module `Grid/WindowAdoptionPolicy.swift`. Fixed #15 #18 #31 #32 #40 #41 #57; #29s/#60s/#61s instrumented only. Build clean, 213 tests green. (#16 deferred to P5.)
+
+### Phase 5: Geometry writes (Gate: Standard)
+- [x] BUILD: Discovery + design + TDD implementation complete
+- [x] REVIEW: SKIPPED — Standard gate, tests are the gate (228/228)
+- [x] Committed
+Commit: 732a994
+Summary: Resize delta sign corrected for last-in-stack focus (`resolveBoundaryAndDelta`); split ratios preserved across assign/remove/prepend/insert via `recalculateSplitsAfterAddition/Removal` (incl. `removeWindowInternal`); displaced-window migration repositions target+source cells; cross-display move (#16) checks `moveWindowToSpace`, releases fence, logs `err.move.cross_display`/`err.verify`, aborts before state mutation; all-locked autoflow logs `warn.assign.dropped`. Fixed #10 #16 #19 #28 #48. New tests in `GeometryWritesTests.swift`. Build clean, 228 tests green.
