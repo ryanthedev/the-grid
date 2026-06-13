@@ -13,6 +13,9 @@ class BFDManager: NSObject {
     private let configPath: String
     private var pendingReload: DispatchWorkItem?
     private var commandRouter: GridCommandRouter?
+    // Serial command executor (Phase 1). When set, @ hotkeys submit here so one
+    // command body runs at a time instead of a Task-per-keypress racing the rest.
+    private var commandExecutor: CommandExecutor?
 
     init(configPath: String = BFDConfig.defaultPath) {
         self.configPath = configPath
@@ -126,13 +129,32 @@ class BFDManager: NSObject {
         self.commandRouter = router
     }
 
+    /// Set the serial command executor (called from main.swift after it is created).
+    /// Once set, internal @ commands submit through it for serialized execution.
+    func setCommandExecutor(_ executor: CommandExecutor) {
+        self.commandExecutor = executor
+    }
+
     // MARK: - Internal Commands
 
     /// Handle @ commands — internal server actions that bypass BFDExecutor
     private func handleInternalCommand(_ command: String, hotkey: String) {
         jlog("bfd.internal", data: ["cmd": command, "hotkey": hotkey])
 
-        // If router is set, dispatch through it
+        // Prefer the serial executor: every @ hotkey (including 50ms auto-repeats)
+        // submits to one serial queue so command bodies cannot interleave.
+        if let executor = commandExecutor {
+            Task {
+                let result = await executor.submit(command)
+                if !result.success {
+                    jlog("cmd.err", data: ["cmd": command, "msg": result.message])
+                }
+            }
+            return
+        }
+
+        // Fallback: direct router dispatch if the executor was not wired (should not
+        // happen in normal startup; kept so a partial wiring still functions).
         if let router = commandRouter {
             Task {
                 let result = await router.dispatch(command)

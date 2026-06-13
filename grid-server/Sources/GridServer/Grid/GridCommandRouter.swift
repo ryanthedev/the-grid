@@ -53,6 +53,13 @@ class GridCommandRouter {
     // beginAction increments suppression, endAction decrements and syncs.
     private var nudgeActionToken: GridReconciler.ActionToken?
 
+    // Serial pump for nudge keystrokes (DW-1.5, #50). Each held-key repeat is
+    // yielded onto this stream and processed one-at-a-time by a single consumer,
+    // so steps apply in order and never read a stale cached frame mid-flight
+    // (the prior step's AX write completes before the next reads). Replaces the
+    // previous unordered Task-per-keypress.
+    private var nudgeStepFeed: AsyncStream<NudgeAction>.Continuation?
+
     // Short flag -> long flag mapping for BFD commands
     private static let shortFlagMap: [Character: String] = [
         "m": "mouse",
@@ -771,11 +778,23 @@ class GridCommandRouter {
     // PRIVATE: handleNudge
     // ============================================================
 
+    // Build the serial nudge step stream + its feed. Unbounded buffering so a
+    // fast key-repeat never drops a step; the single consumer applies them FIFO.
+    private static func makeNudgeStepStream() -> (AsyncStream<NudgeAction>, AsyncStream<NudgeAction>.Continuation) {
+        var feed: AsyncStream<NudgeAction>.Continuation!
+        let stream = AsyncStream<NudgeAction>(bufferingPolicy: .unbounded) { feed = $0 }
+        return (stream, feed)
+    }
+
     private func handleNudge(_ cmd: ParsedCommand) async -> CommandResult {
         switch cmd.action {
 
         case "enter":
-            // Idempotent: if a session is already active, do nothing
+            // Idempotent: if a session is already active, do nothing.
+            // Command ingress is serialized (CommandExecutor), so a concurrent
+            // double @nudge enter cannot both pass this check — the second sees
+            // a non-nil handler and no-ops. As defense in depth we also stop-and-
+            // replace any leftover handler before installing a new one.
             if nudgeKeyHandler != nil {
                 return .ok("already in nudge mode")
             }
@@ -792,29 +811,42 @@ class GridCommandRouter {
             // Suspend BFD event tap so nudge keys are not also processed as hotkeys
             BFDManager.shared?.suspendEventTap()
 
-            // Wire the key handler callback
-            let handler = NudgeKeyHandler()
+            // Stand up the serial step pump (DW-1.5): one consumer drains keystrokes
+            // in arrival order, so each move/resize completes (updating the cached
+            // frame) before the next begins — no lost or back-stepped repeats.
             let borderManager = self.simpleBorderManager
-            handler.onNudge = { [weak self] action in
-                guard let self else { return }
-                switch action {
-                case .move(let direction):
-                    // onNudge fires on main thread; bridge to async actor context
-                    Task {
+            let (stepStream, stepFeed) = Self.makeNudgeStepStream()
+            self.nudgeStepFeed = stepFeed
+            Task { [weak self] in
+                for await action in stepStream {
+                    guard let self else { return }
+                    switch action {
+                    case .move(let direction):
                         if let (wid, frame) = try? await self.gridNudge.move(spaceID: spaceID, direction: direction) {
                             await borderManager.handleWindowMoved(windowID: wid, newFrame: frame)
                         }
-                    }
-                case .resize(let direction):
-                    Task {
+                    case .resize(let direction):
                         if let (wid, frame) = try? await self.gridNudge.resize(spaceID: spaceID, direction: direction) {
                             await borderManager.handleWindowMoved(windowID: wid, newFrame: frame)
                         }
+                    case .exit:
+                        break
                     }
+                }
+            }
+
+            // Wire the key handler callback. move/resize are funnelled through the
+            // serial pump; exit re-dispatches (NOT through the executor — this runs
+            // inside the tap callback, §1: never Task back into the serial consumer).
+            let handler = NudgeKeyHandler()
+            handler.onNudge = { [weak self] action in
+                guard let self else { return }
+                switch action {
+                case .move, .resize:
+                    self.nudgeStepFeed?.yield(action)
                 case .exit:
-                    // Dispatch back through the router to avoid mutating nudgeKeyHandler
-                    // from within its own callback's call stack
-                    Task {
+                    Task { [weak self] in
+                        guard let self else { return }
                         _ = await self.dispatch("@nudge exit")
                     }
                 }
@@ -823,6 +855,8 @@ class GridCommandRouter {
             // Install the event tap -- may fail if Accessibility permission is absent
             guard handler.start() else {
                 BFDManager.shared?.resumeEventTap()
+                self.nudgeStepFeed?.finish()
+                self.nudgeStepFeed = nil
                 gridReconciler.endAction(token, syncBorders: false)
                 return .error("nudge tap failed (accessibility permission?)")
             }
@@ -847,6 +881,10 @@ class GridCommandRouter {
             // Tear down key handler first to stop any further callbacks
             nudgeKeyHandler?.stop()
             nudgeKeyHandler = nil
+
+            // Close the serial step pump so its consumer task exits.
+            nudgeStepFeed?.finish()
+            nudgeStepFeed = nil
 
             // Resume BFD event tap
             BFDManager.shared?.resumeEventTap()

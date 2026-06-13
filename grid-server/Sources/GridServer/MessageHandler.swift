@@ -1376,11 +1376,14 @@ completion(Response(id: request.id, result: AnyCodable(["success": true])))
 
     func registerGridHandlers(
         router: GridCommandRouter,
+        executor: CommandExecutor,
         gridState: GridState,
         gridConfig: GridConfig,
         stateManager: StateManager
     ) {
-        // Helper: dispatch a command string through GridCommandRouter and respond
+        // Helper: dispatch a command string through the serial CommandExecutor and respond.
+        // All command ingress funnels through executor.submit so one command body runs
+        // end-to-end at a time (Phase 1 serialization seam) instead of a Task-per-request.
         func dispatchAndRespond(
             _ request: Request,
             commandString: String,
@@ -1388,7 +1391,7 @@ completion(Response(id: request.id, result: AnyCodable(["success": true])))
         ) {
             Task {
                 jlog("grid.rpc.dispatch", data: ["method": request.method, "cmd": commandString])
-                let result = await router.dispatch(commandString)
+                let result = await executor.submit(commandString)
                 if result.success {
                     completion(Response(
                         id: request.id,
@@ -1797,7 +1800,7 @@ completion(Response(id: request.id, result: AnyCodable(["success": true])))
 
                     let cmd = parts.joined(separator: " ")
                     jlog("grid.rpc.record", data: ["cmd": cmd])
-                    let cmdResult = await router.dispatch(cmd)
+                    let cmdResult = await executor.submit(cmd)
 
                     if cmdResult.success {
                         // The message is JSON from the recorder, parse it back
@@ -1823,7 +1826,7 @@ completion(Response(id: request.id, result: AnyCodable(["success": true])))
         // grid.record.stop -- stop whatever recording is active, return RecordingResult JSON
         register(method: "grid.record.stop") { request, completion in
             Task {
-                let cmdResult = await router.dispatch("@record stop")
+                let cmdResult = await executor.submit("@record stop")
                 if cmdResult.success {
                     if let data = cmdResult.message.data(using: .utf8),
                        let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
@@ -1877,7 +1880,7 @@ completion(Response(id: request.id, result: AnyCodable(["success": true])))
 
                 let cmd = parts.joined(separator: " ")
                 jlog("grid.rpc.record.toggle", data: ["cmd": cmd])
-                let cmdResult = await router.dispatch(cmd)
+                let cmdResult = await executor.submit(cmd)
 
                 if cmdResult.success {
                     if let data = cmdResult.message.data(using: .utf8),

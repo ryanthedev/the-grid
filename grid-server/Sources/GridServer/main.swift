@@ -225,9 +225,14 @@ struct GridServerCommand: ParsableCommand {
                 gridTerminalManager: gridTerminalManager
             )
 
+            // Serial command executor (Phase 1 serialization seam). Wraps the router
+            // so all command ingress (RPC + BFD hotkeys) runs one body at a time.
+            let commandExecutor = CommandExecutor(runner: commandRouter)
+
             // Register Grid RPC handlers (thin CLI bridge)
             messageHandler.registerGridHandlers(
                 router: commandRouter,
+                executor: commandExecutor,
                 gridState: gridState,
                 gridConfig: gridConfig,
                 stateManager: StateManager.shared
@@ -253,6 +258,7 @@ struct GridServerCommand: ParsableCommand {
             let bfdManager = BFDManager()
             BFDManager.shared = bfdManager
             bfdManager.setCommandRouter(commandRouter)
+            bfdManager.setCommandExecutor(commandExecutor)
             Task {
                 if await bfdManager.start() {
                     jlog("bfd.ready")

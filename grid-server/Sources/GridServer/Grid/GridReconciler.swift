@@ -59,19 +59,39 @@ class GridReconciler: StateEventHandler {
 
     // Per-window fencing: OS focus events for fenced windows are dropped
     // until released or expired. Replaces the old move cooldown model.
-    // Map from window ID to fence expiry time (CFAbsoluteTime).
-    private var fencedWindows: [UInt32: CFAbsoluteTime] = [:]
+    // Refcounted (DW-1.3, #14): overlapping moves of the same window each
+    // acquire; the entry is removed only when the refcount returns to zero, so
+    // one move releasing does not strip another in-flight move's fence.
+    private var fence = RefcountedFence(timeout: 5.0)
 
-    // Safety timeout: fences auto-expire after this duration to prevent deadlocks
-    private let fenceTimeoutSeconds: CFAbsoluteTime = 5.0
+    // Monotonic generation counter (DW-1.7): bumped on each action entry so
+    // handlers / the focus sweep can detect a stale pre-await snapshot.
+    // Primitive consumed by later phases (P2/P3).
+    private var generationCounter = GenerationCounter()
+
+    // Current action generation. A handler snapshots this before an await and
+    // re-reads it afterward; a change means an action ran in between.
+    var generation: UInt64 { generationCounter.current }
+
+    // Events (windowCreated/windowDestroyed) that arrived while suppressed are
+    // queued here (DW-1.6, #12) instead of being dropped, then replayed in
+    // arrival order when suppressionDepth returns to 0.
+    private var suppressedEvents = SuppressedEventQueue()
+
+    // Consume-once action tokens (DW-1.4, #4). A long-lived session token is
+    // minted by beginAction and consumed exactly once by endAction; a second
+    // endAction for the same token (e.g. a racing @nudge exit) is rejected and
+    // does NOT decrement another session's suppression.
+    private var actionTokens = ActionTokenRegistry()
 
     init() {}
 
     // MARK: - Public API
 
     // Opaque token returned by beginAction, consumed by endAction.
-    // Records label and start time for logging.
+    // Carries a unique id so endAction can consume it exactly once.
     struct ActionToken {
+        let id: UInt64
         let label: String
         let startTime: CFAbsoluteTime
     }
@@ -95,8 +115,9 @@ class GridReconciler: StateEventHandler {
     ) async rethrows -> T {
         jlog("action.start", data: ["label": label])
 
-        // 1. Suppress reconciler
+        // 1. Suppress reconciler + bump the action generation (DW-1.7)
         suppressionDepth += 1
+        generationCounter.bump()
 
         // 2. Execute the caller's work
         do {
@@ -105,22 +126,31 @@ class GridReconciler: StateEventHandler {
             // 3. Unsuppress
             suppressionDepth = max(0, suppressionDepth - 1)
 
-            // 4. Sync borders if requested and depth reached 0
-            if suppressionDepth == 0 && syncBorders {
-                await sweepDisplacedWindows()
-                await syncBordersForCurrentSpace()
+            // 4. At depth 0: replay any events queued during suppression (DW-1.6),
+            //    then sweep + sync borders. Replay drains BEFORE border sync so the
+            //    newly-adopted/removed windows are reflected.
+            if suppressionDepth == 0 {
+                await replaySuppressedEvents()
+                if syncBorders {
+                    await sweepDisplacedWindows()
+                    await syncBordersForCurrentSpace()
+                }
             }
 
             jlog("action.end", data: ["label": label])
             return result
 
         } catch {
-            // Still unsuppress on error
+            // Still unsuppress on error — and still drain the suppressed queue so a
+            // throwing body does not strand queued create/destroy events.
             suppressionDepth = max(0, suppressionDepth - 1)
 
-            if suppressionDepth == 0 && syncBorders {
-                await sweepDisplacedWindows()
-                await syncBordersForCurrentSpace()
+            if suppressionDepth == 0 {
+                await replaySuppressedEvents()
+                if syncBorders {
+                    await sweepDisplacedWindows()
+                    await syncBordersForCurrentSpace()
+                }
             }
 
             jlog("action.err", data: ["label": label, "err": "\(error)"])
@@ -133,13 +163,22 @@ class GridReconciler: StateEventHandler {
     // Used by nudge mode where suppression spans multiple keystrokes.
     func beginAction(label: String) -> ActionToken {
         suppressionDepth += 1
+        generationCounter.bump()
+        let consumable = actionTokens.begin(label: label)
         jlog("action.begin", data: ["label": label, "depth": suppressionDepth])
-        return ActionToken(label: label, startTime: CFAbsoluteTimeGetCurrent())
+        return ActionToken(id: consumable.id, label: label, startTime: consumable.startTime)
     }
 
     // endAction: end a long-lived suppression session started by beginAction.
     // Decrements suppression and optionally syncs borders when depth reaches 0.
+    // Consume-once (DW-1.4, #4): a token already consumed by an earlier endAction
+    // is rejected here, so a racing duplicate exit cannot strip another session's
+    // suppression.
     func endAction(_ token: ActionToken, syncBorders: Bool = true) {
+        guard actionTokens.consume(id: token.id) else {
+            jlog("warn.action.end.consumed", data: ["label": token.label])
+            return
+        }
         if suppressionDepth <= 0 {
             jlog("warn.action.end.underflow", data: ["label": token.label])
         }
@@ -149,10 +188,36 @@ class GridReconciler: StateEventHandler {
             "depth": suppressionDepth,
             "dur_ms": Int((CFAbsoluteTimeGetCurrent() - token.startTime) * 1000),
         ])
-        if suppressionDepth == 0 && syncBorders {
-            Task {
-                await self.sweepDisplacedWindows()
-                await self.syncBordersForCurrentSpace()
+        if suppressionDepth == 0 {
+            Task { [weak self] in
+                guard let self else { return }
+                await self.replaySuppressedEvents()
+                if syncBorders {
+                    await self.sweepDisplacedWindows()
+                    await self.syncBordersForCurrentSpace()
+                }
+            }
+        }
+    }
+
+    // Replay events queued while suppressed (DW-1.6, #12). Drains the queue in
+    // arrival order and dispatches each create/destroy to its handler. Replaying
+    // an already-gone wid is idempotent (handlers tolerate untracked windows).
+    private func replaySuppressedEvents() async {
+        let drained = suppressedEvents.drain()
+        guard !drained.isEmpty else { return }
+        for entry in drained {
+            switch entry.event {
+            case .windowCreated(let wid):
+                jlog("reconcile.suppressed.replay", data: [
+                    "event": "windowCreated", "wid": Int(wid), "gen": Int(entry.generation),
+                ])
+                await handleWindowCreated(wid, nil)
+            case .windowDestroyed(let wid):
+                jlog("reconcile.suppressed.replay", data: [
+                    "event": "windowDestroyed", "wid": Int(wid), "gen": Int(entry.generation),
+                ])
+                await handleWindowDestroyed(wid)
             }
         }
     }
@@ -165,24 +230,28 @@ class GridReconciler: StateEventHandler {
             jlog("warn.fence.empty", msg: "acquireFence called with empty set")
             return
         }
-        let expiresAt = CFAbsoluteTimeGetCurrent() + fenceTimeoutSeconds
-        for windowID in windowIDs {
-            fencedWindows[windowID] = expiresAt
+        let now = CFAbsoluteTimeGetCurrent()
+        for windowID in windowIDs.sorted() {
+            let depth = fence.acquire(windowID, now: now)
+            jlog("fence.acquire", data: [
+                "wid": Int(windowID),
+                "depth": depth,
+                "reason": reason,
+            ])
         }
-        jlog("fence.acquire", data: [
-            "wids": windowIDs.sorted().map { Int($0) },
-            "reason": reason,
-        ])
     }
 
     // Release fence for specific windows. Called after border sync completes.
+    // Refcounted: the window stays fenced until every overlapping acquire has
+    // released (depth 0). Releasing an unheld window is a logged no-op.
     func releaseFence(windowIDs: Set<UInt32>) {
-        for windowID in windowIDs {
-            fencedWindows.removeValue(forKey: windowID)
+        for windowID in windowIDs.sorted() {
+            let depth = fence.release(windowID)
+            jlog("fence.release", data: [
+                "wid": Int(windowID),
+                "depth": depth,
+            ])
         }
-        jlog("fence.release", data: [
-            "wids": windowIDs.sorted().map { Int($0) },
-        ])
     }
 
     func setPendingLaunchTarget(_ target: PendingLaunchTarget?) {
@@ -228,45 +297,19 @@ class GridReconciler: StateEventHandler {
     // Check if a window is currently fenced (not expired).
     // Lazily cleans up expired entries.
     private func isWindowFenced(_ windowID: UInt32) -> Bool {
-        guard let expiresAt = fencedWindows[windowID] else {
-            return false
-        }
-
-        if CFAbsoluteTimeGetCurrent() > expiresAt {
-            // Fence expired -- safety timeout hit
-            fencedWindows.removeValue(forKey: windowID)
-            jlog("fence.expired", data: ["wid": Int(windowID)])
-            return false
-        }
-
-        return true
+        fence.isFenced(windowID)
     }
 
     // isCellMateOfFencedWindow: returns true if windowID shares a cell (in any
     // space) with at least one currently-active fenced window.
     // Called only after isWindowFenced returns false, so windowID itself is not
-    // fenced. Performs lazy expiry cleanup on fencedWindows during iteration.
-    // Returns false immediately when fencedWindows is empty (the common case).
+    // fenced. Uses RefcountedFence.activeWindows for the non-expired set.
+    // Returns false immediately when no window is fenced (the common case).
     private func isCellMateOfFencedWindow(_ windowID: UInt32) async -> Bool {
         guard let gridState else { return false }
 
-        // Collect active fenced window IDs, expiring stale entries as we go.
-        let now = CFAbsoluteTimeGetCurrent()
-        var activeFencedIDs: Set<UInt32> = []
-        var expiredIDs: [UInt32] = []
-
-        for (fencedWID, expiresAt) in fencedWindows {
-            if now > expiresAt {
-                expiredIDs.append(fencedWID)
-            } else {
-                activeFencedIDs.insert(fencedWID)
-            }
-        }
-
-        for expiredID in expiredIDs {
-            fencedWindows.removeValue(forKey: expiredID)
-            jlog("fence.expired", data: ["wid": Int(expiredID)])
-        }
+        // Collect active (non-expired) fenced window IDs.
+        let activeFencedIDs = fence.activeWindows()
 
         // Fast path: no active fences (normal operation outside of moves).
         if activeFencedIDs.isEmpty { return false }
@@ -438,8 +481,25 @@ class GridReconciler: StateEventHandler {
             return
         }
 
-        // Skip other events when suppressed
+        // Queue (don't drop) window create/destroy that arrive during suppression
+        // (DW-1.6, #12). They are replayed in arrival order when depth returns to 0.
+        // Other events (move/resize/minimize/etc.) are still skipped — the active
+        // action owns those and a fresh sweep reconciles them afterward.
         if suppressReconciliation {
+            switch event {
+            case .windowCreated(let windowID, _):
+                suppressedEvents.enqueue(.windowCreated(wid: windowID), generation: generation)
+                jlog("reconcile.suppressed.queue", data: [
+                    "event": "windowCreated", "wid": Int(windowID), "gen": Int(generation),
+                ])
+            case .windowDestroyed(let windowID):
+                suppressedEvents.enqueue(.windowDestroyed(wid: windowID), generation: generation)
+                jlog("reconcile.suppressed.queue", data: [
+                    "event": "windowDestroyed", "wid": Int(windowID), "gen": Int(generation),
+                ])
+            default:
+                break
+            }
             return
         }
 
@@ -548,7 +608,10 @@ class GridReconciler: StateEventHandler {
         jlog("reconcile.win.destroy", data: ["wid": windowID])
     }
 
-    private func handleWindowCreated(_ windowID: UInt32, _ pid: pid_t) async {
+    // pid is the creating process id when known from the live event. It is
+    // currently informational only — the handler resolves everything it needs
+    // from windowState — so suppressed-event replay may pass nil.
+    private func handleWindowCreated(_ windowID: UInt32, _ pid: pid_t?) async {
         guard let stateProvider else {
             jlog("reconcile.win.create.bail", data: ["wid": windowID, "reason": "no_stateProvider"])
             return
@@ -1457,6 +1520,24 @@ class GridReconciler: StateEventHandler {
     // Used only in tests to assert target-survival (skip-not-consume) behavior.
     func _test_pendingLaunchTarget() -> PendingLaunchTarget? {
         pendingLaunchTarget
+    }
+
+    // _test_suppressionDepth: current suppression depth, for action-token tests (DW-1.4).
+    var _test_suppressionDepth: Int { suppressionDepth }
+
+    // _test_isFenced: whether windowID is currently fenced (DW-1.3).
+    func _test_isFenced(_ windowID: UInt32) -> Bool {
+        isWindowFenced(windowID)
+    }
+
+    // _test_suppressedQueueCount: number of events currently queued during
+    // suppression, for replay tests (DW-1.6).
+    var _test_suppressedQueueCount: Int { suppressedEvents.count }
+
+    // _test_handle: drive the public StateEventHandler entry point so a test can
+    // exercise the suppressed-event queueing branch through real wiring.
+    func _test_handle(_ event: StateEvent) async {
+        try? await handle(event, context: EventContext(source: .manual(reason: "test")))
     }
 
     // _test_setup: minimal wiring for tests -- sets stateProvider and gridState
