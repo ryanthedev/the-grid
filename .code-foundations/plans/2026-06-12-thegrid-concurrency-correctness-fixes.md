@@ -3,7 +3,7 @@
 **Created:** 2026-06-12
 **Status:** in-progress
 **Started:** 2026-06-12 21:36
-**Current Phase:** 3
+**Current Phase:** 4
 **Complexity:** complex
 **Workspace:** worktree `.claude/worktrees/thegrid-concurrency-correctness-fixes` · branch `feature/thegrid-concurrency-correctness-fixes`
 
@@ -417,3 +417,10 @@ Summary: Shipped the serial `CommandExecutor` (AsyncStream + single consumer; Me
 - [x] Committed
 Commit: db7d703
 Summary: Migration now fires only on true space-ID reassignment (new `spaceActivated` event for plain switches); `migrateSpaceIDs` numeric-sorts + guards a significant-state destination; added `displayGeometryChanged` (frame-diff, debounced reapply), lock-aware validator resume on wake, zero-bounds layout guard, per-handler active-space re-resolve, and a mid-apply zombie-write abort keyed on target-space disappearance. New pure policy module `Grid/SpaceMigrationPolicy.swift` (classifySpaceChange / canMigrate / confirmActiveSpace / shouldAbortStaleWrite / LayoutBoundsPolicy / DisplayGeometryPolicy). Fixed #2 #6 #20 #23 #24 #25 #26 #51 #52; #62s/#63s instrumented only. New events: `spaceActivated`, `displayGeometryChanged`. Build clean, 165 tests green.
+
+### Phase 3: Focus ownership & navigation (Gate: Full)
+- [x] BUILD: Discovery + design + TDD implementation complete
+- [x] REVIEW: pass (all 10 DW + edge cases, 193/193 suite)
+- [x] Committed
+Commit: 6653719
+Summary: One authoritative focus path. `focusWindow` returns real success/failure (CG/SLPS/AX classified; focus state set only on success; err.focus/warn.focus on failure). Directional focus skips empty cells. The focus sweep consults the P1 fence + generation counter and skips in-flight wids; window commands run suppressed. Out-of-order AX focus events rejected via monotonic sequence stamps (`FocusEventSequence`/`FocusSequenceGate`). Loop detector is `actor FocusLoopActor`, per-requested-window, observes nil-actual, self-suppresses. Dead-window prune awaited before setFocus; minimize uses `findSpaceContaining`. New pure module `Grid/FocusOwnershipPolicy.swift`. Fixed #7 #8 #13 #17 #21 #30 #35 #42 #43; #59s instrumented only. **Produces the `GridState.focusedWindow` write-on-success invariant that P6 (borders) consumes.** Build clean, 193 tests green.

@@ -198,6 +198,18 @@ final class EventAllowlistTests: XCTestCase {
         "ws.lock", "ws.register", "ws.screen", "ws.space",
         "ws.stop", "ws.unlock", "ws.wake", "ws.willsleep",
         "zorder.map",
+
+        // Phase 4 (window creation, classification & adoption) — new events.
+        "ax.fallback",
+        "ax.observer.create.failed",
+        "reconcile.not_standard.expired",
+        "reconcile.not_standard.reeval",
+        "validate.win.untracked",
+        "warn.pick.launch_fail",
+        // #29s/#60s/#61s instrumentation (confirm-or-drop in UAT).
+        "warn.space.derive_override",
+        "warn.poll.readd",
+        "warn.subrole.unknown",
     ]
 
     // Resolve the Sources/GridServer root by walking up from this file.

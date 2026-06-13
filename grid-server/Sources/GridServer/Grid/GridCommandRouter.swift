@@ -649,21 +649,29 @@ class GridCommandRouter {
             await MainActor.run { [weak self] in
                 PickerManager.shared.onLaunch = { [weak self] action in
                     guard let self else { return }
+                    // Capture the picked app's bundle id so a window appearing
+                    // before the launch PID arrives can be matched by bundle id
+                    // instead of letting any foreign window claim the cell (#31).
+                    let bundleID: String?
                     switch action {
-                    case .openApp, .openDir, .openChromeProfile:
-                        self.gridReconciler.setPendingLaunchTarget(
-                            PendingLaunchTarget(
-                                spaceID: spaceID,
-                                cellID: cellID,
-                                createdAt: CFAbsoluteTimeGetCurrent(),
-                                // PID starts nil; updated async via updatePendingLaunchTargetPID
-                                // once NSWorkspace completion fires after app launch
-                                pid: nil
-                            )
-                        )
+                    case .openApp(let bid):
+                        bundleID = bid
+                    case .openDir, .openChromeProfile:
+                        bundleID = nil
                     default:
-                        break
+                        return
                     }
+                    self.gridReconciler.setPendingLaunchTarget(
+                        PendingLaunchTarget(
+                            spaceID: spaceID,
+                            cellID: cellID,
+                            createdAt: CFAbsoluteTimeGetCurrent(),
+                            bundleID: bundleID,
+                            // PID starts nil; updated async via updatePendingLaunchTargetPID
+                            // once NSWorkspace completion fires after app launch
+                            pid: nil
+                        )
+                    )
                 }
             }
         }

@@ -15,8 +15,15 @@ struct ActionExecutor {
 
     /// Execute the given picker action.
     /// onPID is called with the launched app's PID for .openApp and .openDir actions.
+    /// onLaunchFail is called when a launch could not start (unresolvable bundle
+    /// id, or NSWorkspace error) so the caller can clear an armed pending target
+    /// instead of leaving it to hijack the next unrelated window (#31).
     /// Chrome and exec paths have no phantom problem and do not need PID tracking.
-    static func execute(_ action: PickerAction, onPID: ((pid_t) -> Void)? = nil) {
+    static func execute(
+        _ action: PickerAction,
+        onPID: ((pid_t) -> Void)? = nil,
+        onLaunchFail: ((String) -> Void)? = nil
+    ) {
         switch action {
         case .focusWindow(let pid, let windowID):
             let connectionID = SLSMainConnectionID()
@@ -29,18 +36,22 @@ struct ActionExecutor {
             ])
 
         case .openApp(let bundleID):
-            if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
-                NSWorkspace.shared.openApplication(
-                    at: url,
-                    configuration: NSWorkspace.OpenConfiguration()
-                ) { app, error in
-                    if let error = error {
-                        jlog("pick.err.open", data: ["bundle": bundleID, "err": "\(error)"])
-                        return
-                    }
-                    if let app {
-                        onPID?(app.processIdentifier)
-                    }
+            guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else {
+                jlog("pick.err.open", data: ["bundle": bundleID, "err": "no_url"])
+                onLaunchFail?("no_url")
+                return
+            }
+            NSWorkspace.shared.openApplication(
+                at: url,
+                configuration: NSWorkspace.OpenConfiguration()
+            ) { app, error in
+                if let error = error {
+                    jlog("pick.err.open", data: ["bundle": bundleID, "err": "\(error)"])
+                    onLaunchFail?("open_error")
+                    return
+                }
+                if let app {
+                    onPID?(app.processIdentifier)
                 }
             }
 

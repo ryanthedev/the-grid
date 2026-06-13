@@ -244,8 +244,23 @@ class PickerManager {
                 }
             }()
 
+            // Clear an armed pending target when the launch fails to start (#31)
+            // so it does not hijack the next unrelated window the user opens.
+            let onLaunchFail: ((String) -> Void)? = {
+                switch action {
+                case .openApp, .openDir:
+                    return { reason in
+                        DispatchQueue.main.async {
+                            reconcilerRef?.clearPendingLaunchTarget(reason: reason)
+                        }
+                    }
+                default:
+                    return nil
+                }
+            }()
+
             // Execute the action
-            ActionExecutor.execute(action, onPID: onPID)
+            ActionExecutor.execute(action, onPID: onPID, onLaunchFail: onLaunchFail)
 
             // For focusWindow: update GridState in Task{} then end suppression.
             // Suppression remains active until Task runs, catching all stale events.

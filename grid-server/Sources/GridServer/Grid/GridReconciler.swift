@@ -14,6 +14,9 @@ struct PendingLaunchTarget {
     let spaceID: String
     let cellID: String
     let createdAt: CFAbsoluteTime
+    // Bundle id of the picked app, used to match the launched window before the
+    // PID arrives (#31). nil for non-app launches (e.g. directory/tmux).
+    var bundleID: String?
     // PID of the launched app; nil until NSWorkspace completion fires
     var pid: pid_t?
 }
@@ -47,6 +50,12 @@ class GridReconciler: StateEventHandler {
 
     // One-shot target: next tileable window created on target space claims this cell
     private var pendingLaunchTarget: PendingLaunchTarget?
+
+    // #41: windows that classified as not_standard (e.g. AXStandardWindow with no
+    // fullscreen button) at creation, tracked with the timestamp first seen.
+    // A later sweep re-classifies them within a grace window — apps that populate
+    // window buttons slightly after creation then tile without a manual reopen.
+    private var notStandardGrace: [UInt32: CFAbsoluteTime] = [:]
 
     // Timeout for pending launch target (app may take time to launch)
     private let pendingLaunchTimeout: CFAbsoluteTime = 15.0
@@ -218,7 +227,6 @@ class GridReconciler: StateEventHandler {
     // an already-gone wid is idempotent (handlers tolerate untracked windows).
     private func replaySuppressedEvents() async {
         let drained = suppressedEvents.drain()
-        guard !drained.isEmpty else { return }
         for entry in drained {
             switch entry.event {
             case .windowCreated(let wid):
@@ -232,6 +240,40 @@ class GridReconciler: StateEventHandler {
                 ])
                 await handleWindowDestroyed(wid)
             }
+        }
+        // DW-4.8 (#12): even after replay, a windowCreated dropped during
+        // suppression can leave a tileable window that StateManager knows about
+        // but GridState never tiled (the create was never queued because it
+        // arrived before suppression started, or its replay bailed). Adopt those
+        // at depth 0 so no tileable window is silently left untracked.
+        await adoptUntrackedTileables()
+    }
+
+    // Scan StateManager windows for tileables absent from every GridState cell
+    // and adopt them (DW-4.8 / #12). Runs only at suppressionDepth 0.
+    func adoptUntrackedTileables() async {
+        guard suppressionDepth == 0 else { return }
+        guard let gridState, let stateProvider else { return }
+
+        let wmState = await stateProvider.getState()
+        let trackedWids = Set(await gridState.getAllWindowIDs())
+
+        for (widStr, windowState) in wmState.windows {
+            guard let wid = UInt32(widStr) else { continue }
+            var assignedAnywhere = trackedWids.contains(wid)
+            if !assignedAnywhere {
+                assignedAnywhere = await gridState.isWindowRejected(wid)
+            }
+            guard AdoptionPolicy.isUntrackedTileable(
+                isTileable: isTileable(window: windowState),
+                isAssignedAnywhere: assignedAnywhere
+            ) else { continue }
+
+            jlog("validate.win.untracked", data: [
+                "wid": Int(wid),
+                "app": windowState.appName ?? "unknown",
+            ])
+            await handleWindowCreated(wid, windowState.pid)
         }
     }
 
@@ -272,6 +314,16 @@ class GridReconciler: StateEventHandler {
         if let target {
             jlog("reconcile.pending.set", data: ["spaceID": target.spaceID, "cellID": target.cellID])
         }
+    }
+
+    // Clear an armed pending target after a failed launch (#31). Without this a
+    // silently-failed picker launch (uninstalled / stale app) leaves the target
+    // armed for the full 15s timeout, guaranteed to hijack the next unrelated
+    // window the user opens.
+    func clearPendingLaunchTarget(reason: String) {
+        guard pendingLaunchTarget != nil else { return }
+        pendingLaunchTarget = nil
+        jlog("warn.pick.launch_fail", data: ["reason": reason])
     }
 
     // Update the PID on the live pending target once NSWorkspace fires its completion.
@@ -383,6 +435,7 @@ class GridReconciler: StateEventHandler {
             Task {
                 await self.focusSweep()
                 await self.rejectedWindowSweep()
+                await self.notStandardGraceSweep()
             }
         }
         sweepTimer = source
@@ -489,6 +542,39 @@ class GridReconciler: StateEventHandler {
             } else {
                 await handleWindowCreated(wid, windowState.pid)
             }
+        }
+    }
+
+    // #41: re-evaluate windows that classified as not_standard at creation.
+    // Within the grace window, re-run handleWindowCreated (which re-classifies
+    // against the now-populated AX state) so a slow-button window tiles without
+    // a manual reopen. Past the grace window, drop the entry and give up.
+    func notStandardGraceSweep() async {
+        guard !suppressReconciliation else { return }
+        guard !notStandardGrace.isEmpty else { return }
+        guard let stateProvider else { return }
+
+        let wmState = await stateProvider.getState()
+        let now = CFAbsoluteTimeGetCurrent()
+        // Snapshot keys so re-classification can mutate the map underneath us.
+        for (wid, firstSeen) in notStandardGrace {
+            if !NotStandardGracePolicy.shouldReevaluate(now: now, firstSeen: firstSeen) {
+                notStandardGrace[wid] = nil
+                jlog("reconcile.not_standard.expired", data: ["wid": Int(wid)])
+                continue
+            }
+            guard let windowState = wmState.windows[String(wid)] else {
+                // Window gone — drop the grace entry.
+                notStandardGrace[wid] = nil
+                continue
+            }
+            let appName = windowState.appName ?? ""
+            let category = classifyWindow(window: windowState, appName: appName)
+            guard category == .standard else { continue }
+            // Now standard — clear the entry and route through the create path.
+            notStandardGrace[wid] = nil
+            jlog("reconcile.not_standard.reeval", data: ["wid": Int(wid), "app": appName])
+            await handleWindowCreated(wid, windowState.pid)
         }
     }
 
@@ -713,14 +799,23 @@ class GridReconciler: StateEventHandler {
         let appName = windowState.appName ?? ""
         let category = classifyWindow(window: windowState, appName: appName)
         if category != .standard {
+            // #41: track for grace re-evaluation rather than a terminal bail.
+            // A window whose buttons populate slightly after creation reads as
+            // floating here; the grace sweep re-classifies it shortly after.
+            if notStandardGrace[windowID] == nil {
+                notStandardGrace[windowID] = CFAbsoluteTimeGetCurrent()
+            }
             jlog("reconcile.win.create.bail", data: [
                 "wid": windowID,
                 "reason": "not_standard",
                 "category": String(describing: category),
+                "grace": true,
                 "app": appName
             ])
             return
         }
+        // Window classified standard — clear any prior not_standard grace entry.
+        notStandardGrace[windowID] = nil
 
         // Skip if window is already assigned (e.g., via pending launch target from poll)
         let assignments = await gridState.getWindowAssignments(spaceID: spaceID)
@@ -771,16 +866,39 @@ class GridReconciler: StateEventHandler {
                     await gridState.assignWindow(windowID, toCellID: lockedCell, inSpace: otherSpaceID)
                     let displayUUID = findDisplayUUIDForSpace(otherSpaceID, from: wmState)
                     if let displayUUID {
+                        // The locked cell's space is currently visible — position now.
                         try? await gridApply?.applyCellLayout(spaceID: otherSpaceID, cellID: lockedCell)
                         await syncBordersForSpace(otherSpaceID, displayUUID: displayUUID)
+                        jlog("reconcile.win.create.locked", data: [
+                            "wid": windowID,
+                            "cell": lockedCell,
+                            "space": otherSpaceID,
+                            "crossDisplay": true,
+                            "app": appName,
+                        ])
+                    } else {
+                        // #32: the locked cell's space is NOT visible on any
+                        // display. Move the window to that space so the next
+                        // displacement sweep does not bounce it back into the
+                        // original space, defeating the locked rule. If the move
+                        // fails the assignment still stands (deferred until the
+                        // space becomes active).
+                        var moved = false
+                        if let targetSpaceNum = UInt64(otherSpaceID) {
+                            moved = windowController?.moveWindowToSpace(
+                                windowID: windowID, spaceID: targetSpaceNum
+                            ) ?? false
+                        }
+                        jlog("reconcile.win.create.locked", data: [
+                            "wid": windowID,
+                            "cell": lockedCell,
+                            "space": otherSpaceID,
+                            "crossDisplay": true,
+                            "inactive": true,
+                            "moved": moved,
+                            "app": appName,
+                        ])
                     }
-                    jlog("reconcile.win.create.locked", data: [
-                        "wid": windowID,
-                        "cell": lockedCell,
-                        "space": otherSpaceID,
-                        "crossDisplay": true,
-                        "app": appName,
-                    ])
                     return
                 }
             }
@@ -805,48 +923,75 @@ class GridReconciler: StateEventHandler {
         jlog("reconcile.win.create", data: ["wid": windowID, "cell": targetCell])
     }
 
+    // Re-arm a pending target that was consume-before-await'd but then skipped.
+    // Only restores when no newer target was armed during the await (a fresh
+    // pick takes precedence over a stale re-arm).
+    private func restorePendingTarget(_ target: PendingLaunchTarget) {
+        guard pendingLaunchTarget == nil else { return }
+        pendingLaunchTarget = target
+    }
+
     private func handlePendingLaunchWindow(_ windowID: UInt32, _ pid: pid_t) async {
+        // #18: consume-before-await. Snapshot the target and clear the live
+        // field BEFORE the first await so two interleaved invocations (the event
+        // path and the 300ms sweep) cannot both observe it non-nil and both
+        // claim the same cell. Skip paths re-arm via restorePendingTarget so a
+        // later real window can still claim it.
         guard let target = pendingLaunchTarget else {
             // No target (race condition safety) -- fall through
             await handleWindowCreated(windowID, pid)
             return
         }
+        pendingLaunchTarget = nil
 
-        // Skip (do NOT consume) if PID is known and this window belongs to a different process.
-        // Catches zero-size phantom AX windows emitted before the real window appears.
-        // If target.pid is nil (NSWorkspace completion hasn't fired yet), skip the PID check --
-        // multi-shot skipping on isTileable/classifyWindow is sufficient until PID arrives.
-        if let targetPID = target.pid, pid != targetPID {
-            jlog("reconcile.pending.skip", data: [
-                "wid": windowID,
-                "reason": "pid_mismatch",
-                "got": pid,
-                "want": targetPID,
-            ])
-            await handleWindowCreated(windowID, pid)
-            return
-        }
-
-        // Check timeout -- consume target and fall through (unrecoverable)
+        // Timeout -- target is stale; drop it and fall through (unrecoverable).
         let elapsed = CFAbsoluteTimeGetCurrent() - target.createdAt
         if elapsed > pendingLaunchTimeout {
-            pendingLaunchTarget = nil
             jlog("reconcile.pending.expired", data: ["elapsed": elapsed])
             await handleWindowCreated(windowID, pid)
             return
         }
 
-        // Get window state from StateManager
-        guard let stateProvider else { return }
+        // Get window state from StateManager (first await — target already consumed).
+        guard let stateProvider else {
+            restorePendingTarget(target)
+            return
+        }
         let wmState = await stateProvider.getState()
         guard let windowState = wmState.windows[String(windowID)] else {
-            // Window not in state yet -- skip (don't consume), let a later event retry
+            // Window not in state yet -- re-arm and let a later event retry.
+            restorePendingTarget(target)
             jlog("reconcile.pending.skip", data: ["wid": windowID, "reason": "not_in_state"])
             return
         }
 
-        // Skip (do NOT consume) if window is a phantom: zero-size or non-tileable
+        // #31: match the launched window to the picked app. A pid-less target
+        // (NSWorkspace completion not yet fired) requires a bundle-id match; once
+        // the PID is known it is authoritative. A foreign window may not claim a
+        // pid-less target — re-arm and route it to ordinary auto-assign.
+        let windowBundleID = wmState.applications[String(windowState.pid)]?.bundleIdentifier
+        if !PendingLaunchPolicy.matchesTarget(
+            windowBundleID: windowBundleID,
+            targetBundleID: target.bundleID,
+            windowPID: windowState.pid,
+            targetPID: target.pid
+        ) {
+            restorePendingTarget(target)
+            jlog("reconcile.pending.skip", data: [
+                "wid": windowID,
+                "reason": "no_match",
+                "gotBundle": windowBundleID ?? "nil",
+                "wantBundle": target.bundleID ?? "nil",
+                "gotPid": pid,
+                "wantPid": target.pid ?? 0,
+            ])
+            await handleWindowCreated(windowID, pid)
+            return
+        }
+
+        // Re-arm and skip (don't consume) if window is a phantom: non-tileable.
         if !isTileable(window: windowState) {
+            restorePendingTarget(target)
             jlog("reconcile.pending.skip", data: [
                 "wid": windowID,
                 "reason": "not_tileable",
@@ -857,11 +1002,12 @@ class GridReconciler: StateEventHandler {
             return
         }
 
-        // Skip (do NOT consume) if window is modal — modal dialogs are transient
-        // and should not consume the pending target.
+        // Re-arm and skip if window is modal — modal dialogs are transient and
+        // should not consume the pending target.
         // Accept floating-classified windows (e.g. System Settings lacks a
         // fullscreen button) since the user explicitly chose this app via picker.
         if windowState.isModal {
+            restorePendingTarget(target)
             jlog("reconcile.pending.skip", data: [
                 "wid": windowID,
                 "reason": "modal",
@@ -875,13 +1021,11 @@ class GridReconciler: StateEventHandler {
             ?? findCurrentSpaceID(from: wmState)
         if actualSpaceID == nil || actualSpaceID != target.spaceID {
             guard let targetSpaceNum = UInt64(target.spaceID) else {
-                pendingLaunchTarget = nil
                 await handleWindowCreated(windowID, pid)
                 return
             }
             let moved = windowController?.moveWindowToSpace(windowID: windowID, spaceID: targetSpaceNum) ?? false
             if !moved {
-                pendingLaunchTarget = nil
                 jlog("reconcile.pending.space.mismatch", data: [
                     "expected": target.spaceID,
                     "actual": actualSpaceID ?? "nil",
@@ -897,17 +1041,15 @@ class GridReconciler: StateEventHandler {
             ])
         }
 
-        // Consume target: target space lost its layout (unrecoverable)
+        // Target space lost its layout (unrecoverable) -- target stays consumed.
         guard let gridState else { return }
         let layoutID = await gridState.getCurrentLayout(spaceID: target.spaceID)
         if layoutID.isEmpty {
-            pendingLaunchTarget = nil
             await handleWindowCreated(windowID, pid)
             return
         }
 
-        // All checks passed: consume target and assign window to the target cell
-        pendingLaunchTarget = nil
+        // All checks passed: target already consumed -- assign window to the cell.
         await gridState.prependWindow(windowID, toCellID: target.cellID, inSpace: target.spaceID)
         await gridState.setFocus(spaceID: target.spaceID, cellID: target.cellID, windowIndex: 0)
 
@@ -1620,6 +1762,35 @@ class GridReconciler: StateEventHandler {
     // Used only in tests to assert target-survival (skip-not-consume) behavior.
     func _test_pendingLaunchTarget() -> PendingLaunchTarget? {
         pendingLaunchTarget
+    }
+
+    // _test_setPendingLaunchTarget: arm a pending target directly (DW-4.2/4.3).
+    func _test_setPendingLaunchTarget(_ target: PendingLaunchTarget?) {
+        pendingLaunchTarget = target
+    }
+
+    // _test_handlePendingLaunchWindow: drive the pending-launch path (DW-4.2/4.3).
+    func _test_handlePendingLaunchWindow(windowID: UInt32, pid: pid_t) async {
+        await handlePendingLaunchWindow(windowID, pid)
+    }
+
+    // _test_notStandardGraceCount: number of windows tracked for not_standard
+    // grace re-evaluation (DW-4.6).
+    var _test_notStandardGraceCount: Int { notStandardGrace.count }
+
+    // _test_setWindowController: inject the WindowController port (DW-4.4).
+    func _test_setWindowController(_ controller: any WindowController) {
+        self.windowController = controller
+    }
+
+    // _test_notStandardGraceSweep: drive the grace re-evaluation sweep (DW-4.6).
+    func _test_notStandardGraceSweep() async {
+        await notStandardGraceSweep()
+    }
+
+    // _test_adoptUntrackedTileables: drive the depth-0 adoption scan (DW-4.8).
+    func _test_adoptUntrackedTileables() async {
+        await adoptUntrackedTileables()
     }
 
     // _test_suppressionDepth: current suppression depth, for action-token tests (DW-1.4).

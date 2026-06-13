@@ -73,10 +73,36 @@ class WindowManipulator: @unchecked Sendable {
             }
         }
 
-        // Fallback: If only one AX window exists, use it (handles apps like Ghostty
-        // where SkyLight reports multiple phantom window IDs but AX only sees one real window)
+        // Fallback: a single AX window whose own CG ID is UNRESOLVABLE (or equals
+        // the queried ID) is ambiguous — assume the queried ID refers to it
+        // (handles apps like Ghostty where SkyLight reports phantom window IDs
+        // but AX exposes one real window that does not resolve back to a CG ID).
+        //
+        // But when that single AX window DOES resolve to a concrete DIFFERENT
+        // id, the queried window is a distinct phantom — substituting it would
+        // land the manipulation on the app's real window while state is written
+        // under the phantom id (#15). Reuse the exact StateManager guard from
+        // commit 1cf354e (do not fork) and log when the fallback fires.
         if windows.count == 1 {
-            return windows[0]
+            var soleWindowID: UInt32 = 0
+            let resolved = _AXUIElementGetWindow(windows[0], &soleWindowID)
+            if StateManager.shouldUseSoleWindowFallback(
+                resolved: resolved,
+                soleWindowID: soleWindowID,
+                queriedID: windowID
+            ) {
+                JSONLogger.shared.log("ax.fallback", data: [
+                    "pid": pid,
+                    "wid": windowID,
+                    "resolved": soleWindowID,
+                    "op": "getAXElement",
+                ])
+                return windows[0]
+            }
+            JSONLogger.shared.log("ax.fail", data: [
+                "pid": pid, "wid": windowID, "reason": "sole_window_phantom", "resolved": soleWindowID,
+            ])
+            return nil
         }
 
         JSONLogger.shared.log("ax.fail", data: ["pid": pid, "wid": windowID, "reason": "not_in_list"])

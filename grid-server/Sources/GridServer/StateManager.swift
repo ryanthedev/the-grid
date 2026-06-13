@@ -980,6 +980,18 @@ actor StateManager: StateEventHandler, StateProvider {
         if let displayUUID = window.displayUUID,
            let display = state.displays.first(where: { $0.uuid == displayUUID }),
            display.currentSpaceID != 0 {
+            // #29s (instrumentation only, no behavior change): flag when this
+            // geometric derive OVERRIDES a non-empty SLS space list with a
+            // different display-current space. Suspected to discard SLS truth for
+            // windows on inactive spaces. Confirm-or-drop in UAT.
+            if !originalSpaces.isEmpty && originalSpaces != [display.currentSpaceID] {
+                jlog("warn.space.derive_override", data: [
+                    "wid": window.id,
+                    "from": originalSpaces.map { String($0) },
+                    "to": String(display.currentSpaceID),
+                    "app": window.appName ?? "unknown",
+                ])
+            }
             window.spaces = [display.currentSpaceID]
         } else {
             // Fallback: keep original macOS-reported spaces
@@ -1218,19 +1230,51 @@ var windows: [String: WindowState] = [:]
     /// immediately while the observer is set up on the main thread in a detached Task.
     /// The observer will be added to applicationObservers once MainActor setup completes.
     private func createObserver(for app: NSRunningApplication) {
-        let pid = app.processIdentifier
+        createObserver(pid: app.processIdentifier, appName: app.localizedName, attempt: 0)
+    }
 
+    // #40: a freshly launched app's AX server may not be up when the launch
+    // notification fires; observe() returns false (kAXErrorCannotComplete) and
+    // the app then runs entirely unobserved. Retry with bounded backoff before
+    // giving up so the launch race does not permanently drop AX events.
+    private func createObserver(pid: pid_t, appName: String?, attempt: Int) {
         // Don't create duplicate observers
         guard applicationObservers[pid] == nil else { return }
 
-        let observer = ApplicationObserver(pid: pid, appName: app.localizedName)
+        let observer = ApplicationObserver(pid: pid, appName: appName)
 
         // Observer setup requires main thread for run loop integration.
         // Fire-and-forget Task: observer added to state after MainActor work completes.
         Task { @MainActor in
             if observer.observe(stateManager: self) {
                 await self.addApplicationObserver(observer, for: pid)
+                return
             }
+            await self.scheduleObserverRetry(pid: pid, appName: appName, attempt: attempt)
+        }
+    }
+
+    private func scheduleObserverRetry(pid: pid_t, appName: String?, attempt: Int) {
+        guard let delay = ObserverRetryPolicy.nextDelay(attempt: attempt) else {
+            jlog("ax.observer.create.failed", data: [
+                "pid": pid,
+                "app": appName ?? "unknown",
+                "attempt": attempt,
+                "op": "register_notifs",
+                "giveUp": true,
+            ])
+            return
+        }
+        jlog("ax.observer.create.failed", data: [
+            "pid": pid,
+            "app": appName ?? "unknown",
+            "attempt": attempt,
+            "op": "register_notifs",
+            "retryIn": delay,
+        ])
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            await self?.createObserver(pid: pid, appName: appName, attempt: attempt + 1)
         }
     }
 
@@ -1306,6 +1350,13 @@ var windows: [String: WindowState] = [:]
             } else {
                 // New window discovered by poll
                 let pid = windowInfo[kCGWindowOwnerPID as String] as? pid_t ?? 0
+                // #60s (instrumentation only, no behavior change): a window in
+                // the off-actor snapshot but absent from state may be a window
+                // destroyed between snapshot and apply — the poll would then
+                // resurrect it and route a phantom windowCreated. Trace it so UAT
+                // can correlate with a recent win.destroyed for the same wid.
+                // Confirm-or-drop in UAT (no tombstone-skip added).
+                jlog("warn.poll.readd", data: ["wid": Int(windowID), "pid": Int(pid)])
                 addWindowFromPoll(windowID: windowID, windowInfo: windowInfo, timestamp: pollTimestamp)
                 // Track for windowCreated event routing (only if actually added)
                 if state.windows[String(windowID)] != nil {
@@ -1376,6 +1427,20 @@ var windows: [String: WindowState] = [:]
         // Update title (CGWindowList page title)
         if let name = windowInfo[kCGWindowName as String] as? String {
             window.title = name
+        }
+
+        // #61s (instrumentation only, no behavior change): a window with a real
+        // role but a transient "AXUnknown" subrole (cached at creation during
+        // app startup) is never re-queried — the role!=nil guard below skips it,
+        // and isTileable rejects the stale subrole forever. Trace these so UAT
+        // can confirm whether a requery is warranted. Confirm-or-drop in UAT (no
+        // requery behavior added).
+        if window.role != nil && (window.subrole == nil || window.subrole == "AXUnknown") {
+            jlog("warn.subrole.unknown", data: [
+                "wid": Int(windowID),
+                "role": window.role ?? "nil",
+                "subrole": window.subrole ?? "nil",
+            ])
         }
 
         // Re-query AX properties when role is nil (phantom windows that
