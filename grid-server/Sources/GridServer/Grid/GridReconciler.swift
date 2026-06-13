@@ -78,6 +78,19 @@ class GridReconciler: StateEventHandler {
     // arrival order when suppressionDepth returns to 0.
     private var suppressedEvents = SuppressedEventQueue()
 
+    // Lock-state tracking (DW-2.5, #23). The reconciler is the single
+    // serialized consumer of screenLocked/screenUnlocked/systemWoke events, so
+    // a plain Bool is sufficient (no new actor; §8 satisfied). On wake the
+    // validator is resumed ONLY when the screen is not locked — resuming at the
+    // login screen lets AX's reduced window list false-positive ax_orphan
+    // prunes against real tiled windows.
+    private var screenLocked: Bool = false
+
+    // _test_setScreenLocked: drive the lock flag directly in tests.
+    func _test_setScreenLocked(_ locked: Bool) {
+        screenLocked = locked
+    }
+
     // Consume-once action tokens (DW-1.4, #4). A long-lived session token is
     // minted by beginAction and consumed exactly once by endAction; a second
     // endAction for the same token (e.g. a racing @nudge exit) is rejected and
@@ -517,10 +530,18 @@ class GridReconciler: StateEventHandler {
             await stateValidator?.pause()
 
         case .screenLocked:
+            screenLocked = true
             await stateValidator?.pause()
 
         case .screenUnlocked:
+            screenLocked = false
             await stateValidator?.resume()
+
+        case .spaceActivated(let spaceID, let displayUUID):
+            await handleSpaceActivated(spaceID: spaceID, displayUUID: displayUUID)
+
+        case .displayGeometryChanged(let displayUUID):
+            await handleDisplayGeometryChanged(displayUUID)
 
         case .windowMoved(let windowID, let frame):
             await handleWindowMoved(windowID, frame)
@@ -1006,6 +1027,42 @@ class GridReconciler: StateEventHandler {
         }
     }
 
+    // Plain desktop switch (#2/#20): the space already exists, nothing to
+    // migrate. Resync borders for the newly-active space so the highlight
+    // follows the switch instead of going stale. Replaces the dead
+    // FocusState.previous*-gated handleSpaceChanged border path.
+    private func handleSpaceActivated(spaceID: String, displayUUID: String) async {
+        guard !displayUUID.isEmpty else {
+            jlog("reconcile.space.activated.no_display", data: ["space": spaceID])
+            return
+        }
+        await syncBordersForSpace(spaceID, displayUUID: displayUUID)
+        jlog("reconcile.space.activated", data: ["space": spaceID, "display": displayUUID])
+    }
+
+    // Debounce window for geometry-only display reconfiguration (#25). Multiple
+    // didChangeScreenParameters notifications fire in a burst during a
+    // resolution change or Dock animation; coalesce them into one reapply.
+    private var geometryReapplyTask: Task<Void, Never>?
+
+    // #25: resolution/scaling/Dock geometry changed for a display with the same
+    // UUID. Reapply layouts (debounced) so windows resize to the new bounds.
+    private func handleDisplayGeometryChanged(_ displayUUID: String) async {
+        jlog("reconcile.dsp.geometry", data: ["display": displayUUID])
+
+        geometryReapplyTask?.cancel()
+        geometryReapplyTask = Task { [weak self] in
+            guard let self else { return }
+            try? await Task.sleep(for: .milliseconds(300))
+            if Task.isCancelled { return }
+            let errors = await self.gridApply?.refreshAllDisplays(displayFilter: displayUUID) ?? []
+            if !errors.isEmpty {
+                jlog("warn.reconcile.dsp.geometry.errors",
+                     data: ["display": displayUUID, "errorCount": errors.count])
+            }
+        }
+    }
+
     private func handleSystemWake() async {
         guard let stateProvider, let gridState else { return }
 
@@ -1019,10 +1076,16 @@ class GridReconciler: StateEventHandler {
         let task = Task { [weak self] in
             guard let self else { return }
 
-            // Step 0: Unconditionally resume the validator. willSleep may
-            // have been the last system event seen before the wake, leaving
-            // paused == true. Wake should always restore normal validation.
-            await self.stateValidator?.resume()
+            // Step 0: Resume the validator ONLY when the screen is unlocked
+            // (DW-2.5, #23). At the login screen AX returns reduced window
+            // lists that false-positive ax_orphan-prune real tiled windows.
+            // If still locked, the validator stays paused; the later
+            // screenUnlocked event resumes it.
+            if self.screenLocked {
+                jlog("reconcile.wake.validator.deferred")
+            } else {
+                await self.stateValidator?.resume()
+            }
 
             // Step 1: Migrate space IDs (macOS may reassign after sleep)
             var displaySpaces: [String: [String]] = [:]
@@ -1033,8 +1096,9 @@ class GridReconciler: StateEventHandler {
                         spaceIDs.append(spaceKey)
                     }
                 }
-                // Sort by space ID for positional matching
-                displaySpaces[display.uuid] = spaceIDs.sorted()
+                // #6: numeric sort for positional matching ([String].sorted()
+                // is lexicographic, pairing "999" ahead of "1001").
+                displaySpaces[display.uuid] = SpaceMigrationPolicy.numericallySorted(spaceIDs)
             }
 
             let migrated = await gridState.migrateSpaceIDs(currentDisplaySpaces: displaySpaces)
@@ -1177,10 +1241,14 @@ class GridReconciler: StateEventHandler {
         guard let gridState, let stateProvider else { return }
         let wmState = await stateProvider.getState()
 
-        // Find all space IDs that belong to this display in the current wmState
-        let affectedSpaceIDs = wmState.spaces.compactMap { (spaceID, space) -> String? in
+        // #52: union the post-refresh wmState spaces (may be empty — the display
+        // is already gone from SLS) with GridState's OWN per-display snapshot,
+        // which still remembers the disconnected display's spaces. The old
+        // wmState-only lookup was dead code on a real disconnect.
+        var affectedSpaceIDs = Set(wmState.spaces.compactMap { (spaceID, space) -> String? in
             space.displayUUID == displayUUID ? spaceID : nil
-        }
+        })
+        affectedSpaceIDs.formUnion(await gridState.getSpaceIDsForDisplay(displayUUID))
 
         if affectedSpaceIDs.isEmpty {
             jlog("reconcile.display.disconnect.no_spaces", data: ["display": displayUUID])

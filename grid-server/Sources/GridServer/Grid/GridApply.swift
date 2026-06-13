@@ -128,12 +128,34 @@ class GridApply {
     ) async throws {
         jlog("layout.apply.start", data: ["lid": layoutID, "sid": spaceID])
 
+        // DW-2.3 (#26): snapshot the reconciler action generation at entry. If
+        // a space-ID reassignment migrated this space away during the awaits
+        // below, the generation will have advanced and the space may no longer
+        // exist — writing layout/assignments back then resurrects a zombie
+        // space. We re-check before the write phase and abort.
+        let entryGeneration = gridReconciler?.generation
+
         // 1. Get layout definition
         let layoutDef = try await MainActor.run { try gridConfig.getLayout(id: layoutID) }
 
         // 2. Get display bounds for this space
         let wmState = await stateProvider.getState()
         let displayBounds = gridFocus.getDisplayBoundsForSpace(spaceID, wmState: wmState)
+
+        // DW-2.6 (#24): refuse to tile against zero/degenerate bounds. A nil or
+        // .zero frame (wake/dock-replug with SLS listing more displays than
+        // NSScreen, or an unknown space) would pile every window into the
+        // corner. Surface as a noDisplayBounds error so refreshAllDisplays
+        // aggregates it; do NOT compute placements from a degenerate rect.
+        if LayoutBoundsPolicy.isDegenerate(displayBounds) {
+            jlog("err.layout.zero_bounds", data: [
+                "sid": spaceID,
+                "lid": layoutID,
+                "w": displayBounds.size.width,
+                "h": displayBounds.size.height,
+            ])
+            throw GridApplyError.noDisplayBounds
+        }
 
         // 3. Get existing track ratios (preserve when reapplying same layout)
         let existingLayoutID = await gridState.getCurrentLayout(spaceID: spaceID)
@@ -256,6 +278,28 @@ class GridApply {
             jlog("layout.apply.ax_partial", data: ["failed": failedIDs.sorted()])
         }
 
+        // DW-2.3 (#26): re-resolve before the write phase. If the action
+        // generation advanced AND the target space no longer exists, a space-ID
+        // reassignment migrated this space away mid-apply — writing now would
+        // resurrect a zombie space. Abort the write (the AX placements already
+        // ran; the migrated space's GridState is authoritative).
+        if let entryGeneration, let reconciler = gridReconciler {
+            let currentGeneration = reconciler.generation
+            let spaceStillExists = await gridState.getSpaceReadOnly(spaceID) != nil
+            if SpaceMigrationPolicy.shouldAbortStaleWrite(
+                entryGeneration: entryGeneration,
+                currentGeneration: currentGeneration,
+                spaceStillExists: spaceStillExists) {
+                jlog("warn.layout.stale_space", data: [
+                    "sid": spaceID,
+                    "lid": layoutID,
+                    "entryGen": Int(entryGeneration),
+                    "curGen": Int(currentGeneration),
+                ])
+                return
+            }
+        }
+
         // 13. Update GridState
         if existingLayoutID != layoutID {
             // Switching layouts: reset state
@@ -315,6 +359,17 @@ class GridApply {
         // 2. Get display bounds
         let wmState = await stateProvider.getState()
         let displayBounds = gridFocus.getDisplayBoundsForSpace(spaceID, wmState: wmState)
+
+        // DW-2.6 (#24): zero/degenerate-bounds guard (see applyLayoutBody).
+        if LayoutBoundsPolicy.isDegenerate(displayBounds) {
+            jlog("err.layout.zero_bounds", data: [
+                "sid": spaceID,
+                "cellID": cellID,
+                "w": displayBounds.size.width,
+                "h": displayBounds.size.height,
+            ])
+            throw GridApplyError.noDisplayBounds
+        }
 
         // 3. Calculate full layout (needed for cell bounds with track ratios)
         let columnRatios = await gridState.getColumnRatios(spaceID: spaceID)

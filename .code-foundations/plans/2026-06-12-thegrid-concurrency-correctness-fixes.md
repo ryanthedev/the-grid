@@ -3,7 +3,7 @@
 **Created:** 2026-06-12
 **Status:** in-progress
 **Started:** 2026-06-12 21:36
-**Current Phase:** 1
+**Current Phase:** 2
 **Complexity:** complex
 **Workspace:** worktree `.claude/worktrees/thegrid-concurrency-correctness-fixes` · branch `feature/thegrid-concurrency-correctness-fixes`
 
@@ -403,4 +403,10 @@ The residual races approach B does **not** fix for free — event-stream-vs-comm
 ---
 
 ## Execution Log
-_To be filled during /code-foundations:build_
+
+### Phase 1: Serialization foundation (Gate: Full)
+- [x] BUILD: Discovery + design + TDD implementation complete
+- [x] REVIEW: Verification passed (all 7 DW + 4 edge cases + 4 constraints, 131/131 suite)
+- [x] Committed
+Commit: 1b68a36
+Summary: Shipped the serial `CommandExecutor` (AsyncStream + single consumer; MessageHandler/BFD submit through it) and four reconciler primitives — `RefcountedFence`, `GenerationCounter` (monotonic `generation` bumped per action), `SuppressedEventQueue` (windowCreated/Destroyed queued+replayed at depth 0), consume-once `ActionToken` — plus a serial nudge-step pump. Fixed #3 #4 #5 #11 #12 #14 #50. The four primitives + `CommandRunning`/`CommandExecutor` seam are the contract P2–P7 consume; reconciler stays a class (Approach B). Build clean, 131 tests green.

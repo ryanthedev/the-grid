@@ -39,6 +39,21 @@ final class EventAllowlistTests: XCTestCase {
         "app.term.reconcile",
         "srv.alive",
 
+        // Phase 2 (space & wake migration) — new events.
+        "cmd.space.reresolve",
+        "dsp.geometry.change",
+        "dsp.refresh.join",
+        "err.layout.zero_bounds",
+        "reconcile.dsp.geometry",
+        "reconcile.space.activated",
+        "reconcile.space.activated.no_display",
+        "reconcile.wake.validator.deferred",
+        "state.space_migrate.snapshot",
+        "warn.layout.stale_space",
+        "warn.reconcile.dsp.geometry.errors",
+        "warn.space.migrate.count_mismatch",
+        "warn.space.migrate.dest_significant",
+
         // Preexisting events (snapshot as of Phase 2 build).
         "action.begin", "action.end", "action.err", "action.start",
         "app.hide", "app.launch", "app.refresh", "app.term", "app.unhide",

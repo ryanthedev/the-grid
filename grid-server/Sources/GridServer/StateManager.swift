@@ -270,6 +270,14 @@ actor StateManager: StateEventHandler, StateProvider {
             // Handled by GridReconciler (GridState migration + orphan reset)
             break
 
+        case .spaceActivated:
+            // Handled by GridReconciler (border resync for the active space).
+            break
+
+        case .displayGeometryChanged:
+            // Handled by GridReconciler (debounced layout reapply).
+            break
+
         case .displayConnected(let displayUUID):
             await handleDisplayConnected(displayUUID)
 
@@ -399,6 +407,21 @@ actor StateManager: StateEventHandler, StateProvider {
         }
 
         let displayUUIDs: [String] = cfArrayToSwiftArray(displaysArray)
+
+        // #63s instrumentation (suspected — trace only, NO behavioral change).
+        // enrichDisplayInfo joins SLS managed-display order to NSScreen.screens
+        // by array index; with 2+ displays the orders can diverge and attach
+        // the wrong frame/scale to a UUID. Record the join so UAT can confirm
+        // or drop the finding before any UUID-matching fix is attempted.
+        let screenCount = NSScreen.screens.count
+        for (index, displayUUID) in displayUUIDs.enumerated() {
+            jlog("dsp.refresh.join", data: [
+                "index": index,
+                "uuid": displayUUID,
+                "slsCount": displayUUIDs.count,
+                "screenCount": screenCount,
+            ])
+        }
 
         var displays: [DisplayState] = []
         for (index, displayUUID) in displayUUIDs.enumerated() {
@@ -1756,17 +1779,39 @@ var windows: [String: WindowState] = [:]
                     "display": display.uuid
                 ])
 
-                // Notify GridReconciler so it can migrate GridState and
-                // reset AX orphan counts before the validator prunes windows
-                // that are only transiently invisible during space ID shuffles.
-                await EventRouter.shared.route(
-                    .spaceIDReassigned(
-                        oldSpaceID: String(oldSpaceID),
-                        newSpaceID: String(display.currentSpaceID),
-                        displayUUID: display.uuid
-                    ),
-                    from: .workspaceObserver
+                // #2: only a TRUE macOS reassignment (old space ID no longer
+                // exists in the refreshed OS space set) migrates GridState. A
+                // plain desktop switch leaves the old ID present and routes a
+                // dedicated spaceActivated event — no migration, no data loss.
+                let refreshedSpaceIDs = Set(state.spaces.keys)
+                let routing = SpaceMigrationPolicy.classifySpaceChange(
+                    oldSpaceID: String(oldSpaceID),
+                    newSpaceID: String(display.currentSpaceID),
+                    refreshedSpaceIDs: refreshedSpaceIDs
                 )
+
+                switch routing {
+                case .reassigned:
+                    // Migrate GridState and reset AX orphan counts before the
+                    // validator prunes windows only transiently invisible
+                    // during the space ID shuffle.
+                    await EventRouter.shared.route(
+                        .spaceIDReassigned(
+                            oldSpaceID: String(oldSpaceID),
+                            newSpaceID: String(display.currentSpaceID),
+                            displayUUID: display.uuid
+                        ),
+                        from: .workspaceObserver
+                    )
+                case .activated:
+                    await EventRouter.shared.route(
+                        .spaceActivated(
+                            spaceID: String(display.currentSpaceID),
+                            displayUUID: display.uuid
+                        ),
+                        from: .workspaceObserver
+                    )
+                }
 
                 break
             }
@@ -1885,9 +1930,24 @@ return
         }
     }
 
+    // Capture each display's geometry (frame + visibleFrame) keyed by UUID.
+    // Used to diff geometry-only reconfigurations (#25) where the UUID set is
+    // unchanged but resolution / scaling / Dock geometry moved.
+    private func captureDisplayGeometry() -> [String: DisplayGeometryPolicy.Geometry] {
+        var geo: [String: DisplayGeometryPolicy.Geometry] = [:]
+        for display in state.displays {
+            geo[display.uuid] = DisplayGeometryPolicy.Geometry(
+                frame: display.frame,
+                visibleFrame: display.visibleFrame
+            )
+        }
+        return geo
+    }
+
     private func handleDisplayConfigurationChanged() async {
-        // Capture old display UUIDs before refresh
+        // Capture old display UUIDs + geometry before refresh
         let oldDisplayUUIDs = Set(state.displays.map { $0.uuid })
+        let oldGeometry = captureDisplayGeometry()
         let oldSpaceKeys = Set(state.spaces.keys)
 
         // Debug: log state before refresh
@@ -1922,6 +1982,26 @@ return
         for displayUUID in disconnectedDisplays {
             await EventRouter.shared.route(
                 .displayDisconnected(displayUUID: displayUUID),
+                from: .workspaceObserver
+            )
+        }
+
+        // #25/#62s: geometry-only reconfiguration. Displays present in BOTH
+        // snapshots whose frame/visibleFrame changed produce no connect/
+        // disconnect event, so without this diff the reconciler never reapplies
+        // layouts after a resolution/scaling/Dock change.
+        let newGeometry = captureDisplayGeometry()
+        let geometryChanged = DisplayGeometryPolicy.changedDisplays(
+            old: oldGeometry, new: newGeometry)
+        for displayUUID in geometryChanged {
+            // #62s instrumentation (load-bearing — also drives the #25 fix).
+            JSONLogger.shared.log("dsp.geometry.change", data: [
+                "display": displayUUID,
+                "oldFrame": String(describing: oldGeometry[displayUUID]?.frame),
+                "newFrame": String(describing: newGeometry[displayUUID]?.frame),
+            ])
+            await EventRouter.shared.route(
+                .displayGeometryChanged(displayUUID: displayUUID),
                 from: .workspaceObserver
             )
         }

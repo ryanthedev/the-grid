@@ -194,6 +194,14 @@ actor GridState {
         return Array(spaces.keys)
     }
 
+    // #52: space IDs GridState believes belong to a display, read from its OWN
+    // per-display map (snapshotted on wake/migrate). The reconciler's old
+    // disconnect prune diffed post-refresh wmState.spaces, which no longer
+    // lists the gone display — so it found nothing and was dead code.
+    func getSpaceIDsForDisplay(_ displayUUID: String) -> [String] {
+        return displaySpaces[displayUUID] ?? []
+    }
+
     func removeSpace(_ spaceID: String) {
         spaces.removeValue(forKey: spaceID)
         markDirty()
@@ -208,6 +216,20 @@ actor GridState {
         guard oldSpaceID != newSpaceID,
               var oldState = spaces[oldSpaceID],
               hasSignificantState(oldState) else {
+            return []
+        }
+
+        // #6 destination guard: never overwrite a destination that already
+        // holds significant grid state (its own layout/cells). Doing so wipes
+        // a laid-out space. Skip + log instead.
+        let destSignificant = spaces[newSpaceID].map { hasSignificantState($0) } ?? false
+        guard SpaceMigrationPolicy.canMigrate(
+            sourceHasSignificantState: true,
+            destinationHasSignificantState: destSignificant) else {
+            jlog("warn.space.migrate.dest_significant", data: [
+                "old": oldSpaceID,
+                "new": newSpaceID,
+            ])
             return []
         }
 
@@ -233,16 +255,32 @@ actor GridState {
     }
 
     // Bulk migration: positional matching across displays (used on wake).
+    // #6: old/new lists are paired positionally after a NUMERIC sort (the
+    // caller sorts both legs with SpaceMigrationPolicy.numericallySorted), and
+    // a migration is refused when the destination already holds significant
+    // state. Count-mismatched lists migrate the common prefix and log the skip.
     func migrateSpaceIDs(currentDisplaySpaces: [String: [String]]) -> Bool {
         var migrated = false
 
-        for (displayUUID, newSpaceList) in currentDisplaySpaces {
-            if displayUUID.isEmpty || newSpaceList.isEmpty {
+        for (displayUUID, rawNewSpaceList) in currentDisplaySpaces {
+            if displayUUID.isEmpty || rawNewSpaceList.isEmpty {
                 continue
             }
 
-            let oldSpaceList = displaySpaces[displayUUID] ?? []
+            // Numeric pairing on both legs (#6): lexicographic order paired the
+            // wrong spaces ("999" > "1001").
+            let newSpaceList = SpaceMigrationPolicy.numericallySorted(rawNewSpaceList)
+            let oldSpaceList = SpaceMigrationPolicy.numericallySorted(displaySpaces[displayUUID] ?? [])
             let limit = min(oldSpaceList.count, newSpaceList.count)
+
+            if oldSpaceList.count != newSpaceList.count {
+                jlog("warn.space.migrate.count_mismatch", data: [
+                    "display": displayUUID,
+                    "old": oldSpaceList.count,
+                    "new": newSpaceList.count,
+                    "paired": limit,
+                ])
+            }
 
             for i in 0..<limit {
                 let oldSpaceID = oldSpaceList[i]
@@ -252,19 +290,34 @@ actor GridState {
                     continue
                 }
 
-                if var oldState = spaces[oldSpaceID], hasSignificantState(oldState) {
-                    oldState.spaceId = newSpaceID
-                    spaces[newSpaceID] = oldState
-                    spaces.removeValue(forKey: oldSpaceID)
-                    migrated = true
+                guard var oldState = spaces[oldSpaceID], hasSignificantState(oldState) else {
+                    continue
+                }
 
-                    jlog("state.space_migrated", data: [
+                // #6 destination guard: refuse to clobber a laid-out destination.
+                let destSignificant = spaces[newSpaceID].map { hasSignificantState($0) } ?? false
+                guard SpaceMigrationPolicy.canMigrate(
+                    sourceHasSignificantState: true,
+                    destinationHasSignificantState: destSignificant) else {
+                    jlog("warn.space.migrate.dest_significant", data: [
                         "display": displayUUID,
                         "old": oldSpaceID,
                         "new": newSpaceID,
-                        "position": i,
                     ])
+                    continue
                 }
+
+                oldState.spaceId = newSpaceID
+                spaces[newSpaceID] = oldState
+                spaces.removeValue(forKey: oldSpaceID)
+                migrated = true
+
+                jlog("state.space_migrate.snapshot", data: [
+                    "display": displayUUID,
+                    "old": oldSpaceID,
+                    "new": newSpaceID,
+                    "paired": i,
+                ])
             }
 
             displaySpaces[displayUUID] = newSpaceList
@@ -862,5 +915,15 @@ actor GridState {
         }
         space.cells[cellID] = cell
         spaces[spaceID] = space
+    }
+
+    // Seed the per-display space snapshot (the wake-migration old list).
+    func _test_seedDisplaySpaces(_ displayUUID: String, _ spaceIDs: [String]) {
+        displaySpaces[displayUUID] = spaceIDs
+    }
+
+    // Read the per-display space snapshot.
+    func _test_displaySpaces(_ displayUUID: String) -> [String] {
+        return displaySpaces[displayUUID] ?? []
     }
 }

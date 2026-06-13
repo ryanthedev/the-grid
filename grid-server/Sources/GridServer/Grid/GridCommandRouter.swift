@@ -314,6 +314,27 @@ class GridCommandRouter {
         return gridFocus.findActiveSpaceID(wmState)
     }
 
+    // DW-2.4 (#51): re-resolve the active space immediately before a mutating
+    // call and verify it still matches the space resolved earlier in the
+    // handler. Commands queue behind the serial executor (P1) and the
+    // wake-completion gate, so a user space switch can land between the
+    // initial resolve and the mutation — a queued reset/resize would then hit
+    // the PREVIOUS space. Returns the confirmed space ID, or nil + logs on a
+    // mismatch (caller aborts).
+    private func reresolveActiveSpaceID(expected: String) async -> String? {
+        let current = await resolveActiveSpaceID()
+        let confirmed = SpaceMigrationPolicy.confirmActiveSpace(
+            expected: expected, current: current)
+        if confirmed == nil {
+            jlog("cmd.space.reresolve", data: [
+                "expected": expected,
+                "current": current ?? "nil",
+                "ok": false,
+            ])
+        }
+        return confirmed
+    }
+
     private func warpMouseToFocusedWindow() async {
         let wmState = await stateManager.getState()
         guard let spaceID = gridFocus.findActiveSpaceID(wmState) else { return }
@@ -665,8 +686,14 @@ class GridCommandRouter {
             guard let spaceID = await resolveActiveSpaceID() else {
                 return .error("no active space")
             }
-            await gridState.removeSpace(spaceID)
-            return .ok("reset state for space \(spaceID)")
+            // DW-2.4 (#51): re-resolve immediately before the destructive wipe.
+            // A space switch landing between resolve and removeSpace must not
+            // let a queued reset clobber the space the user just left.
+            guard let confirmedSpaceID = await reresolveActiveSpaceID(expected: spaceID) else {
+                return .error("space changed; reset aborted")
+            }
+            await gridState.removeSpace(confirmedSpaceID)
+            return .ok("reset state for space \(confirmedSpaceID)")
 
         default:
             return .error("unknown state action: \(cmd.action)")

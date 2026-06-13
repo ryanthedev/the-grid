@@ -32,11 +32,18 @@ enum StateEvent {
     case spaceDestroyed(spaceID: UInt64)
     // macOS reassigned a space ID on a display (e.g. fullscreen app create/destroy)
     case spaceIDReassigned(oldSpaceID: String, newSpaceID: String, displayUUID: String)
+    // Plain desktop switch — the old space still exists (#2). No migration;
+    // the reconciler resyncs borders for the newly-active space.
+    case spaceActivated(spaceID: String, displayUUID: String)
 
     // Display lifecycle
     case displayConnected(displayUUID: String)
     case displayDisconnected(displayUUID: String)
     case displayReconfigured(displayUUID: String)
+    // Geometry-only reconfiguration (#25): resolution/scaling/Dock change with
+    // the same display UUID set. Carries the affected display; reconciler
+    // reapplies layouts (debounced).
+    case displayGeometryChanged(displayUUID: String)
 
     // App lifecycle
     case appLaunched(app: NSRunningApplication)
@@ -308,6 +315,9 @@ extension StateEvent {
                 "display": displayUUID
             ])
 
+        case .spaceActivated(let spaceID, let displayUUID):
+            return ("ev.spc.activate", ["sid": spaceID, "display": displayUUID])
+
         // Display lifecycle
         case .displayConnected(let displayUUID):
             return ("ev.dsp.connect", ["display": displayUUID])
@@ -317,6 +327,9 @@ extension StateEvent {
 
         case .displayReconfigured(let displayUUID):
             return ("ev.dsp.reconfig", ["display": displayUUID])
+
+        case .displayGeometryChanged(let displayUUID):
+            return ("ev.dsp.geometry", ["display": displayUUID])
 
         // App lifecycle
         case .appLaunched(let app):
