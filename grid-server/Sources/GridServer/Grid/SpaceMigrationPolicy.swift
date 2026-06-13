@@ -75,21 +75,19 @@ enum SpaceMigrationPolicy {
         return current
     }
 
-    // #26: a layout write must be aborted when the target space no longer
-    // exists — a space-ID reassignment migrated it away mid-apply, so writing
-    // back would resurrect a zombie space. The disappearance of the space is
-    // the sole correctness signal: handleSpaceIDReassigned migrates without
-    // bumping the action generation, so the generation counter cannot detect a
-    // migration-only transition (entryGeneration == currentGeneration while the
-    // space is gone). The generation parameters are retained for diagnostics at
-    // the call site, but a surviving space is always safe to write regardless of
-    // generation, and a vanished space always aborts.
+    // #26: a layout write must be aborted when the target space was migrated
+    // (or closed) away DURING this apply — it existed in GridState when the
+    // apply began but is gone now, so writing back would resurrect a zombie
+    // space. The signal is the TRANSITION existed→gone, not mere absence:
+    // a space that never existed at entry is simply being laid out for the
+    // first time (e.g. after a state reset) and MUST be written — its GridState
+    // entry is created by this very apply. Checking only `!spaceStillExists`
+    // wrongly aborts every first-time apply (the regression this replaces).
     static func shouldAbortStaleWrite(
-        entryGeneration: UInt64,
-        currentGeneration: UInt64,
+        spaceExistedAtEntry: Bool,
         spaceStillExists: Bool
     ) -> Bool {
-        return !spaceStillExists
+        return spaceExistedAtEntry && !spaceStillExists
     }
 
     // #6: a migration may proceed only when the destination space does NOT

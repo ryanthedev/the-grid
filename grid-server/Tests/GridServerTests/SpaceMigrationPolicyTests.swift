@@ -103,33 +103,34 @@ final class SpaceMigrationPolicyTests: XCTestCase {
 
     // MARK: - DW-2.3 (#26): stale-write abort predicate
 
-    func test_DW_2_3_abort_when_generation_changed_and_space_gone() {
+    func test_DW_2_3_abort_when_space_existed_then_vanished() {
         XCTAssertTrue(SpaceMigrationPolicy.shouldAbortStaleWrite(
-            entryGeneration: 5, currentGeneration: 7, spaceStillExists: false),
-            "migrated-away space with advanced generation must abort the write")
+            spaceExistedAtEntry: true, spaceStillExists: false),
+            "a space that existed at apply entry but is gone now was migrated/closed away -- abort")
     }
 
     func test_DW_2_3_no_abort_when_space_still_exists() {
         XCTAssertFalse(SpaceMigrationPolicy.shouldAbortStaleWrite(
-            entryGeneration: 5, currentGeneration: 7, spaceStillExists: true),
-            "a surviving space is safe to write even if generation advanced")
+            spaceExistedAtEntry: true, spaceStillExists: true),
+            "a surviving space is safe to write")
     }
 
-    // Regression (#26): handleSpaceIDReassigned migrates the space WITHOUT
-    // bumping the generation counter, so the migration-only zombie write has
-    // entryGeneration == currentGeneration while the target space is gone. The
-    // missing-space signal alone must abort the write; the generation match
-    // must not green-light resurrecting the migrated-away space.
-    func test_DW_2_3_abort_when_space_gone_even_if_generation_unchanged() {
-        XCTAssertTrue(SpaceMigrationPolicy.shouldAbortStaleWrite(
-            entryGeneration: 5, currentGeneration: 5, spaceStillExists: false),
-            "a space migrated away mid-apply must abort the write even when the generation counter did not advance")
-    }
-
-    func test_DW_2_3_no_abort_when_space_exists_and_generation_unchanged() {
+    // Regression (the cascade this replaces): after a state reset the active
+    // space has NO GridState entry until the first apply creates it, so
+    // spaceStillExists is false at the write-phase check. The old `!spaceStillExists`
+    // predicate aborted that first apply -> the space never got a layout ->
+    // noLayout cascade (focus/move/borders all dead). A space that never existed
+    // at entry MUST NOT abort: it is a legitimate first-time apply.
+    func test_DW_2_3_no_abort_on_first_apply_space_never_existed() {
         XCTAssertFalse(SpaceMigrationPolicy.shouldAbortStaleWrite(
-            entryGeneration: 5, currentGeneration: 5, spaceStillExists: true),
-            "nominal apply -- space present, no action ran in between")
+            spaceExistedAtEntry: false, spaceStillExists: false),
+            "first-time apply (no entry at start, none yet) must be written, not aborted")
+    }
+
+    func test_DW_2_3_no_abort_when_space_created_during_apply() {
+        XCTAssertFalse(SpaceMigrationPolicy.shouldAbortStaleWrite(
+            spaceExistedAtEntry: false, spaceStillExists: true),
+            "space created during the apply -- write it")
     }
 
     // MARK: - DW-2.6 (#24): zero/degenerate bounds guard

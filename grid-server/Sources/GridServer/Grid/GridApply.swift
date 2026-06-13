@@ -134,6 +134,11 @@ class GridApply {
         // exist — writing layout/assignments back then resurrects a zombie
         // space. We re-check before the write phase and abort.
         let entryGeneration = gridReconciler?.generation
+        // Snapshot whether this space already exists in GridState at apply entry.
+        // The stale-write guard (#26) must distinguish a space migrated/closed away
+        // mid-apply (existed at entry, gone at write) from a first-time apply that
+        // legitimately has no entry yet (this apply creates it).
+        let spaceExistedAtEntry = await gridState.getSpaceReadOnly(spaceID) != nil
 
         // 1. Get layout definition
         let layoutDef = try await MainActor.run { try gridConfig.getLayout(id: layoutID) }
@@ -278,26 +283,21 @@ class GridApply {
             jlog("layout.apply.ax_partial", data: ["failed": failedIDs.sorted()])
         }
 
-        // DW-2.3 (#26): re-resolve before the write phase. If the action
-        // generation advanced AND the target space no longer exists, a space-ID
-        // reassignment migrated this space away mid-apply — writing now would
-        // resurrect a zombie space. Abort the write (the AX placements already
-        // ran; the migrated space's GridState is authoritative).
-        if let entryGeneration, let reconciler = gridReconciler {
-            let currentGeneration = reconciler.generation
-            let spaceStillExists = await gridState.getSpaceReadOnly(spaceID) != nil
-            if SpaceMigrationPolicy.shouldAbortStaleWrite(
-                entryGeneration: entryGeneration,
-                currentGeneration: currentGeneration,
-                spaceStillExists: spaceStillExists) {
-                jlog("warn.layout.stale_space", data: [
-                    "sid": spaceID,
-                    "lid": layoutID,
-                    "entryGen": Int(entryGeneration),
-                    "curGen": Int(currentGeneration),
-                ])
-                return
-            }
+        // DW-2.3 (#26): re-resolve before the write phase. Abort ONLY when this
+        // space existed at apply entry but has since vanished — a space-ID
+        // reassignment migrated it away (or it closed) mid-apply, and writing now
+        // would resurrect a zombie space. A space that never existed at entry is a
+        // first-time apply and MUST be written (it creates the GridState entry).
+        let spaceStillExists = await gridState.getSpaceReadOnly(spaceID) != nil
+        if SpaceMigrationPolicy.shouldAbortStaleWrite(
+            spaceExistedAtEntry: spaceExistedAtEntry,
+            spaceStillExists: spaceStillExists) {
+            jlog("warn.layout.stale_space", data: [
+                "sid": spaceID,
+                "lid": layoutID,
+                "existedAtEntry": spaceExistedAtEntry,
+            ])
+            return
         }
 
         // 13. Update GridState
