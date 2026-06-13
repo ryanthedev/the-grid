@@ -59,6 +59,20 @@ actor StateManager: StateEventHandler, StateProvider {
     // How long to consider a focus as "CLI-initiated" (prevents loop)
     private let cliFocusWindow: TimeInterval = 0.5
 
+    // FIX 2 / DW-D4: removal tombstone. A wid removed from state (poll-prune or
+    // handleWindowDestroyed) is stamped here. The poll-apply "window absent from
+    // state" branch logs warn.poll.readd ONLY when the wid is still tombstoned
+    // within the grace window — a genuine #60 resurrection (the off-actor
+    // snapshot predated the removal). Without this gate the branch fired for
+    // EVERY poll-discovered window StateManager doesn't track (~126/poll).
+    // Actor-isolated — safe (no new shared concurrency state).
+    private var removalTombstone: [UInt32: CFAbsoluteTime] = [:]
+
+    // Resurrection grace. Just over one 3.0s poll interval so a snapshot taken
+    // before a removal can still resurrect within one poll, but a legitimate
+    // later rediscovery (different window, reused id) does not false-positive.
+    private let resurrectionGraceSeconds: CFAbsoluteTime = 3.5
+
     // CLI path (used for ResizeManager)
     private var cliPath: String = "thegrid"
 
@@ -160,6 +174,37 @@ actor StateManager: StateEventHandler, StateProvider {
     func _test_setState(_ s: WindowManagerState) {
         state = s
     }
+
+    // FIX 2 / DW-D4 test seams: drive the actor-isolated removal tombstone +
+    // resurrection predicate deterministically, off the AX/SLS poll boundary.
+
+    func _test_resetTombstone() {
+        removalTombstone = [:]
+    }
+
+    func _test_noteRemoval(_ windowID: UInt32, at time: CFAbsoluteTime) {
+        removalTombstone[windowID] = time
+    }
+
+    func _test_isResurrection(wid: UInt32, now: CFAbsoluteTime) -> Bool {
+        GraceWindowPolicy.isResurrection(
+            removedAt: removalTombstone[wid],
+            now: now,
+            graceSeconds: resurrectionGraceSeconds
+        )
+    }
+
+    func _test_pruneTombstone(now: CFAbsoluteTime) {
+        removalTombstone = removalTombstone.filter { _, removedAt in
+            GraceWindowPolicy.isResurrection(
+                removedAt: removedAt,
+                now: now,
+                graceSeconds: resurrectionGraceSeconds
+            )
+        }
+    }
+
+    var _test_tombstoneCount: Int { removalTombstone.count }
 
     /// Graceful shutdown - cleanup all observers and timers
     /// MUST be called before server termination to prevent resource leaks
@@ -1362,6 +1407,17 @@ var windows: [String: WindowState] = [:]
     /// Apply pre-fetched CGWindowList results to state (called on actor)
     private func applyPollResults(_ windowList: [[String: Any]]) {
         let pollTimestamp = Date()
+        let pollNow = CFAbsoluteTimeGetCurrent()
+
+        // FIX 2 / DW-D4: drop expired removal tombstones each poll so the map
+        // stays bounded and stale entries can't false-positive a resurrection.
+        removalTombstone = removalTombstone.filter { _, removedAt in
+            GraceWindowPolicy.isResurrection(
+                removedAt: removedAt,
+                now: pollNow,
+                graceSeconds: resurrectionGraceSeconds
+            )
+        }
 
         var seenWindowIDs = Set<UInt32>()
         var newWindowIDs: [(UInt32, pid_t)] = []
@@ -1379,13 +1435,20 @@ var windows: [String: WindowState] = [:]
             } else {
                 // New window discovered by poll
                 let pid = windowInfo[kCGWindowOwnerPID as String] as? pid_t ?? 0
-                // #60s (instrumentation only, no behavior change): a window in
-                // the off-actor snapshot but absent from state may be a window
-                // destroyed between snapshot and apply — the poll would then
-                // resurrect it and route a phantom windowCreated. Trace it so UAT
-                // can correlate with a recent win.destroyed for the same wid.
-                // Confirm-or-drop in UAT (no tombstone-skip added).
-                jlog("warn.poll.readd", data: ["wid": Int(windowID), "pid": Int(pid)])
+                // FIX 2 / DW-D4 (#60): a window absent from state may be a
+                // genuine resurrection — a wid removed between the off-actor
+                // snapshot and this apply, which the stale snapshot then re-adds.
+                // Log warn.poll.readd ONLY for that case (wid still tombstoned
+                // within grace). The common case — a window the poll discovered
+                // that StateManager simply never tracked — is not a resurrection
+                // and must not be logged (it flooded ~126 lines/poll).
+                if GraceWindowPolicy.isResurrection(
+                    removedAt: removalTombstone[windowID],
+                    now: pollNow,
+                    graceSeconds: resurrectionGraceSeconds
+                ) {
+                    jlog("warn.poll.readd", data: ["wid": Int(windowID), "pid": Int(pid)])
+                }
                 addWindowFromPoll(windowID: windowID, windowInfo: windowInfo, timestamp: pollTimestamp)
                 // Track for windowCreated event routing (only if actually added)
                 if state.windows[String(windowID)] != nil {
@@ -1416,6 +1479,10 @@ var windows: [String: WindowState] = [:]
                     state.metadata.focusedWindowID = nil
                 }
                 state.windows.removeValue(forKey: windowKey)
+                // FIX 2 / DW-D4: tombstone the poll-pruned wid so a stale
+                // snapshot re-adding it within grace is recognized as a #60
+                // resurrection.
+                removalTombstone[windowID] = pollNow
                 if let pid = pid {
                     state.applications[String(pid)]?.windows.removeAll { $0 == windowID }
                 }
@@ -1659,6 +1726,11 @@ var windows: [String: WindowState] = [:]
 
         // Remove from state
         state.windows.removeValue(forKey: String(windowID))
+
+        // FIX 2 / DW-D4: tombstone the destroyed wid so a poll whose snapshot
+        // predated this removal, re-adding the wid within grace, is recognized
+        // as a #60 resurrection (and only then logs warn.poll.readd).
+        removalTombstone[windowID] = CFAbsoluteTimeGetCurrent()
 
         // Remove from app's window list
         if let pid = pid {

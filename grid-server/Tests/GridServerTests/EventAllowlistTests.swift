@@ -146,6 +146,8 @@ final class EventAllowlistTests: XCTestCase {
         "reconcile.focus.suppressed",
         "reconcile.init",
         "reconcile.lift.migrate",
+        // FIX 1 / DW-D2: displaced-sweep skip for a window within cross-move grace.
+        "reconcile.lift.skip",
         "reconcile.pending.expired", "reconcile.pending.pid",
         "reconcile.pending.set", "reconcile.pending.skip",
         "reconcile.pending.space.mismatch", "reconcile.pending.space.moved",

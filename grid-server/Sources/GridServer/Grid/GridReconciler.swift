@@ -57,6 +57,21 @@ class GridReconciler: StateEventHandler {
     // window buttons slightly after creation then tile without a manual reopen.
     private var notStandardGrace: [UInt32: CFAbsoluteTime] = [:]
 
+    // FIX 1 / DW-D2: windows deliberately moved across spaces, with the move
+    // timestamp. On a machine where MSS is unavailable the SLS space query
+    // (wmState.windows[wid].spaces) lags the async move by up to a poll
+    // interval (~3s), so sweepDisplacedWindows would otherwise see the
+    // just-moved window as "displaced" and migrate its GridState assignment
+    // back — bouncing the move. A window within this grace is exempt from
+    // displaced-sweep correction until SLS catches up. Lives on the
+    // single-threaded reconciler event path (same threading class as
+    // notStandardGrace) — no new shared concurrency state.
+    private var crossMoveGrace: [UInt32: CFAbsoluteTime] = [:]
+
+    // Grace span for crossMoveGrace. 5s covers the ~3s SLS poll lag with
+    // margin (matches the fence-timeout magnitude).
+    private let crossMoveGraceSeconds: CFAbsoluteTime = 5.0
+
     // Timeout for pending launch target (app may take time to launch)
     private let pendingLaunchTimeout: CFAbsoluteTime = 15.0
 
@@ -307,6 +322,14 @@ class GridReconciler: StateEventHandler {
                 "depth": depth,
             ])
         }
+    }
+
+    // FIX 1 / DW-D2: record a deliberate cross-space move so the displaced
+    // sweep exempts this window until the SLS space query catches up. Called
+    // synchronously from GridWindowMove.moveWindowCrossDisplay after the move
+    // succeeds (mirrors acquireFence — single-threaded reconciler path).
+    func noteCrossSpaceMove(_ windowID: UInt32) {
+        crossMoveGrace[windowID] = CFAbsoluteTimeGetCurrent()
     }
 
     func setPendingLaunchTarget(_ target: PendingLaunchTarget?) {
@@ -1726,7 +1749,29 @@ class GridReconciler: StateEventHandler {
 
         let allWids = await gridState.getAllWindowIDs()
 
+        let sweepNow = CFAbsoluteTimeGetCurrent()
+
         for wid in allWids {
+            // FIX 1 / DW-D2: a window deliberately moved across spaces is exempt
+            // from displaced-sweep correction until its grace expires (by which
+            // time the lagging SLS space query catches up). Skipping here
+            // prevents the just-moved window bouncing back to its origin space.
+            if GraceWindowPolicy.withinCrossMoveGrace(
+                movedAt: crossMoveGrace[wid],
+                now: sweepNow,
+                graceSeconds: crossMoveGraceSeconds
+            ) {
+                jlog("reconcile.lift.skip", data: [
+                    "wid": Int(wid),
+                    "reason": "recent_cross_move",
+                ])
+                continue
+            }
+            // Prune an expired cross-move grace entry once it no longer gates.
+            if crossMoveGrace[wid] != nil {
+                crossMoveGrace[wid] = nil
+            }
+
             // Resolve the space GridState believes this window is on
             guard let trackedSpaceID = await gridState.findSpaceContaining(windowID: wid) else {
                 continue
@@ -1823,6 +1868,22 @@ class GridReconciler: StateEventHandler {
     // _test_notStandardGraceCount: number of windows tracked for not_standard
     // grace re-evaluation (DW-4.6).
     var _test_notStandardGraceCount: Int { notStandardGrace.count }
+
+    // _test_noteCrossSpaceMove: record a cross-space move at an explicit time
+    // so the grace gate can be exercised deterministically (DW-D2).
+    func _test_noteCrossSpaceMove(_ windowID: UInt32, at time: CFAbsoluteTime) {
+        crossMoveGrace[windowID] = time
+    }
+
+    // _test_shouldSkipDisplacedForGrace: drive the real grace map through the
+    // real predicate exactly as sweepDisplacedWindows does (DW-D2).
+    func _test_shouldSkipDisplacedForGrace(wid: UInt32, now: CFAbsoluteTime) -> Bool {
+        GraceWindowPolicy.withinCrossMoveGrace(
+            movedAt: crossMoveGrace[wid],
+            now: now,
+            graceSeconds: crossMoveGraceSeconds
+        )
+    }
 
     // _test_setWindowController: inject the WindowController port (DW-4.4).
     func _test_setWindowController(_ controller: any WindowController) {
