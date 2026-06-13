@@ -226,6 +226,9 @@ final class EventAllowlistTests: XCTestCase {
         "err.move.cross_display",
         // #48: autoflow silent drop when all cells are locked.
         "warn.assign.dropped",
+        // #16 regression fix: SLS-fallback space move issued but not confirmed
+        // within the verification retry window (best-effort success).
+        "warn.move.sls_unverified",
     ]
 
     // Resolve the Sources/GridServer root by walking up from this file.

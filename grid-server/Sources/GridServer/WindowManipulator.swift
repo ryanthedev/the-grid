@@ -423,8 +423,7 @@ return true
                 if !success {
                     return false
                 }
-                let newSpace = getWindowSpace(windowID: windowID)
-                return newSpace == spaceID
+                return confirmSLSMove(windowID: windowID, spaceID: spaceID)
             }
         } else {
             // Older macOS - use direct API
@@ -436,15 +435,34 @@ return true
                 return false
             }
 
-            let newSpace = getWindowSpace(windowID: windowID)
-            let verified = newSpace == spaceID
-
-            if !verified {
-                JSONLogger.shared.log("err.verify", data: ["wid": windowID, "expected": spaceID, "actual": newSpace as Any])
-            }
-
-            return verified
+            return confirmSLSMove(windowID: windowID, spaceID: spaceID)
         }
+    }
+
+    /// Confirm a SkyLight-fallback space move.
+    ///
+    /// `SLSMoveWindowsToManagedSpace` is asynchronous and exposes no synchronous
+    /// success signal, so an immediate `getWindowSpace` re-query races the move and
+    /// reports the old space. Retry the verification briefly; if the window reflects
+    /// the target space, the move is confirmed. If it still has not reflected after
+    /// the retry window, treat the issued move as best-effort success (the SLS path
+    /// gives us nothing better to decide on, and callers must not block a move that
+    /// the OS likely honored) and surface the uncertainty via a warning. Only the
+    /// MSS path — which has a real success Bool — reports a hard move failure.
+    private func confirmSLSMove(windowID: UInt32, spaceID: UInt64) -> Bool {
+        var newSpace = getWindowSpace(windowID: windowID)
+        var attempts = 0
+        // ~100ms worst case; resolves in 1–2 iterations for an honored move.
+        while newSpace != spaceID && attempts < 5 {
+            usleep(20_000)
+            newSpace = getWindowSpace(windowID: windowID)
+            attempts += 1
+        }
+        if newSpace == spaceID {
+            return true
+        }
+        JSONLogger.shared.log("warn.move.sls_unverified", data: ["wid": windowID, "expected": spaceID, "actual": newSpace as Any])
+        return true
     }
 
     // MARK: - Window Focus
