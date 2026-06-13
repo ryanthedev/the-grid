@@ -136,11 +136,11 @@ struct GridServerCommand: ParsableCommand {
             // Initialize GridConfig (replaces ServerConfig)
             let gridConfig = GridConfig()
 
-            // Initialize GridState (load persisted state)
+            // Initialize GridState. Persisted state is loaded inside the wiring
+            // Task below, BEFORE the reconciler registers with EventRouter (#45),
+            // so an early windowCreated/layout-apply cannot be clobbered by a
+            // late load() that wholesale-replaces spaces.
             let gridState = GridState()
-            Task {
-                await gridState.load()
-            }
 
             // Load config on @MainActor so that:
             // - gridConfig.onReload (MainActor-isolated) can be assigned safely
@@ -158,6 +158,12 @@ struct GridServerCommand: ParsableCommand {
 
             // Initialize StateManager (async) and connect border events + reconciler
             Task {
+                // #45: load persisted grid state BEFORE wiring the reconciler.
+                // load() is cheap (a single JSON decode) and replaces `spaces`
+                // wholesale, so it must complete before any event handler or
+                // command can mutate in-memory state.
+                await gridState.load()
+
                 await StateManager.shared.start(gridConfig: gridConfig)
                 await StateManager.shared.setBorderEvents(borderEvents)
                 jlog("state.init")
@@ -237,6 +243,10 @@ struct GridServerCommand: ParsableCommand {
                 gridConfig: gridConfig,
                 stateManager: StateManager.shared
             )
+
+            // #49: registration is complete — grid.* methods no longer 404 in
+            // the startup window; the dict is fully populated and guarded.
+            messageHandler.finalizeRegistration()
 
             // Reapply layouts on startup to reposition windows after server restart.
             // Runs after all modules are wired, with a brief delay to let

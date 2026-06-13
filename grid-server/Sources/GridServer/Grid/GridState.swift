@@ -115,12 +115,37 @@ actor GridState {
             guard let decoded = try await storage.load() else {
                 return
             }
+            // #45: defense in depth. load() is sequenced before wiring in
+            // main.swift, but if any in-memory space already carries
+            // significant state (an early create/apply handled before load
+            // completed), do NOT wholesale-replace it — merge the persisted
+            // spaces in only for keys we don't already hold non-empty state for.
+            if hasAnySignificantState() {
+                for (key, value) in decoded.spaces where !spaceHasSignificantState(key) {
+                    spaces[key] = value
+                }
+                for (key, value) in decoded.displaySpaces where displaySpaces[key] == nil {
+                    displaySpaces[key] = value
+                }
+                jlog("grid.state.load.merge", data: ["spaces": spaces.count])
+                return
+            }
             spaces = decoded.spaces
             displaySpaces = decoded.displaySpaces
             lastUpdated = decoded.lastUpdated
         } catch {
             jlog("err.grid.state.load", msg: "\(error)")
         }
+    }
+
+    /// True if any in-memory space already holds layout/cell state worth keeping.
+    private func hasAnySignificantState() -> Bool {
+        return spaces.values.contains { hasSignificantState($0) }
+    }
+
+    private func spaceHasSignificantState(_ spaceID: String) -> Bool {
+        guard let s = spaces[spaceID] else { return false }
+        return hasSignificantState(s)
     }
 
     // MARK: - Persistence (debounced)
@@ -348,26 +373,27 @@ actor GridState {
         markDirty()
     }
 
-    func cycleLayout(spaceID: String, availableLayouts: [String]) -> String {
+    // #58: compute the next/previous layout id WITHOUT mutating state. The
+    // router passes the computed id to applyLayout, whose body commits the
+    // layout switch (the single writer) only after the layout def is fetched
+    // and bounds validated. The old cycleLayout/previousLayout wiped cells +
+    // focus BEFORE applyLayout ran, so a throwing apply left the space wiped.
+    func computeCycleLayout(spaceID: String, availableLayouts: [String]) -> String {
         if availableLayouts.isEmpty {
             return spaces[spaceID]?.currentLayoutId ?? ""
         }
         let space = getSpace(spaceID)
         let newIndex = (space.layoutIndex + 1) % availableLayouts.count
-        let newLayoutID = availableLayouts[newIndex]
-        setCurrentLayout(spaceID: spaceID, layoutID: newLayoutID, layoutIndex: newIndex)
-        return newLayoutID
+        return availableLayouts[newIndex]
     }
 
-    func previousLayout(spaceID: String, availableLayouts: [String]) -> String {
+    func computePreviousLayout(spaceID: String, availableLayouts: [String]) -> String {
         if availableLayouts.isEmpty {
             return spaces[spaceID]?.currentLayoutId ?? ""
         }
         let space = getSpace(spaceID)
         let newIndex = (space.layoutIndex - 1 + availableLayouts.count) % availableLayouts.count
-        let newLayoutID = availableLayouts[newIndex]
-        setCurrentLayout(spaceID: spaceID, layoutID: newLayoutID, layoutIndex: newIndex)
-        return newLayoutID
+        return availableLayouts[newIndex]
     }
 
     func getCurrentLayout(spaceID: String) -> String {

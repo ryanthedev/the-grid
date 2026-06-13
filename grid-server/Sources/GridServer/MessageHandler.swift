@@ -12,7 +12,15 @@ private func _AXUIElementGetWindow(_ element: AXUIElement, _ windowID: UnsafeMut
 class MessageHandler {
     typealias RequestHandler = (Request, @escaping (Response) -> Void) -> Void
 
+    // #49: handlers is read on the cooperative pool (handle's Task) and written
+    // on the main thread (registerGridHandlers). An unsynchronized Dictionary
+    // accessed concurrently is undefined behavior in Swift. Guard every access
+    // with this serial queue. `ready` flips true once full registration
+    // completes, so a grid.* request arriving in the startup window gets a
+    // retryable error instead of a spurious -32601.
+    private let handlersQueue = DispatchQueue(label: "com.thegrid.msg.handlers")
     private var handlers: [String: RequestHandler] = [:]
+    private var ready = false
 
     /// Simple border manager for handling simplified border system
     weak var simpleBorderManager: SimpleBorderManager?
@@ -23,10 +31,39 @@ class MessageHandler {
 
     /// Register a handler for a specific method
     func register(method: String, handler: @escaping RequestHandler) {
-        handlers[method] = handler
+        handlersQueue.sync {
+            handlers[method] = handler
+        }
         Task {
             JSONLogger.shared.log("msg.register", data: ["method": method])
         }
+    }
+
+    /// Mark registration complete. Called after registerGridHandlers wires every
+    /// grid.* method, so the startup 404 window is closed (#49).
+    func finalizeRegistration() {
+        handlersQueue.sync {
+            ready = true
+        }
+        Task {
+            JSONLogger.shared.log("msg.ready", data: ["methods": self.handlerCount()])
+        }
+    }
+
+    /// Snapshot of the registered method count (test/log helper).
+    func handlerCount() -> Int {
+        return handlersQueue.sync { handlers.count }
+    }
+
+    /// Whether full registration has completed.
+    func isReady() -> Bool {
+        return handlersQueue.sync { ready }
+    }
+
+    /// Thread-safe lookup. Returns (handler, ready) atomically so the caller can
+    /// distinguish "unknown method" from "not registered yet".
+    private func lookup(_ method: String) -> (handler: RequestHandler?, ready: Bool) {
+        return handlersQueue.sync { (handlers[method], ready) }
     }
 
     /// Handle a request and call completion with the response
@@ -53,17 +90,25 @@ class MessageHandler {
             await CurrentSpan.$current.withValue(span) {
                 JSONLogger.shared.log("msg.handle", data: ["id": request.id, "method": request.method])
 
-                guard let handler = handlers[request.method] else {
+                let (maybeHandler, ready) = self.lookup(request.method)
+                guard let handler = maybeHandler else {
+                    // #49: a grid.* method that is unknown ONLY because full
+                    // registration has not finished yet is a transient startup
+                    // condition, not a permanent "method not found". Surface a
+                    // retryable error so a client retry loop succeeds once ready.
+                    let stillStarting = !ready && request.method.hasPrefix("grid.")
                     let response = Response(
                         id: request.id,
                         error: ErrorInfo(
-                            code: -32601,
-                            message: "Method not found: \(request.method)"
+                            code: stillStarting ? -32000 : -32601,
+                            message: stillStarting
+                                ? "Server initializing, retry"
+                                : "Method not found: \(request.method)"
                         )
                     )
 
                     JSONLogger.shared.log("msg.err", data: [
-                        "op": "method_not_found",
+                        "op": stillStarting ? "not_ready" : "method_not_found",
                         "method": request.method,
                         "id": request.id
                     ])
@@ -1461,18 +1506,31 @@ completion(Response(id: request.id, result: AnyCodable(["success": true])))
                 }
             }
 
-            // Strategy and space as value flags
-            if let strategy = params["strategy"]?.value as? String {
-                parts.append("--strategy")
-                parts.append(strategy)
+            // #22: forward @notify payload params as value flags so handleNotify
+            // (and the GridNotify app via userInfo) receive title/body/etc. These
+            // were silently dropped before, collapsing push/dismiss to a toggle.
+            if domain == "notify" {
+                let purge = (params["purge"]?.value as? Bool) ?? false
+                parts.append(contentsOf: NotifyActionPolicy.payloadFlags(
+                    lookup: { params[$0]?.value as? String },
+                    purge: purge
+                ))
             }
-            if let space = params["space"]?.value as? String {
-                parts.append("--space")
-                parts.append(space)
-            }
-            if let display = params["display"]?.value as? String {
-                parts.append("--display")
-                parts.append(display)
+
+            // Strategy and space as value flags (notify never uses these).
+            if domain != "notify" {
+                if let strategy = params["strategy"]?.value as? String {
+                    parts.append("--strategy")
+                    parts.append(strategy)
+                }
+                if let space = params["space"]?.value as? String {
+                    parts.append("--space")
+                    parts.append(space)
+                }
+                if let display = params["display"]?.value as? String {
+                    parts.append("--display")
+                    parts.append(display)
+                }
             }
 
             return parts.joined(separator: " ")

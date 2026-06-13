@@ -188,13 +188,33 @@ class MSSClient {
 
             let result = mss_window_move_to_space(ctx, windowID, spaceID)
 
-            if !result {
-                JSONLogger.shared.log("mss.fail", data: ["op": "move", "wid": windowID, "sid": spaceID])
+            if result {
+                consecutiveMoveFailures = 0
+            } else {
+                consecutiveMoveFailures += 1
+                JSONLogger.shared.log("mss.fail", data: [
+                    "op": "move", "wid": windowID, "sid": spaceID,
+                    "consecutive": consecutiveMoveFailures,
+                ])
+                // #36: a cached-true client whose Dock-side socket died (Dock
+                // restart) keeps "succeeding" the availability check while every
+                // real move fails. After a run of failures, invalidate the cache
+                // and reconnect so the next isAvailable() re-handshakes.
+                if MSSReprobePolicy.shouldReprobe(consecutiveFailures: consecutiveMoveFailures) {
+                    JSONLogger.shared.log("mss.reprobe", data: ["consecutive": consecutiveMoveFailures])
+                    cachedAvailable = nil
+                    consecutiveMoveFailures = 0
+                    reconnect()
+                }
             }
 
             return result
         }
     }
+
+    /// Consecutive real-operation failures since the last success. Drives the
+    /// re-probe in moveWindowToSpace (#36). Accessed only under `queue`.
+    private var consecutiveMoveFailures = 0
 
     /// Set window opacity (instant change)
     /// - Parameters:

@@ -26,6 +26,11 @@ actor StateManager: StateEventHandler, StateProvider {
 
     // AX Observers (one per application)
     private var applicationObservers: [pid_t: ApplicationObserver] = [:]
+    // #33: pids whose observer is being created on the MainActor but not yet
+    // installed. Reserving the slot synchronously (actor-isolated) closes the
+    // TOCTOU window where a second createObserver for the same pid passes the
+    // nil guard and installs a duplicate live AXObserver.
+    private var observerCreationInFlight: Set<pid_t> = []
 
     // Workspace observer (system-level events)
     private var workspaceObserver: WorkspaceObserver?
@@ -177,7 +182,7 @@ actor StateManager: StateEventHandler, StateProvider {
         // Stop all application observers synchronously to prevent race conditions
         let pids = Array(applicationObservers.keys)
         for pid in pids {
-            removeObserver(for: pid)
+            await removeObserver(for: pid)
         }
 
         // Clear accumulated state dictionaries
@@ -345,7 +350,7 @@ actor StateManager: StateEventHandler, StateProvider {
         }
 
         let pid = frontApp.processIdentifier
-        let appElement = AXUIElementCreateApplication(pid)
+        let appElement = makeAppElement(pid: pid)
 
         var focusedWindowRef: AnyObject?
         let result = AXUIElementCopyAttributeValue(
@@ -575,7 +580,7 @@ actor StateManager: StateEventHandler, StateProvider {
     }
 
     private func getAXProperties(pid: pid_t, windowID: UInt32) -> AXWindowProperties {
-        let appElement = AXUIElementCreateApplication(pid)
+        let appElement = makeAppElement(pid: pid)
 
         // Get windows for this application
         var windowsValue: CFTypeRef?
@@ -1238,8 +1243,16 @@ var windows: [String: WindowState] = [:]
     // the app then runs entirely unobserved. Retry with bounded backoff before
     // giving up so the launch race does not permanently drop AX events.
     private func createObserver(pid: pid_t, appName: String?, attempt: Int) {
-        // Don't create duplicate observers
-        guard applicationObservers[pid] == nil else { return }
+        // #33: don't create duplicate observers. Reject if one is already
+        // installed OR a creation for this pid is already in flight on the
+        // MainActor (the TOCTOU the original nil-only guard missed).
+        guard ObserverSlotPolicy.canCreate(
+            installed: applicationObservers[pid] != nil,
+            inFlight: observerCreationInFlight.contains(pid)) else { return }
+
+        // Reserve the slot synchronously (we are on the actor) BEFORE spawning
+        // the MainActor Task, so a second call in the async window is rejected.
+        observerCreationInFlight.insert(pid)
 
         let observer = ApplicationObserver(pid: pid, appName: appName)
 
@@ -1255,6 +1268,9 @@ var windows: [String: WindowState] = [:]
     }
 
     private func scheduleObserverRetry(pid: pid_t, appName: String?, attempt: Int) {
+        // Clear the in-flight reservation: this attempt failed, so a retry (or a
+        // fresh createObserver) for this pid must be allowed to proceed (#33).
+        observerCreationInFlight.remove(pid)
         guard let delay = ObserverRetryPolicy.nextDelay(attempt: attempt) else {
             jlog("ax.observer.create.failed", data: [
                 "pid": pid,
@@ -1279,19 +1295,32 @@ var windows: [String: WindowState] = [:]
     }
 
     /// Add an application observer (called from createObserver after MainActor setup)
-    private func addApplicationObserver(_ observer: ApplicationObserver, for pid: pid_t) {
+    private func addApplicationObserver(_ observer: ApplicationObserver, for pid: pid_t) async {
+        // #33: if a prior observer somehow occupies this slot, stop it before
+        // overwriting — otherwise its run-loop source + unretained refcon stay
+        // installed and a later AX callback dereferences a dangling pointer.
+        if let displaced = applicationObservers[pid] {
+            await MainActor.run {
+                displaced.stopObserving()
+            }
+            jlog("ax.observer.stop", data: ["pid": pid, "reason": "replaced"])
+        }
         applicationObservers[pid] = observer
+        observerCreationInFlight.remove(pid)
     }
 
     /// Remove an AX observer for a specific application
     /// IMPORTANT: Must stop observer BEFORE removing from dictionary to prevent race condition
     /// where AX callback fires on a deallocated observer
-    private func removeObserver(for pid: pid_t) {
+    private func removeObserver(for pid: pid_t) async {
         guard let observer = applicationObservers[pid] else { return }
 
-        // Stop observing FIRST (synchronously on main thread) to prevent race condition
-        // where AX notification arrives after dictionary removal but before stopObserving
-        DispatchQueue.main.sync {
+        // #44: stop observing FIRST to prevent a callback firing on a removed
+        // observer. Use `await MainActor.run` — NOT DispatchQueue.main.sync,
+        // which blocks the actor's cooperative-pool thread (forward-progress
+        // violation: every command/event awaiting StateManager queues behind a
+        // busy main thread). This mirrors rebuildAXObservers.
+        await MainActor.run {
             observer.stopObserving()
         }
 
@@ -2141,7 +2170,7 @@ return
         state.applications.removeValue(forKey: pidKey)
 
         // Remove observer
-        removeObserver(for: pid)
+        await removeObserver(for: pid)
 
         // Remove all windows for this PID
         state.windows = state.windows.filter { $0.value.pid != pid }
@@ -2169,7 +2198,7 @@ return
     /// Query an app's focused window via AX API and update focusedWindowID
     /// This provides a fallback when AX notifications don't fire reliably
     private func updateFocusedWindowForApp(pid: pid_t) async {
-        let appElement = AXUIElementCreateApplication(pid)
+        let appElement = makeAppElement(pid: pid)
 
         var focusedWindow: CFTypeRef?
         let result = AXUIElementCopyAttributeValue(
@@ -2244,6 +2273,12 @@ return
         // Without this delay, SkyLight/AX queries return stale or incomplete data.
         // BFD uses a similar 1s delay for event tap recovery.
         try? await Task.sleep(nanoseconds: 2_000_000_000)
+
+        // #36: re-probe MSS availability after wake. The Dock-side scripting
+        // addition may have been torn down across sleep; without this the
+        // cached verdict is permanent and every space move stays degraded.
+        mssClient.resetAvailabilityCache()
+        jlog("mss.reset", msg: "wake re-probe")
 
         await refreshCompleteState()
 

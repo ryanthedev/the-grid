@@ -54,6 +54,16 @@ final class EventAllowlistTests: XCTestCase {
         "warn.space.migrate.count_mismatch",
         "warn.space.migrate.dest_significant",
 
+        // Phase 7 (silent errors, crash safety & infra) — new events.
+        "bfd.watch.rearm",
+        "err.term.show",
+        "grid.state.load.merge",
+        "msg.ready",
+        "mss.reprobe",
+        "mss.reset",
+        "warn.bfd.watch",
+        "warn.term.frame",
+
         // Preexisting events (snapshot as of Phase 2 build).
         "action.begin", "action.end", "action.err", "action.start",
         "app.hide", "app.launch", "app.refresh", "app.term", "app.unhide",

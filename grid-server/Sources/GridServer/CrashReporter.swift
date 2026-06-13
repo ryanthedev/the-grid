@@ -44,6 +44,16 @@ enum CrashReporter {
     /// while we're in the middle of writing a fatal line.
     nonisolated(unsafe) private static var inFatal: Int32 = 0
 
+    // MARK: - Fatal signal set
+
+    /// The signals treated as fatal — a genuine hardware/runtime fault where
+    /// continuing is unsafe. SIGPIPE is deliberately ABSENT (#1): a client that
+    /// closes its socket between request and reply makes send() raise SIGPIPE,
+    /// which previously _exit'd the whole window manager. Accepted sockets now
+    /// carry SO_NOSIGPIPE and the process ignores SIGPIPE, so a dead peer
+    /// surfaces as EPIPE on the write path instead of killing the server.
+    static let fatalSignals: [Int32] = [SIGSEGV, SIGABRT, SIGILL, SIGBUS, SIGFPE]
+
     // MARK: - Public API
 
     /// Wire up all crash-exit instrumentation. Call this AFTER classifying the
@@ -69,13 +79,15 @@ enum CrashReporter {
         // Allocate the preformatting buffer once.
         writeBuffer = UnsafeMutablePointer<UInt8>.allocate(capacity: writeBufferCapacity)
 
-        // Install the six fatal signal handlers.
-        installSignal(SIGSEGV)
-        installSignal(SIGABRT)
-        installSignal(SIGILL)
-        installSignal(SIGBUS)
-        installSignal(SIGFPE)
-        installSignal(SIGPIPE)
+        // Ignore SIGPIPE process-wide (#1): a write to a hung-up client must
+        // return EPIPE, not raise a signal. SO_NOSIGPIPE on the accepted socket
+        // is the primary defense; this is belt-and-suspenders for any other fd.
+        signal(SIGPIPE, SIG_IGN)
+
+        // Install the genuine fatal-fault handlers (SIGPIPE intentionally omitted).
+        for sig in fatalSignals {
+            installSignal(sig)
+        }
 
         // Install ObjC uncaught exception handler (Swift-runtime-safe path).
         NSSetUncaughtExceptionHandler { exception in

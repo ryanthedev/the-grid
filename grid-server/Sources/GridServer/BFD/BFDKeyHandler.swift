@@ -241,18 +241,25 @@ class BFDKeyHandler {
 
         let keyCode = UInt32(event.getIntegerValueField(.keyboardEventKeycode))
         let modifiers = bfdModifiersFromCGEvent(event.flags)
-        let appName = NSWorkspace.shared.frontmostApplication?.localizedName ?? ""
+        // #47: the docs document blacklist/apps keys as bundle identifiers, but
+        // the old code matched only localizedName, so doc-following configs
+        // never matched. Resolve BOTH and match bundle id first, name as
+        // back-compat.
+        let frontApp = NSWorkspace.shared.frontmostApplication
+        let bundleID = frontApp?.bundleIdentifier
+        let appName = frontApp?.localizedName ?? ""
 
-        // Check blacklist
-        if blacklist.contains(appName) {
+        // Check blacklist (bundle id or display name)
+        if AppMatchPolicy.isBlacklisted(blacklist, bundleID: bundleID, name: appName) {
             return Unmanaged.passUnretained(event)
         }
 
         // Look up hotkey
         let eventKey = BFDHotkeyKey(modifiers: modifiers, keyCode: keyCode)
 
-        // Check app-specific first
-        if let appBindings = appHotkeys[appName] {
+        // Check app-specific first (bundle id preferred, name fallback)
+        if let appKey = AppMatchPolicy.resolveKey(Set(appHotkeys.keys), bundleID: bundleID, name: appName),
+           let appBindings = appHotkeys[appKey] {
             for (configKey, appHk) in appBindings {
                 if configKey.keyCode == eventKey.keyCode &&
                    bfdModifiersMatch(config: configKey.modifiers, event: eventKey.modifiers) {

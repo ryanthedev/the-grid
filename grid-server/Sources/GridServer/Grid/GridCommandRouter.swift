@@ -430,7 +430,10 @@ class GridCommandRouter {
                 return .error("no active space")
             }
             let layoutIDs = await MainActor.run { gridConfig.getLayoutIDs() }
-            let newLayoutID = await gridState.cycleLayout(spaceID: spaceID, availableLayouts: layoutIDs)
+            // #58: compute the target id WITHOUT wiping state. applyLayoutBody
+            // commits the switch; a throwing apply no longer leaves the space
+            // wiped because the wipe never happens before the apply succeeds.
+            let newLayoutID = await gridState.computeCycleLayout(spaceID: spaceID, availableLayouts: layoutIDs)
             try await gridApply.applyLayout(spaceID: spaceID, layoutID: newLayoutID)
             return .ok("cycled to layout \(newLayoutID)")
 
@@ -440,7 +443,8 @@ class GridCommandRouter {
                 return .error("no active space")
             }
             let layoutIDs = await MainActor.run { gridConfig.getLayoutIDs() }
-            let newLayoutID = await gridState.previousLayout(spaceID: spaceID, availableLayouts: layoutIDs)
+            // #58: compute-only; the commit lives in applyLayoutBody.
+            let newLayoutID = await gridState.computePreviousLayout(spaceID: spaceID, availableLayouts: layoutIDs)
             try await gridApply.applyLayout(spaceID: spaceID, layoutID: newLayoutID)
             return .ok("switched to layout \(newLayoutID)")
 
@@ -998,14 +1002,40 @@ class GridCommandRouter {
             return .ok("launched")
         }
 
-        // Post toggle notification (only when app was already running)
+        // #22: dispatch on the action instead of collapsing everything to a
+        // toggle. show/hide/toggle drive panel visibility; push/dismiss/clear/
+        // assign carry a payload forwarded as userInfo. Each action posts a
+        // DISTINCT distributed notification so the GridNotify app can handle
+        // them differently (consuming side is a GridNotify concern).
+        let action = cmd.action.isEmpty ? "toggle" : cmd.action
+        let notificationName = NotifyActionPolicy.notificationName(forAction: action)
+
+        var userInfo: [String: String]? = nil
+        if NotifyActionPolicy.carriesPayload(action) {
+            var payload: [String: String] = [:]
+            for key in NotifyActionPolicy.forwardableParams {
+                if let v = cmd.flagValues[key] {
+                    payload[key] = v
+                }
+            }
+            // `dismiss <id>` / `assign <cell>` may arrive positionally.
+            if payload["id"] == nil, action == "dismiss", let first = cmd.args.first {
+                payload["id"] = first
+            }
+            if payload["cell"] == nil, action == "assign", let first = cmd.args.first {
+                payload["cell"] = first
+            }
+            userInfo = payload.isEmpty ? nil : payload
+        }
+
+        jlog("grid.rpc.dispatch", data: ["cmd": "@notify \(action)", "name": notificationName])
         DistributedNotificationCenter.default().postNotificationName(
-            NSNotification.Name("com.thegrid.notify.toggle"),
+            NSNotification.Name(notificationName),
             object: nil,
-            userInfo: nil,
+            userInfo: userInfo,
             deliverImmediately: true
         )
-        return .ok("toggled")
+        return .ok(action)
     }
 
     private func parseRecordingTarget(action: String, args: [String]) -> RecordingTarget {

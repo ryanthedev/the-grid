@@ -55,7 +55,7 @@ class WindowManipulator: @unchecked Sendable {
 
     /// Get the AXUIElement for a window given its window ID and owner PID
     func getAXElement(pid: pid_t, windowID: UInt32) -> AXUIElement? {
-        let app = AXUIElementCreateApplication(pid)
+        let app = makeAppElement(pid: pid)
 
         // Get all windows for the application
         var windowsValue: CFTypeRef?

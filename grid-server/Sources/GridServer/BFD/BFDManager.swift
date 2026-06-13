@@ -184,16 +184,37 @@ class BFDManager: NSObject {
     private func startConfigWatcher() {
         let expandedPath = (configPath as NSString).expandingTildeInPath
         let fd = open(expandedPath, O_EVTONLY)
-        guard fd >= 0 else { return }
+        // #37: log open() failure instead of bailing silently — a missing file
+        // at startup previously left the watcher dead with no signal.
+        guard fd >= 0 else {
+            jlog("warn.bfd.watch", data: ["op": "open", "errno": Int(errno), "path": expandedPath])
+            return
+        }
 
-        configWatcher = DispatchSource.makeFileSystemObjectSource(
+        let source = DispatchSource.makeFileSystemObjectSource(
             fileDescriptor: fd,
             eventMask: [.write, .delete, .rename, .extend],
             queue: .main
         )
+        configWatcher = source
 
-        configWatcher?.setEventHandler { [weak self] in
+        source.setEventHandler { [weak self] in
             guard let self = self else { return }
+
+            // #37: an editor that saves via atomic rename (vim, VS Code) renames
+            // or deletes the watched inode. The fd then references a dead inode
+            // and fires no further events — every later edit is silently
+            // ignored. On .rename/.delete, re-arm: cancel this source and
+            // re-open the path so subsequent saves keep reloading.
+            let flags = source.data
+            if ConfigWatcherPolicy.shouldRearm(eventFlags: flags) {
+                jlog("bfd.watch.rearm", data: ["path": self.configPath])
+                self.stopConfigWatcher()
+                // Re-open after a beat so the new file exists post-rename.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+                    self?.startConfigWatcher()
+                }
+            }
 
             // Cancel any pending reload
             self.pendingReload?.cancel()
@@ -208,11 +229,11 @@ class BFDManager: NSObject {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: workItem)
         }
 
-        configWatcher?.setCancelHandler {
+        source.setCancelHandler {
             close(fd)
         }
 
-        configWatcher?.resume()
+        source.resume()
     }
 
     private func stopConfigWatcher() {

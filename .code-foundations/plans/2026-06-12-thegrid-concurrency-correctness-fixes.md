@@ -3,7 +3,7 @@
 **Created:** 2026-06-12
 **Status:** in-progress
 **Started:** 2026-06-12 21:36
-**Current Phase:** 6
+**Current Phase:** 7
 **Complexity:** complex
 **Workspace:** worktree `.claude/worktrees/thegrid-concurrency-correctness-fixes` · branch `feature/thegrid-concurrency-correctness-fixes`
 
@@ -438,3 +438,10 @@ Summary: WindowManipulator.getAXElement reuses `StateManager.shouldUseSoleWindow
 - [x] Committed
 Commit: 732a994
 Summary: Resize delta sign corrected for last-in-stack focus (`resolveBoundaryAndDelta`); split ratios preserved across assign/remove/prepend/insert via `recalculateSplitsAfterAddition/Removal` (incl. `removeWindowInternal`); displaced-window migration repositions target+source cells; cross-display move (#16) checks `moveWindowToSpace`, releases fence, logs `err.move.cross_display`/`err.verify`, aborts before state mutation; all-locked autoflow logs `warn.assign.dropped`. Fixed #10 #16 #19 #28 #48. New tests in `GeometryWritesTests.swift`. Build clean, 228 tests green.
+
+### Phase 6: Borders (Gate: Standard)
+- [x] BUILD: Discovery + design + TDD implementation complete
+- [x] REVIEW: SKIPPED — Standard gate, tests are the gate (242/242); covered by the pre-P7 catch-up review
+- [x] Committed
+Commit: de6f7da
+Summary: Atomic `setCellAssignments` diffs active-cell membership and rebuilds on change (no silent delta drop); mutable state captured into immutable locals before every `Task{}` log block (off-main reads eliminated); `retarget` returns Bool + commits targetWindowID after the bounds guard (reacquire on failure); resize-redraw context failure sets `isVisible=false` + logs `err.bdr.resize_ctx`; `borders.query` is async (no socket-thread main.sync); `windowOrderPerDisplay` pruned on destroy. New pure module `Borders/BordersPolicy.swift`. Fixed #9 #27 #53 #54 #55 #56. Build clean, 242 tests green.

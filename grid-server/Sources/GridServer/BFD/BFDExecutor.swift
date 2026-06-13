@@ -43,11 +43,31 @@ class BFDExecutor {
             }
             DispatchQueue.global().asyncAfter(deadline: .now() + timeoutSeconds, execute: timeout)
 
+            // #38: read BOTH pipes concurrently with waitUntilExit. A command
+            // that writes more than the ~64KB pipe buffer blocks on write until
+            // someone drains it; calling waitUntilExit() first (the old code)
+            // deadlocks and the 30s timeout then kills a valid verbose command.
+            // Read on background threads (mirrors EnrichmentTypes.runProcess),
+            // then wait. The readers finish when the process closes its fds.
+            var stdoutData = Data()
+            var stderrData = Data()
+            let readGroup = DispatchGroup()
+            readGroup.enter()
+            DispatchQueue.global().async {
+                stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+                readGroup.leave()
+            }
+            readGroup.enter()
+            DispatchQueue.global().async {
+                stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+                readGroup.leave()
+            }
+
             process.waitUntilExit()
             timeout.cancel()
+            // Both reads complete once the child's fds are closed (at/after exit).
+            readGroup.wait()
 
-            let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-            let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
             let stdout = String(data: stdoutData, encoding: .utf8) ?? ""
             let stderr = String(data: stderrData, encoding: .utf8) ?? ""
 
