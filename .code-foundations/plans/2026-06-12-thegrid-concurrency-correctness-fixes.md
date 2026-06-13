@@ -1,9 +1,10 @@
 # Plan: theGrid Concurrency & Correctness Audit Fixes
 
 **Created:** 2026-06-12
-**Status:** in-progress
+**Status:** complete
 **Started:** 2026-06-12 21:36
-**Current Phase:** 7
+**Completed:** 2026-06-13
+**Current Phase:** 7 (all complete)
 **Complexity:** complex
 **Workspace:** worktree `.claude/worktrees/thegrid-concurrency-correctness-fixes` · branch `feature/thegrid-concurrency-correctness-fixes`
 
@@ -445,3 +446,18 @@ Summary: Resize delta sign corrected for last-in-stack focus (`resolveBoundaryAn
 - [x] Committed
 Commit: de6f7da
 Summary: Atomic `setCellAssignments` diffs active-cell membership and rebuilds on change (no silent delta drop); mutable state captured into immutable locals before every `Task{}` log block (off-main reads eliminated); `retarget` returns Bool + commits targetWindowID after the bounds guard (reacquire on failure); resize-redraw context failure sets `isVisible=false` + logs `err.bdr.resize_ctx`; `borders.query` is async (no socket-thread main.sync); `windowOrderPerDisplay` pruned on destroy. New pure module `Borders/BordersPolicy.swift`. Fixed #9 #27 #53 #54 #55 #56. Build clean, 242 tests green.
+
+### Catch-up REVIEW: Phases 5-6 (before P7 Full gate)
+- [x] PASS — all P5 (DW-5.1..5.5) + P6 (DW-6.1..6.6) items re-verified together; cross-phase coherence confirmed (P5 split-recalc ↔ P6 membership-diff; P6 consumes P3 `getFocusedWindow`); 242/242, no regressions.
+
+### Phase 7: Silent errors, crash safety & infra (Gate: Full, Security-sensitive)
+- [x] BUILD: Discovery + design + TDD implementation complete
+- [x] REVIEW: pass (3-sample majority 3/3; all 14 DW + security checks; 282/282 suite)
+- [x] Committed
+Commit: 49296f8
+Summary: SIGPIPE non-fatal + SO_NOSIGPIPE (server survives client disconnect); per-socket serialized full-write loop; handlers registered + readiness flag before accept; GridState.load merges (no clobber); removeObserver via MainActor.run; observer-slot reservation (no dup AXObservers); AX 0.5s messaging timeout; MSS wake re-probe + fail-reprobe; BFD watcher re-arm + concurrent pipe read + bundle-id match; terminal show() hard-fail + sentinel-frame refusal; @notify distinct-action dispatch + payload forwarding; layout-cycle wipe deferred into apply body. New pure module `Grid/Phase7Policy.swift`. Fixed #1 #22 #33 #34 #36 #37 #38 #39 #44 #45 #46 #47 #49 #58. Build clean, 282 tests green. Non-blocking follow-ups: notify embedded-quote tokenization; broadcast→socketQueue→writeQueue order-fragility.
+
+---
+
+## Build Outcome
+All 7 phases built, gated, and committed on `feature/thegrid-concurrency-correctness-fixes`. 57 confirmed findings fixed; 6 suspected findings instrumented for UAT confirm-or-drop (#29 #59 #60 #61 #62 #63). 282 tests (131 baseline + 151 new), build clean (only pre-existing baseline warnings). Live UAT after P1 confirmed serialization (inflight≤1), fence balance, zero errors.
