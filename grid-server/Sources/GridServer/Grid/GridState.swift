@@ -386,10 +386,18 @@ actor GridState {
 
         removeWindowInternal(windowID, from: &space)
 
+        // Re-fetch cell after removeWindowInternal may have mutated it
+        cell = space.cells[cellID] ?? GridCellStateData(cellId: cellID)
+
+        let insertionIndex = cell.windows.count
         cell.windows.append(windowID)
-        cell.lastFocusedIdx = cell.windows.count - 1
+        cell.lastFocusedIdx = insertionIndex
         cell.lastFocusedWid = windowID
-        cell.splitRatios = equalRatios(cell.windows.count)
+        // Recalculate ratios to preserve existing proportions (not equalize)
+        cell.splitRatios = GridLayout.recalculateSplitsAfterAddition(
+            ratios: cell.splitRatios,
+            newIndex: insertionIndex
+        )
         space.cells[cellID] = cell
         spaces[spaceID] = space
         markDirty()
@@ -406,10 +414,16 @@ actor GridState {
         removeWindowInternal(windowID, from: &space)
         cell = space.cells[cellID] ?? GridCellStateData(cellId: cellID)
 
+        // Recalculate ratios before inserting so the existing ratios are the
+        // source of truth for the proportional split (index 0 = prepend position)
+        let newRatios = GridLayout.recalculateSplitsAfterAddition(
+            ratios: cell.splitRatios,
+            newIndex: 0
+        )
         cell.windows.insert(windowID, at: 0)
         cell.lastFocusedIdx = 0
         cell.lastFocusedWid = windowID
-        cell.splitRatios = equalRatios(cell.windows.count)
+        cell.splitRatios = newRatios
         space.cells[cellID] = cell
         spaces[spaceID] = space
         markDirty()
@@ -422,10 +436,15 @@ actor GridState {
         var cell = space.cells[cellID] ?? GridCellStateData(cellId: cellID)
 
         let clampedIndex = max(0, min(index, cell.windows.count))
+        // Recalculate ratios before inserting to preserve existing proportions
+        let newRatios = GridLayout.recalculateSplitsAfterAddition(
+            ratios: cell.splitRatios,
+            newIndex: clampedIndex
+        )
         cell.windows.insert(windowID, at: clampedIndex)
         cell.lastFocusedIdx = clampedIndex
         cell.lastFocusedWid = windowID
-        cell.splitRatios = equalRatios(cell.windows.count)
+        cell.splitRatios = newRatios
         space.cells[cellID] = cell
         spaces[spaceID] = space
         markDirty()
@@ -436,6 +455,13 @@ actor GridState {
 
         for (cellID, var cell) in space.cells {
             guard let idx = cell.windows.firstIndex(of: windowID) else { continue }
+
+            // Recalculate split ratios before removing to preserve proportions.
+            // The removed window's ratio is distributed equally to the remaining ones.
+            let updatedRatios = GridLayout.recalculateSplitsAfterRemoval(
+                ratios: cell.splitRatios,
+                removedIndex: idx
+            )
 
             cell.windows.remove(at: idx)
 
@@ -468,7 +494,7 @@ actor GridState {
             if cell.windows.isEmpty {
                 cell.splitRatios = []
             } else {
-                cell.splitRatios = equalRatios(cell.windows.count)
+                cell.splitRatios = updatedRatios
             }
 
             // Fix space-level focus if the removed window's cell was focused
@@ -517,6 +543,12 @@ actor GridState {
         for (cellID, var cell) in space.cells {
             guard let idx = cell.windows.firstIndex(of: windowID) else { continue }
 
+            // Recalculate split ratios before removing to preserve proportions
+            let updatedRatios = GridLayout.recalculateSplitsAfterRemoval(
+                ratios: cell.splitRatios,
+                removedIndex: idx
+            )
+
             cell.windows.remove(at: idx)
 
             if cell.windows.isEmpty {
@@ -548,7 +580,7 @@ actor GridState {
             if cell.windows.isEmpty {
                 cell.splitRatios = []
             } else {
-                cell.splitRatios = equalRatios(cell.windows.count)
+                cell.splitRatios = updatedRatios
             }
 
             space.cells[cellID] = cell

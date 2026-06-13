@@ -339,7 +339,13 @@ class GridApply {
     // PUBLIC: applyCellLayout - apply layout changes to a single cell only
     // ============================================================
 
+    // Test-only hook: when set, called with (spaceID, cellID) on every
+    // applyCellLayout invocation. Used by DW-5.3 tests to assert the
+    // displaced-window sweep calls this method without requiring a live display.
+    var _test_applyCellLayoutHook: ((String, String) -> Void)?
+
     func applyCellLayout(spaceID: String, cellID: String) async throws {
+        _test_applyCellLayoutHook?(spaceID, cellID)
         guard let gridState = gridState,
               let gridConfig = gridConfig,
               let stateProvider = stateProvider,

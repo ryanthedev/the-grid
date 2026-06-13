@@ -889,6 +889,16 @@ class GridReconciler: StateEventHandler {
                                 windowID: windowID, spaceID: targetSpaceNum
                             ) ?? false
                         }
+                        if !moved {
+                            // SLS move failed — assignment still stands (deferred)
+                            // but log err.verify so the failure is observable.
+                            jlog("err.verify", data: [
+                                "wid": windowID,
+                                "cell": lockedCell,
+                                "space": otherSpaceID,
+                                "reason": "moveWindowToSpace.failed",
+                            ])
+                        }
                         jlog("reconcile.win.create.locked", data: [
                             "wid": windowID,
                             "cell": lockedCell,
@@ -1703,6 +1713,17 @@ class GridReconciler: StateEventHandler {
         let trackedSpaceIDs = Set(await gridState.getSpaceIDs())
         var affectedSpaces = Set<String>()
 
+        // Collect (wid, sourceCell, sourceSpace, targetSpace, targetCell) tuples so
+        // we can apply cell layouts after all state mutations complete.
+        struct Migration {
+            let wid: UInt32
+            let sourceSpaceID: String
+            let sourceCell: String
+            let targetSpaceID: String
+            let targetCell: String
+        }
+        var migrations: [Migration] = []
+
         let allWids = await gridState.getAllWindowIDs()
 
         for wid in allWids {
@@ -1725,6 +1746,9 @@ class GridReconciler: StateEventHandler {
             ) else {
                 continue
             }
+
+            // Record the source cell before state mutation
+            let sourceCell = await gridState.getWindowCell(windowID: wid, inSpace: trackedSpaceID) ?? ""
             let targetCell = await gridState.getFocusedCell(spaceID: targetSpaceID) ?? "left"
 
             await gridState.removeWindow(wid, fromSpace: trackedSpaceID)
@@ -1737,8 +1761,30 @@ class GridReconciler: StateEventHandler {
                 "cell": targetCell,
             ])
 
+            migrations.append(Migration(
+                wid: wid,
+                sourceSpaceID: trackedSpaceID,
+                sourceCell: sourceCell,
+                targetSpaceID: targetSpaceID,
+                targetCell: targetCell
+            ))
             affectedSpaces.insert(trackedSpaceID)
             affectedSpaces.insert(targetSpaceID)
+        }
+
+        // Apply cell layout for both target and vacated source cells so that
+        // window geometry matches the new assignments (#19).
+        for migration in migrations {
+            try? await gridApply?.applyCellLayout(
+                spaceID: migration.targetSpaceID,
+                cellID: migration.targetCell
+            )
+            if !migration.sourceCell.isEmpty {
+                try? await gridApply?.applyCellLayout(
+                    spaceID: migration.sourceSpaceID,
+                    cellID: migration.sourceCell
+                )
+            }
         }
 
         for spaceID in affectedSpaces {
@@ -1864,5 +1910,15 @@ class GridReconciler: StateEventHandler {
     // so tests can verify setCellAssignments port wiring.
     func _test_triggerSyncBorders(spaceID: String, displayUUID: String) async {
         await syncBordersForSpace(spaceID, displayUUID: displayUUID, source: "test")
+    }
+
+    // _test_sweepDisplacedWindows: expose the private sweep for DW-5.3 integration tests.
+    func _test_sweepDisplacedWindows() async {
+        await sweepDisplacedWindows()
+    }
+
+    // _test_setGridApply: inject a GridApply instance with test hooks (DW-5.3).
+    func _test_setGridApply(_ apply: GridApply) {
+        self.gridApply = apply
     }
 }

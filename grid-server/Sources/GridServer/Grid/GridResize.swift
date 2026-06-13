@@ -88,18 +88,24 @@ class GridResize {
             ratios = GridLayout.equalRatios(cell.windows.count)
         }
 
-        // Boundary is between focusedIndex and focusedIndex+1
-        // If at last window, use boundary before it instead
-        var boundaryIndex = idx
-        if boundaryIndex >= ratios.count - 1 {
-            boundaryIndex = ratios.count - 2
+        // Resolve the boundary index and effective delta, negating delta when the
+        // focused window is last so that "grow" always expands the focused window.
+        let (boundaryIndex, effectiveDelta) = GridResize.resolveBoundaryAndDelta(
+            idx: idx,
+            ratios: ratios,
+            delta: delta
+        )
+
+        // Sole-window cell: no boundary to adjust.
+        guard boundaryIndex >= 0 else {
+            throw GridResizeError.needAtLeastTwoWindows
         }
 
         // Adjust the split ratio at this boundary
         let result = GridLayout.adjustSplitRatio(
             ratios: ratios,
             index: boundaryIndex,
-            delta: delta,
+            delta: effectiveDelta,
             minRatio: GridLayout.minimumRatio
         )
         switch result {
@@ -113,6 +119,38 @@ class GridResize {
         try await gridApply.reapplyLayout(spaceID: spaceID, strategy: .preserve)
 
         jlog("resize.split.done")
+    }
+
+    // ============================================================
+    // resolveBoundaryAndDelta: pure helper for split-boundary selection.
+    //
+    // Returns (boundaryIndex, effectiveDelta):
+    //   - boundaryIndex: the boundary to adjust (between idx and idx+1).
+    //     Clamped to ratios.count-2 when idx is the last window.
+    //     Returns -1 for a sole-window cell (no valid boundary).
+    //   - effectiveDelta: delta, negated when the boundary was clamped.
+    //     Negation ensures "grow" always expands the focused window:
+    //     adjustSplitRatio adds effectiveDelta to ratios[boundaryIndex] and
+    //     subtracts from ratios[boundaryIndex+1]. When the last window is
+    //     focused, boundaryIndex points to the window BEFORE it, so delta
+    //     must be negated to shift the split in the correct direction.
+    // ============================================================
+
+    static func resolveBoundaryAndDelta(
+        idx: Int,
+        ratios: [Double],
+        delta: Double
+    ) -> (boundaryIndex: Int, effectiveDelta: Double) {
+        guard ratios.count >= 2 else {
+            // Sole-window cell: no valid boundary
+            return (-1, delta)
+        }
+        if idx < ratios.count - 1 {
+            // Not the last window: boundary is directly after focused index
+            return (idx, delta)
+        }
+        // Last window: clamp to the boundary before it and negate delta
+        return (ratios.count - 2, -delta)
     }
 
     // ============================================================

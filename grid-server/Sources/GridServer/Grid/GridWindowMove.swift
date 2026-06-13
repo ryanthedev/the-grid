@@ -33,6 +33,7 @@ enum GridWindowMoveError: Error, LocalizedError {
     case noDisplayInDirection
     case noCellsOnAdjacentDisplay
     case layoutNotFound(String)
+    case windowMoveFailed(UInt32)
 
     var errorDescription: String? {
         switch self {
@@ -44,7 +45,19 @@ enum GridWindowMoveError: Error, LocalizedError {
         case .noDisplayInDirection: return "no display in direction"
         case .noCellsOnAdjacentDisplay: return "no cells on adjacent display"
         case .layoutNotFound(let id): return "layout not found: \(id)"
+        case .windowMoveFailed(let id): return "moveWindowToSpace failed for window \(id)"
         }
+    }
+}
+
+// MARK: - GridWindowMove helpers
+
+extension GridWindowMove {
+    // shouldAbortCrossDisplayMove: pure predicate that decides whether to abort
+    // a cross-display move when the SLS move call returns false. Extracted for
+    // unit testability independent of the AX boundary.
+    static func shouldAbortCrossDisplayMove(moved: Bool) -> Bool {
+        return !moved
     }
 }
 
@@ -427,10 +440,22 @@ class GridWindowMove {
         let fencedIDs: Set<UInt32> = [windowID]
         gridReconciler.acquireFence(windowIDs: fencedIDs, reason: "move.cross")
 
-        // 6b. Move window to target space via WindowManipulator
+        // 6b. Move window to target space via WindowManipulator.
+        // Abort and release the fence when the SLS move fails — GridState must
+        // not be mutated for a move that the OS did not honor (#16).
         let t3 = CFAbsoluteTimeGetCurrent()
-        let _ = windowManipulator.moveWindowToSpace(windowID: windowID, spaceID: targetSpaceID)
+        let moved = windowManipulator.moveWindowToSpace(windowID: windowID, spaceID: targetSpaceID)
         let t4 = CFAbsoluteTimeGetCurrent()
+
+        if GridWindowMove.shouldAbortCrossDisplayMove(moved: moved) {
+            gridReconciler.releaseFence(windowIDs: fencedIDs)
+            jlog("err.move.cross_display", data: [
+                "wid": Int(windowID),
+                "targetSpace": String(targetSpaceID),
+                "reason": "moveWindowToSpace.failed",
+            ])
+            throw GridWindowMoveError.windowMoveFailed(windowID)
+        }
 
         // 7. Update state on both source and target spaces
         await gridState.removeWindow(windowID, fromSpace: spaceID)

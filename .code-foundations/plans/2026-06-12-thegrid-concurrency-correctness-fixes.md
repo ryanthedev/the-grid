@@ -3,7 +3,7 @@
 **Created:** 2026-06-12
 **Status:** in-progress
 **Started:** 2026-06-12 21:36
-**Current Phase:** 4
+**Current Phase:** 5
 **Complexity:** complex
 **Workspace:** worktree `.claude/worktrees/thegrid-concurrency-correctness-fixes` · branch `feature/thegrid-concurrency-correctness-fixes`
 
@@ -424,3 +424,10 @@ Summary: Migration now fires only on true space-ID reassignment (new `spaceActiv
 - [x] Committed
 Commit: 6653719
 Summary: One authoritative focus path. `focusWindow` returns real success/failure (CG/SLPS/AX classified; focus state set only on success; err.focus/warn.focus on failure). Directional focus skips empty cells. The focus sweep consults the P1 fence + generation counter and skips in-flight wids; window commands run suppressed. Out-of-order AX focus events rejected via monotonic sequence stamps (`FocusEventSequence`/`FocusSequenceGate`). Loop detector is `actor FocusLoopActor`, per-requested-window, observes nil-actual, self-suppresses. Dead-window prune awaited before setFocus; minimize uses `findSpaceContaining`. New pure module `Grid/FocusOwnershipPolicy.swift`. Fixed #7 #8 #13 #17 #21 #30 #35 #42 #43; #59s instrumented only. **Produces the `GridState.focusedWindow` write-on-success invariant that P6 (borders) consumes.** Build clean, 193 tests green.
+
+### Phase 4: Window creation, classification & adoption (Gate: Full)
+- [x] BUILD: Discovery + design + TDD implementation complete
+- [x] REVIEW: pass (all 9 DW + edge cases, 213/213 suite)
+- [x] Committed
+Commit: a041356
+Summary: WindowManipulator.getAXElement reuses `StateManager.shouldUseSoleWindowFallback` (no fork; phantom no longer substituted). Pending-launch target consumed-before-await + bundle-id match + clear-on-fail; locked-cell-on-inactive-space moves the window; observer-register retry w/ backoff; not_standard grace re-eval; depth-0 adoption of untracked tileables (`validate.win.untracked`). New pure module `Grid/WindowAdoptionPolicy.swift`. Fixed #15 #18 #31 #32 #40 #41 #57; #29s/#60s/#61s instrumented only. Build clean, 213 tests green. (#16 deferred to P5.)

@@ -210,6 +210,12 @@ final class EventAllowlistTests: XCTestCase {
         "warn.space.derive_override",
         "warn.poll.readd",
         "warn.subrole.unknown",
+
+        // Phase 5 (geometry writes) — new events.
+        // #10: cross-display move abort when SLS call fails.
+        "err.move.cross_display",
+        // #48: autoflow silent drop when all cells are locked.
+        "warn.assign.dropped",
     ]
 
     // Resolve the Sources/GridServer root by walking up from this file.

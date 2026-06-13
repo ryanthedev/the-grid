@@ -111,6 +111,11 @@ enum JSONLogger {
 
 final class JSONLoggerImpl: @unchecked Sendable {
 
+    /// Test-only observer: when set, receives every event code before the line
+    /// is enqueued to the writer. Used by unit tests to assert log signatures
+    /// without reading log files. Set to nil in production (the default).
+    var _test_observer: ((String) -> Void)?
+
     /// Get the log file path (for startup message)
     func getLogPath() -> String {
         JSONLogWriter.shared.logPath
@@ -118,6 +123,7 @@ final class JSONLoggerImpl: @unchecked Sendable {
 
     /// Log an event with explicit trace context
     func log(_ ev: String, msg: String? = nil, data: [String: Any]? = nil, tid: String? = nil, sid: String? = nil) {
+        _test_observer?(ev)
         let line = formatLine(ev: ev, msg: msg, data: data, tid: tid, sid: sid)
         JSONLogWriter.shared.enqueue(line)
     }
