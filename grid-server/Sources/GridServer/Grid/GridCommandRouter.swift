@@ -53,6 +53,13 @@ class GridCommandRouter {
     // beginAction increments suppression, endAction decrements and syncs.
     private var nudgeActionToken: GridReconciler.ActionToken?
 
+    // Serial pump for nudge keystrokes (DW-1.5, #50). Each held-key repeat is
+    // yielded onto this stream and processed one-at-a-time by a single consumer,
+    // so steps apply in order and never read a stale cached frame mid-flight
+    // (the prior step's AX write completes before the next reads). Replaces the
+    // previous unordered Task-per-keypress.
+    private var nudgeStepFeed: AsyncStream<NudgeAction>.Continuation?
+
     // Short flag -> long flag mapping for BFD commands
     private static let shortFlagMap: [Character: String] = [
         "m": "mouse",
@@ -181,7 +188,13 @@ class GridCommandRouter {
             case "cell":
                 return try await handleCell(parsed)
             case "window":
-                return try await handleWindow(parsed)
+                // #13: wrap window commands (move/swap) in executeAction so the
+                // 300ms focusSweep is suppressed while the move runs. Without
+                // this the sweep fires mid-move, reads the not-yet-updated OS
+                // focus, and reverts GridState focus to the pre-move window.
+                return try await gridReconciler.executeAction(label: "window.\(parsed.action)") {
+                    try await handleWindow(parsed)
+                }
             case "resize":
                 return try await handleResize(parsed)
             case "mouse":
@@ -307,6 +320,27 @@ class GridCommandRouter {
         return gridFocus.findActiveSpaceID(wmState)
     }
 
+    // DW-2.4 (#51): re-resolve the active space immediately before a mutating
+    // call and verify it still matches the space resolved earlier in the
+    // handler. Commands queue behind the serial executor (P1) and the
+    // wake-completion gate, so a user space switch can land between the
+    // initial resolve and the mutation — a queued reset/resize would then hit
+    // the PREVIOUS space. Returns the confirmed space ID, or nil + logs on a
+    // mismatch (caller aborts).
+    private func reresolveActiveSpaceID(expected: String) async -> String? {
+        let current = await resolveActiveSpaceID()
+        let confirmed = SpaceMigrationPolicy.confirmActiveSpace(
+            expected: expected, current: current)
+        if confirmed == nil {
+            jlog("cmd.space.reresolve", data: [
+                "expected": expected,
+                "current": current ?? "nil",
+                "ok": false,
+            ])
+        }
+        return confirmed
+    }
+
     private func warpMouseToFocusedWindow() async {
         let wmState = await stateManager.getState()
         guard let spaceID = gridFocus.findActiveSpaceID(wmState) else { return }
@@ -396,7 +430,10 @@ class GridCommandRouter {
                 return .error("no active space")
             }
             let layoutIDs = await MainActor.run { gridConfig.getLayoutIDs() }
-            let newLayoutID = await gridState.cycleLayout(spaceID: spaceID, availableLayouts: layoutIDs)
+            // #58: compute the target id WITHOUT wiping state. applyLayoutBody
+            // commits the switch; a throwing apply no longer leaves the space
+            // wiped because the wipe never happens before the apply succeeds.
+            let newLayoutID = await gridState.computeCycleLayout(spaceID: spaceID, availableLayouts: layoutIDs)
             try await gridApply.applyLayout(spaceID: spaceID, layoutID: newLayoutID)
             return .ok("cycled to layout \(newLayoutID)")
 
@@ -406,7 +443,8 @@ class GridCommandRouter {
                 return .error("no active space")
             }
             let layoutIDs = await MainActor.run { gridConfig.getLayoutIDs() }
-            let newLayoutID = await gridState.previousLayout(spaceID: spaceID, availableLayouts: layoutIDs)
+            // #58: compute-only; the commit lives in applyLayoutBody.
+            let newLayoutID = await gridState.computePreviousLayout(spaceID: spaceID, availableLayouts: layoutIDs)
             try await gridApply.applyLayout(spaceID: spaceID, layoutID: newLayoutID)
             return .ok("switched to layout \(newLayoutID)")
 
@@ -615,21 +653,29 @@ class GridCommandRouter {
             await MainActor.run { [weak self] in
                 PickerManager.shared.onLaunch = { [weak self] action in
                     guard let self else { return }
+                    // Capture the picked app's bundle id so a window appearing
+                    // before the launch PID arrives can be matched by bundle id
+                    // instead of letting any foreign window claim the cell (#31).
+                    let bundleID: String?
                     switch action {
-                    case .openApp, .openDir, .openChromeProfile:
-                        self.gridReconciler.setPendingLaunchTarget(
-                            PendingLaunchTarget(
-                                spaceID: spaceID,
-                                cellID: cellID,
-                                createdAt: CFAbsoluteTimeGetCurrent(),
-                                // PID starts nil; updated async via updatePendingLaunchTargetPID
-                                // once NSWorkspace completion fires after app launch
-                                pid: nil
-                            )
-                        )
+                    case .openApp(let bid):
+                        bundleID = bid
+                    case .openDir, .openChromeProfile:
+                        bundleID = nil
                     default:
-                        break
+                        return
                     }
+                    self.gridReconciler.setPendingLaunchTarget(
+                        PendingLaunchTarget(
+                            spaceID: spaceID,
+                            cellID: cellID,
+                            createdAt: CFAbsoluteTimeGetCurrent(),
+                            bundleID: bundleID,
+                            // PID starts nil; updated async via updatePendingLaunchTargetPID
+                            // once NSWorkspace completion fires after app launch
+                            pid: nil
+                        )
+                    )
                 }
             }
         }
@@ -658,8 +704,14 @@ class GridCommandRouter {
             guard let spaceID = await resolveActiveSpaceID() else {
                 return .error("no active space")
             }
-            await gridState.removeSpace(spaceID)
-            return .ok("reset state for space \(spaceID)")
+            // DW-2.4 (#51): re-resolve immediately before the destructive wipe.
+            // A space switch landing between resolve and removeSpace must not
+            // let a queued reset clobber the space the user just left.
+            guard let confirmedSpaceID = await reresolveActiveSpaceID(expected: spaceID) else {
+                return .error("space changed; reset aborted")
+            }
+            await gridState.removeSpace(confirmedSpaceID)
+            return .ok("reset state for space \(confirmedSpaceID)")
 
         default:
             return .error("unknown state action: \(cmd.action)")
@@ -771,11 +823,23 @@ class GridCommandRouter {
     // PRIVATE: handleNudge
     // ============================================================
 
+    // Build the serial nudge step stream + its feed. Unbounded buffering so a
+    // fast key-repeat never drops a step; the single consumer applies them FIFO.
+    private static func makeNudgeStepStream() -> (AsyncStream<NudgeAction>, AsyncStream<NudgeAction>.Continuation) {
+        var feed: AsyncStream<NudgeAction>.Continuation!
+        let stream = AsyncStream<NudgeAction>(bufferingPolicy: .unbounded) { feed = $0 }
+        return (stream, feed)
+    }
+
     private func handleNudge(_ cmd: ParsedCommand) async -> CommandResult {
         switch cmd.action {
 
         case "enter":
-            // Idempotent: if a session is already active, do nothing
+            // Idempotent: if a session is already active, do nothing.
+            // Command ingress is serialized (CommandExecutor), so a concurrent
+            // double @nudge enter cannot both pass this check — the second sees
+            // a non-nil handler and no-ops. As defense in depth we also stop-and-
+            // replace any leftover handler before installing a new one.
             if nudgeKeyHandler != nil {
                 return .ok("already in nudge mode")
             }
@@ -792,29 +856,42 @@ class GridCommandRouter {
             // Suspend BFD event tap so nudge keys are not also processed as hotkeys
             BFDManager.shared?.suspendEventTap()
 
-            // Wire the key handler callback
-            let handler = NudgeKeyHandler()
+            // Stand up the serial step pump (DW-1.5): one consumer drains keystrokes
+            // in arrival order, so each move/resize completes (updating the cached
+            // frame) before the next begins — no lost or back-stepped repeats.
             let borderManager = self.simpleBorderManager
-            handler.onNudge = { [weak self] action in
-                guard let self else { return }
-                switch action {
-                case .move(let direction):
-                    // onNudge fires on main thread; bridge to async actor context
-                    Task {
+            let (stepStream, stepFeed) = Self.makeNudgeStepStream()
+            self.nudgeStepFeed = stepFeed
+            Task { [weak self] in
+                for await action in stepStream {
+                    guard let self else { return }
+                    switch action {
+                    case .move(let direction):
                         if let (wid, frame) = try? await self.gridNudge.move(spaceID: spaceID, direction: direction) {
                             await borderManager.handleWindowMoved(windowID: wid, newFrame: frame)
                         }
-                    }
-                case .resize(let direction):
-                    Task {
+                    case .resize(let direction):
                         if let (wid, frame) = try? await self.gridNudge.resize(spaceID: spaceID, direction: direction) {
                             await borderManager.handleWindowMoved(windowID: wid, newFrame: frame)
                         }
+                    case .exit:
+                        break
                     }
+                }
+            }
+
+            // Wire the key handler callback. move/resize are funnelled through the
+            // serial pump; exit re-dispatches (NOT through the executor — this runs
+            // inside the tap callback, §1: never Task back into the serial consumer).
+            let handler = NudgeKeyHandler()
+            handler.onNudge = { [weak self] action in
+                guard let self else { return }
+                switch action {
+                case .move, .resize:
+                    self.nudgeStepFeed?.yield(action)
                 case .exit:
-                    // Dispatch back through the router to avoid mutating nudgeKeyHandler
-                    // from within its own callback's call stack
-                    Task {
+                    Task { [weak self] in
+                        guard let self else { return }
                         _ = await self.dispatch("@nudge exit")
                     }
                 }
@@ -823,6 +900,8 @@ class GridCommandRouter {
             // Install the event tap -- may fail if Accessibility permission is absent
             guard handler.start() else {
                 BFDManager.shared?.resumeEventTap()
+                self.nudgeStepFeed?.finish()
+                self.nudgeStepFeed = nil
                 gridReconciler.endAction(token, syncBorders: false)
                 return .error("nudge tap failed (accessibility permission?)")
             }
@@ -847,6 +926,10 @@ class GridCommandRouter {
             // Tear down key handler first to stop any further callbacks
             nudgeKeyHandler?.stop()
             nudgeKeyHandler = nil
+
+            // Close the serial step pump so its consumer task exits.
+            nudgeStepFeed?.finish()
+            nudgeStepFeed = nil
 
             // Resume BFD event tap
             BFDManager.shared?.resumeEventTap()
@@ -919,14 +1002,40 @@ class GridCommandRouter {
             return .ok("launched")
         }
 
-        // Post toggle notification (only when app was already running)
+        // #22: dispatch on the action instead of collapsing everything to a
+        // toggle. show/hide/toggle drive panel visibility; push/dismiss/clear/
+        // assign carry a payload forwarded as userInfo. Each action posts a
+        // DISTINCT distributed notification so the GridNotify app can handle
+        // them differently (consuming side is a GridNotify concern).
+        let action = cmd.action.isEmpty ? "toggle" : cmd.action
+        let notificationName = NotifyActionPolicy.notificationName(forAction: action)
+
+        var userInfo: [String: String]? = nil
+        if NotifyActionPolicy.carriesPayload(action) {
+            var payload: [String: String] = [:]
+            for key in NotifyActionPolicy.forwardableParams {
+                if let v = cmd.flagValues[key] {
+                    payload[key] = v
+                }
+            }
+            // `dismiss <id>` / `assign <cell>` may arrive positionally.
+            if payload["id"] == nil, action == "dismiss", let first = cmd.args.first {
+                payload["id"] = first
+            }
+            if payload["cell"] == nil, action == "assign", let first = cmd.args.first {
+                payload["cell"] = first
+            }
+            userInfo = payload.isEmpty ? nil : payload
+        }
+
+        jlog("grid.rpc.dispatch", data: ["cmd": "@notify \(action)", "name": notificationName])
         DistributedNotificationCenter.default().postNotificationName(
-            NSNotification.Name("com.thegrid.notify.toggle"),
+            NSNotification.Name(notificationName),
             object: nil,
-            userInfo: nil,
+            userInfo: userInfo,
             deliverImmediately: true
         )
-        return .ok("toggled")
+        return .ok(action)
     }
 
     private func parseRecordingTarget(action: String, args: [String]) -> RecordingTarget {

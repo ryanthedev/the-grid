@@ -129,11 +129,16 @@ actor GridTerminalManager {
                 if isPIDAlive(pid) {
                     if await windowExistsInState(wid) {
                         if isHidden {
-                            await show(wid: wid, pid: pid)
+                            // #39: a failed show must surface as an error, not a
+                            // false "shown" with the window stranded off-screen.
+                            guard await show(wid: wid, pid: pid) else {
+                                return .error("terminal show failed (AX)")
+                            }
+                            return .ok("shown")
                         } else {
                             await hide(wid: wid, pid: pid)
+                            return .ok("hidden")
                         }
-                        return .ok(isHidden ? "hidden" : "shown")
                     }
                 }
             }
@@ -170,11 +175,19 @@ actor GridTerminalManager {
     private func hide(wid: UInt32, pid: pid_t) async {
         jlog("term.hide", data: ["wid": wid])
 
-        // Save current frame keyed by display UUID before hiding
+        // Save current frame keyed by display UUID before hiding.
+        // #39: refuse to persist an off-screen sentinel frame. If a prior
+        // show() failed AX and left the window parked off-screen, its current
+        // frame is the (-10000,-10000) sentinel — saving it would poison the
+        // per-display saved frame so every future show() restores off-screen.
         let currentFrame = await getCurrentFrame(wid: wid)
         let displayUUID = await getDisplayUUID(forWindow: wid)
         if let frame = currentFrame, let uuid = displayUUID {
-            saveFrame(displayUUID: uuid, frame: frame)
+            if TerminalFramePolicy.isOffScreenSentinel(frame) {
+                jlog("warn.term.frame", msg: "refused to save off-screen sentinel frame", data: ["wid": wid])
+            } else {
+                saveFrame(displayUUID: uuid, frame: frame)
+            }
         }
 
         // Set opacity to 0 (cross-process via MSS)
@@ -200,12 +213,13 @@ actor GridTerminalManager {
 
     /// Show the terminal by restoring frame and opacity, then focusing.
     /// Uses per-display saved frame or computes a default centered frame.
-    private func show(wid: UInt32, pid: pid_t) async {
+    /// Restore the terminal on-screen. Returns false on AX failure WITHOUT
+    /// flipping opacity/focus/isHidden (#39): a window that cannot be
+    /// repositioned would otherwise become an invisible, fully-opaque,
+    /// keyboard-focused window off-screen, swallowing every keystroke.
+    @discardableResult
+    private func show(wid: UInt32, pid: pid_t) async -> Bool {
         jlog("term.show", data: ["wid": wid])
-
-        // Save currently focused window so we can restore on hide
-        let state = await stateManager.getState()
-        previousWindowID = state.metadata.focusedWindowID
 
         // Determine target frame: saved per-display frame or centered default
         let displayUUID = await getActiveDisplayUUID()
@@ -216,10 +230,21 @@ actor GridTerminalManager {
             targetFrame = await computeDefaultFrame(displayUUID: displayUUID)
         }
 
-        // Move to target position via AX API
-        if let element = windowManipulator.getAXElement(pid: pid, windowID: wid) {
-            _ = windowManipulator.setWindowFrame(element: element, frame: targetFrame)
+        // #39: reposition is the gate. If the AX element is nil or
+        // setWindowFrame fails, abort BEFORE touching opacity/focus/state — do
+        // not strand an off-screen focused window.
+        guard let element = windowManipulator.getAXElement(pid: pid, windowID: wid) else {
+            jlog("err.term.show", msg: "AX element nil — aborting show", data: ["wid": wid, "pid": pid])
+            return false
         }
+        guard windowManipulator.setWindowFrame(element: element, frame: targetFrame) else {
+            jlog("err.term.show", msg: "setWindowFrame failed — aborting show", data: ["wid": wid])
+            return false
+        }
+
+        // Frame restored — now safe to capture previous focus and reveal.
+        let state = await stateManager.getState()
+        previousWindowID = state.metadata.focusedWindowID
 
         // Set opacity to 1.0 (cross-process via MSS)
         _ = windowManipulator.mssClient.setWindowOpacity(windowID: wid, opacity: 1.0)
@@ -229,6 +254,7 @@ actor GridTerminalManager {
         _ = windowManipulator.focusWindow(pid: pid, windowID: wid)
 
         isHidden = false
+        return true
     }
 
     // MARK: - Window Resolution

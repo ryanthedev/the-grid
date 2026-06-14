@@ -26,6 +26,11 @@ actor StateManager: StateEventHandler, StateProvider {
 
     // AX Observers (one per application)
     private var applicationObservers: [pid_t: ApplicationObserver] = [:]
+    // #33: pids whose observer is being created on the MainActor but not yet
+    // installed. Reserving the slot synchronously (actor-isolated) closes the
+    // TOCTOU window where a second createObserver for the same pid passes the
+    // nil guard and installs a duplicate live AXObserver.
+    private var observerCreationInFlight: Set<pid_t> = []
 
     // Workspace observer (system-level events)
     private var workspaceObserver: WorkspaceObserver?
@@ -46,8 +51,27 @@ actor StateManager: StateEventHandler, StateProvider {
     // Used to distinguish CLI-initiated focus from external (click) focus
     private var cliFocusTimestamps: [UInt32: Date] = [:]
 
+    // #17: highest focus-event sequence applied so far. Stamped in-order at the
+    // notification-capture site; a strictly-older stamped event is rejected here
+    // so a reordered stale focus cannot invert a newer one.
+    private var lastFocusSeq: UInt64 = 0
+
     // How long to consider a focus as "CLI-initiated" (prevents loop)
     private let cliFocusWindow: TimeInterval = 0.5
+
+    // FIX 2 / DW-D4: removal tombstone. A wid removed from state (poll-prune or
+    // handleWindowDestroyed) is stamped here. The poll-apply "window absent from
+    // state" branch logs warn.poll.readd ONLY when the wid is still tombstoned
+    // within the grace window — a genuine #60 resurrection (the off-actor
+    // snapshot predated the removal). Without this gate the branch fired for
+    // EVERY poll-discovered window StateManager doesn't track (~126/poll).
+    // Actor-isolated — safe (no new shared concurrency state).
+    private var removalTombstone: [UInt32: CFAbsoluteTime] = [:]
+
+    // Resurrection grace. Just over one 3.0s poll interval so a snapshot taken
+    // before a removal can still resurrect within one poll, but a legitimate
+    // later rediscovery (different window, reused id) does not false-positive.
+    private let resurrectionGraceSeconds: CFAbsoluteTime = 3.5
 
     // CLI path (used for ResizeManager)
     private var cliPath: String = "thegrid"
@@ -151,6 +175,37 @@ actor StateManager: StateEventHandler, StateProvider {
         state = s
     }
 
+    // FIX 2 / DW-D4 test seams: drive the actor-isolated removal tombstone +
+    // resurrection predicate deterministically, off the AX/SLS poll boundary.
+
+    func _test_resetTombstone() {
+        removalTombstone = [:]
+    }
+
+    func _test_noteRemoval(_ windowID: UInt32, at time: CFAbsoluteTime) {
+        removalTombstone[windowID] = time
+    }
+
+    func _test_isResurrection(wid: UInt32, now: CFAbsoluteTime) -> Bool {
+        GraceWindowPolicy.isResurrection(
+            removedAt: removalTombstone[wid],
+            now: now,
+            graceSeconds: resurrectionGraceSeconds
+        )
+    }
+
+    func _test_pruneTombstone(now: CFAbsoluteTime) {
+        removalTombstone = removalTombstone.filter { _, removedAt in
+            GraceWindowPolicy.isResurrection(
+                removedAt: removedAt,
+                now: now,
+                graceSeconds: resurrectionGraceSeconds
+            )
+        }
+    }
+
+    var _test_tombstoneCount: Int { removalTombstone.count }
+
     /// Graceful shutdown - cleanup all observers and timers
     /// MUST be called before server termination to prevent resource leaks
     func shutdown() async {
@@ -172,7 +227,7 @@ actor StateManager: StateEventHandler, StateProvider {
         // Stop all application observers synchronously to prevent race conditions
         let pids = Array(applicationObservers.keys)
         for pid in pids {
-            removeObserver(for: pid)
+            await removeObserver(for: pid)
         }
 
         // Clear accumulated state dictionaries
@@ -226,7 +281,7 @@ actor StateManager: StateEventHandler, StateProvider {
 
         case .focusChanged(let state):
             if let windowID = state.windowID {
-                await handleWindowFocused(windowID)
+                await handleWindowFocused(windowID, seq: state.seq)
             }
             switch state.trigger {
             case .spaceSwitched:
@@ -268,6 +323,14 @@ actor StateManager: StateEventHandler, StateProvider {
 
         case .spaceIDReassigned:
             // Handled by GridReconciler (GridState migration + orphan reset)
+            break
+
+        case .spaceActivated:
+            // Handled by GridReconciler (border resync for the active space).
+            break
+
+        case .displayGeometryChanged:
+            // Handled by GridReconciler (debounced layout reapply).
             break
 
         case .displayConnected(let displayUUID):
@@ -332,7 +395,7 @@ actor StateManager: StateEventHandler, StateProvider {
         }
 
         let pid = frontApp.processIdentifier
-        let appElement = AXUIElementCreateApplication(pid)
+        let appElement = makeAppElement(pid: pid)
 
         var focusedWindowRef: AnyObject?
         let result = AXUIElementCopyAttributeValue(
@@ -399,6 +462,21 @@ actor StateManager: StateEventHandler, StateProvider {
         }
 
         let displayUUIDs: [String] = cfArrayToSwiftArray(displaysArray)
+
+        // #63s instrumentation (suspected — trace only, NO behavioral change).
+        // enrichDisplayInfo joins SLS managed-display order to NSScreen.screens
+        // by array index; with 2+ displays the orders can diverge and attach
+        // the wrong frame/scale to a UUID. Record the join so UAT can confirm
+        // or drop the finding before any UUID-matching fix is attempted.
+        let screenCount = NSScreen.screens.count
+        for (index, displayUUID) in displayUUIDs.enumerated() {
+            jlog("dsp.refresh.join", data: [
+                "index": index,
+                "uuid": displayUUID,
+                "slsCount": displayUUIDs.count,
+                "screenCount": screenCount,
+            ])
+        }
 
         var displays: [DisplayState] = []
         for (index, displayUUID) in displayUUIDs.enumerated() {
@@ -547,7 +625,7 @@ actor StateManager: StateEventHandler, StateProvider {
     }
 
     private func getAXProperties(pid: pid_t, windowID: UInt32) -> AXWindowProperties {
-        let appElement = AXUIElementCreateApplication(pid)
+        let appElement = makeAppElement(pid: pid)
 
         // Get windows for this application
         var windowsValue: CFTypeRef?
@@ -596,6 +674,37 @@ actor StateManager: StateEventHandler, StateProvider {
         }
 
         return AXWindowProperties()
+    }
+
+    /// Re-query a single window's AX properties and update its cached WindowState.
+    ///
+    /// #41 Chrome torn-tab grace rescue: the fullscreen-button AX query can race
+    /// an app's window creation and cache `hasFullscreenButton == false`, which
+    /// classifyWindow reads as a floating PIP. classifyWindow is only re-run from
+    /// the reconciler's grace sweep, which previously re-classified the STALE
+    /// snapshot. Refreshing AX here lets the sweep classify live state so a
+    /// slow-button window tiles without a manual reopen.
+    ///
+    /// Returns the refreshed WindowState, or nil when the window is no longer
+    /// tracked (the grace sweep then drops it).
+    func refreshWindowAXProperties(_ windowID: UInt32) async -> WindowState? {
+        guard var window = state.windows[String(windowID)] else {
+            return nil
+        }
+        let axProps = getAXProperties(pid: window.pid, windowID: windowID)
+        window.role = axProps.role
+        window.subrole = axProps.subrole
+        window.parent = axProps.parent
+        window.hasCloseButton = axProps.hasCloseButton
+        window.hasFullscreenButton = axProps.hasFullscreenButton
+        window.hasMinimizeButton = axProps.hasMinimizeButton
+        window.hasZoomButton = axProps.hasZoomButton
+        window.isModal = axProps.isModal
+        if let axTitle = axProps.title, !axTitle.isEmpty {
+            window.axTitle = axTitle
+        }
+        state.windows[String(windowID)] = window
+        return window
     }
 
     /// Check if a window from the given PID should be tracked
@@ -952,6 +1061,18 @@ actor StateManager: StateEventHandler, StateProvider {
         if let displayUUID = window.displayUUID,
            let display = state.displays.first(where: { $0.uuid == displayUUID }),
            display.currentSpaceID != 0 {
+            // #29s (instrumentation only, no behavior change): flag when this
+            // geometric derive OVERRIDES a non-empty SLS space list with a
+            // different display-current space. Suspected to discard SLS truth for
+            // windows on inactive spaces. Confirm-or-drop in UAT.
+            if !originalSpaces.isEmpty && originalSpaces != [display.currentSpaceID] {
+                jlog("warn.space.derive_override", data: [
+                    "wid": window.id,
+                    "from": originalSpaces.map { String($0) },
+                    "to": String(display.currentSpaceID),
+                    "app": window.appName ?? "unknown",
+                ])
+            }
             window.spaces = [display.currentSpaceID]
         } else {
             // Fallback: keep original macOS-reported spaces
@@ -1190,36 +1311,92 @@ var windows: [String: WindowState] = [:]
     /// immediately while the observer is set up on the main thread in a detached Task.
     /// The observer will be added to applicationObservers once MainActor setup completes.
     private func createObserver(for app: NSRunningApplication) {
-        let pid = app.processIdentifier
+        createObserver(pid: app.processIdentifier, appName: app.localizedName, attempt: 0)
+    }
 
-        // Don't create duplicate observers
-        guard applicationObservers[pid] == nil else { return }
+    // #40: a freshly launched app's AX server may not be up when the launch
+    // notification fires; observe() returns false (kAXErrorCannotComplete) and
+    // the app then runs entirely unobserved. Retry with bounded backoff before
+    // giving up so the launch race does not permanently drop AX events.
+    private func createObserver(pid: pid_t, appName: String?, attempt: Int) {
+        // #33: don't create duplicate observers. Reject if one is already
+        // installed OR a creation for this pid is already in flight on the
+        // MainActor (the TOCTOU the original nil-only guard missed).
+        guard ObserverSlotPolicy.canCreate(
+            installed: applicationObservers[pid] != nil,
+            inFlight: observerCreationInFlight.contains(pid)) else { return }
 
-        let observer = ApplicationObserver(pid: pid, appName: app.localizedName)
+        // Reserve the slot synchronously (we are on the actor) BEFORE spawning
+        // the MainActor Task, so a second call in the async window is rejected.
+        observerCreationInFlight.insert(pid)
+
+        let observer = ApplicationObserver(pid: pid, appName: appName)
 
         // Observer setup requires main thread for run loop integration.
         // Fire-and-forget Task: observer added to state after MainActor work completes.
         Task { @MainActor in
             if observer.observe(stateManager: self) {
                 await self.addApplicationObserver(observer, for: pid)
+                return
             }
+            await self.scheduleObserverRetry(pid: pid, appName: appName, attempt: attempt)
+        }
+    }
+
+    private func scheduleObserverRetry(pid: pid_t, appName: String?, attempt: Int) {
+        // Clear the in-flight reservation: this attempt failed, so a retry (or a
+        // fresh createObserver) for this pid must be allowed to proceed (#33).
+        observerCreationInFlight.remove(pid)
+        guard let delay = ObserverRetryPolicy.nextDelay(attempt: attempt) else {
+            jlog("ax.observer.create.failed", data: [
+                "pid": pid,
+                "app": appName ?? "unknown",
+                "attempt": attempt,
+                "op": "register_notifs",
+                "giveUp": true,
+            ])
+            return
+        }
+        jlog("ax.observer.create.failed", data: [
+            "pid": pid,
+            "app": appName ?? "unknown",
+            "attempt": attempt,
+            "op": "register_notifs",
+            "retryIn": delay,
+        ])
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            await self?.createObserver(pid: pid, appName: appName, attempt: attempt + 1)
         }
     }
 
     /// Add an application observer (called from createObserver after MainActor setup)
-    private func addApplicationObserver(_ observer: ApplicationObserver, for pid: pid_t) {
+    private func addApplicationObserver(_ observer: ApplicationObserver, for pid: pid_t) async {
+        // #33: if a prior observer somehow occupies this slot, stop it before
+        // overwriting — otherwise its run-loop source + unretained refcon stay
+        // installed and a later AX callback dereferences a dangling pointer.
+        if let displaced = applicationObservers[pid] {
+            await MainActor.run {
+                displaced.stopObserving()
+            }
+            jlog("ax.observer.stop", data: ["pid": pid, "reason": "replaced"])
+        }
         applicationObservers[pid] = observer
+        observerCreationInFlight.remove(pid)
     }
 
     /// Remove an AX observer for a specific application
     /// IMPORTANT: Must stop observer BEFORE removing from dictionary to prevent race condition
     /// where AX callback fires on a deallocated observer
-    private func removeObserver(for pid: pid_t) {
+    private func removeObserver(for pid: pid_t) async {
         guard let observer = applicationObservers[pid] else { return }
 
-        // Stop observing FIRST (synchronously on main thread) to prevent race condition
-        // where AX notification arrives after dictionary removal but before stopObserving
-        DispatchQueue.main.sync {
+        // #44: stop observing FIRST to prevent a callback firing on a removed
+        // observer. Use `await MainActor.run` — NOT DispatchQueue.main.sync,
+        // which blocks the actor's cooperative-pool thread (forward-progress
+        // violation: every command/event awaiting StateManager queues behind a
+        // busy main thread). This mirrors rebuildAXObservers.
+        await MainActor.run {
             observer.stopObserving()
         }
 
@@ -1261,6 +1438,17 @@ var windows: [String: WindowState] = [:]
     /// Apply pre-fetched CGWindowList results to state (called on actor)
     private func applyPollResults(_ windowList: [[String: Any]]) {
         let pollTimestamp = Date()
+        let pollNow = CFAbsoluteTimeGetCurrent()
+
+        // FIX 2 / DW-D4: drop expired removal tombstones each poll so the map
+        // stays bounded and stale entries can't false-positive a resurrection.
+        removalTombstone = removalTombstone.filter { _, removedAt in
+            GraceWindowPolicy.isResurrection(
+                removedAt: removedAt,
+                now: pollNow,
+                graceSeconds: resurrectionGraceSeconds
+            )
+        }
 
         var seenWindowIDs = Set<UInt32>()
         var newWindowIDs: [(UInt32, pid_t)] = []
@@ -1278,6 +1466,20 @@ var windows: [String: WindowState] = [:]
             } else {
                 // New window discovered by poll
                 let pid = windowInfo[kCGWindowOwnerPID as String] as? pid_t ?? 0
+                // FIX 2 / DW-D4 (#60): a window absent from state may be a
+                // genuine resurrection — a wid removed between the off-actor
+                // snapshot and this apply, which the stale snapshot then re-adds.
+                // Log warn.poll.readd ONLY for that case (wid still tombstoned
+                // within grace). The common case — a window the poll discovered
+                // that StateManager simply never tracked — is not a resurrection
+                // and must not be logged (it flooded ~126 lines/poll).
+                if GraceWindowPolicy.isResurrection(
+                    removedAt: removalTombstone[windowID],
+                    now: pollNow,
+                    graceSeconds: resurrectionGraceSeconds
+                ) {
+                    jlog("warn.poll.readd", data: ["wid": Int(windowID), "pid": Int(pid)])
+                }
                 addWindowFromPoll(windowID: windowID, windowInfo: windowInfo, timestamp: pollTimestamp)
                 // Track for windowCreated event routing (only if actually added)
                 if state.windows[String(windowID)] != nil {
@@ -1308,6 +1510,10 @@ var windows: [String: WindowState] = [:]
                     state.metadata.focusedWindowID = nil
                 }
                 state.windows.removeValue(forKey: windowKey)
+                // FIX 2 / DW-D4: tombstone the poll-pruned wid so a stale
+                // snapshot re-adding it within grace is recognized as a #60
+                // resurrection.
+                removalTombstone[windowID] = pollNow
                 if let pid = pid {
                     state.applications[String(pid)]?.windows.removeAll { $0 == windowID }
                 }
@@ -1348,6 +1554,20 @@ var windows: [String: WindowState] = [:]
         // Update title (CGWindowList page title)
         if let name = windowInfo[kCGWindowName as String] as? String {
             window.title = name
+        }
+
+        // #61s (instrumentation only, no behavior change): a window with a real
+        // role but a transient "AXUnknown" subrole (cached at creation during
+        // app startup) is never re-queried — the role!=nil guard below skips it,
+        // and isTileable rejects the stale subrole forever. Trace these so UAT
+        // can confirm whether a requery is warranted. Confirm-or-drop in UAT (no
+        // requery behavior added).
+        if window.role != nil && (window.subrole == nil || window.subrole == "AXUnknown") {
+            jlog("warn.subrole.unknown", data: [
+                "wid": Int(windowID),
+                "role": window.role ?? "nil",
+                "subrole": window.subrole ?? "nil",
+            ])
         }
 
         // Re-query AX properties when role is nil (phantom windows that
@@ -1538,6 +1758,11 @@ var windows: [String: WindowState] = [:]
         // Remove from state
         state.windows.removeValue(forKey: String(windowID))
 
+        // FIX 2 / DW-D4: tombstone the destroyed wid so a poll whose snapshot
+        // predated this removal, re-adding the wid within grace, is recognized
+        // as a #60 resurrection (and only then logs warn.poll.readd).
+        removalTombstone[windowID] = CFAbsoluteTimeGetCurrent()
+
         // Remove from app's window list
         if let pid = pid {
             let pidKey = String(pid)
@@ -1584,7 +1809,21 @@ var windows: [String: WindowState] = [:]
         // EventRouter handles logging and BorderEvents notification
     }
 
-    private func handleWindowFocused(_ windowID: UInt32) async {
+    private func handleWindowFocused(_ windowID: UInt32, seq: UInt64 = 0) async {
+        // #17: drop a stale (reordered-older) focus event. An unstamped event
+        // (seq == 0, e.g. internal/test path) always applies. Once a stamped
+        // event applies, a strictly-older stamped event is rejected so a focus
+        // that lost the executor race cannot overwrite a newer one.
+        if seq != 0 {
+            guard FocusSequenceGate.shouldApply(incomingSeq: seq, lastAppliedSeq: lastFocusSeq) else {
+                JSONLogger.shared.log("focus.seq.reject", data: [
+                    "wid": windowID, "seq": seq, "lastSeq": lastFocusSeq,
+                ])
+                return
+            }
+            lastFocusSeq = seq
+        }
+
         let stateSpan = await CurrentSpan.current?.startChild("state", data: ["wid": Int(windowID)])
 
         // Capture previous state BEFORE applyWindowFocus overwrites metadata
@@ -1756,17 +1995,39 @@ var windows: [String: WindowState] = [:]
                     "display": display.uuid
                 ])
 
-                // Notify GridReconciler so it can migrate GridState and
-                // reset AX orphan counts before the validator prunes windows
-                // that are only transiently invisible during space ID shuffles.
-                await EventRouter.shared.route(
-                    .spaceIDReassigned(
-                        oldSpaceID: String(oldSpaceID),
-                        newSpaceID: String(display.currentSpaceID),
-                        displayUUID: display.uuid
-                    ),
-                    from: .workspaceObserver
+                // #2: only a TRUE macOS reassignment (old space ID no longer
+                // exists in the refreshed OS space set) migrates GridState. A
+                // plain desktop switch leaves the old ID present and routes a
+                // dedicated spaceActivated event — no migration, no data loss.
+                let refreshedSpaceIDs = Set(state.spaces.keys)
+                let routing = SpaceMigrationPolicy.classifySpaceChange(
+                    oldSpaceID: String(oldSpaceID),
+                    newSpaceID: String(display.currentSpaceID),
+                    refreshedSpaceIDs: refreshedSpaceIDs
                 )
+
+                switch routing {
+                case .reassigned:
+                    // Migrate GridState and reset AX orphan counts before the
+                    // validator prunes windows only transiently invisible
+                    // during the space ID shuffle.
+                    await EventRouter.shared.route(
+                        .spaceIDReassigned(
+                            oldSpaceID: String(oldSpaceID),
+                            newSpaceID: String(display.currentSpaceID),
+                            displayUUID: display.uuid
+                        ),
+                        from: .workspaceObserver
+                    )
+                case .activated:
+                    await EventRouter.shared.route(
+                        .spaceActivated(
+                            spaceID: String(display.currentSpaceID),
+                            displayUUID: display.uuid
+                        ),
+                        from: .workspaceObserver
+                    )
+                }
 
                 break
             }
@@ -1840,6 +2101,21 @@ return
 return
         }
 
+        // #59s (suspected): instrument-only. If the last-focused window has since
+        // left this space, restoring it would AX-raise it and yank the user back
+        // to the window's CURRENT space. Log the skip signal so UAT can confirm
+        // or drop the finding; behavior is intentionally unchanged for now.
+        if shouldSkipRestore(windowSpaces: window.spaces, spaceID: spaceID) {
+            Task {
+                JSONLogger.shared.log("win.focus.restore.skip", data: [
+                    "sid": spaceID,
+                    "wid": windowID,
+                    "winSpaces": window.spaces.map { Int($0) },
+                    "app": window.appName ?? "unknown",
+                ])
+            }
+        }
+
         Task {
             JSONLogger.shared.log("win.focus.restore", data: [
                 "sid": spaceID,
@@ -1885,9 +2161,24 @@ return
         }
     }
 
+    // Capture each display's geometry (frame + visibleFrame) keyed by UUID.
+    // Used to diff geometry-only reconfigurations (#25) where the UUID set is
+    // unchanged but resolution / scaling / Dock geometry moved.
+    private func captureDisplayGeometry() -> [String: DisplayGeometryPolicy.Geometry] {
+        var geo: [String: DisplayGeometryPolicy.Geometry] = [:]
+        for display in state.displays {
+            geo[display.uuid] = DisplayGeometryPolicy.Geometry(
+                frame: display.frame,
+                visibleFrame: display.visibleFrame
+            )
+        }
+        return geo
+    }
+
     private func handleDisplayConfigurationChanged() async {
-        // Capture old display UUIDs before refresh
+        // Capture old display UUIDs + geometry before refresh
         let oldDisplayUUIDs = Set(state.displays.map { $0.uuid })
+        let oldGeometry = captureDisplayGeometry()
         let oldSpaceKeys = Set(state.spaces.keys)
 
         // Debug: log state before refresh
@@ -1922,6 +2213,26 @@ return
         for displayUUID in disconnectedDisplays {
             await EventRouter.shared.route(
                 .displayDisconnected(displayUUID: displayUUID),
+                from: .workspaceObserver
+            )
+        }
+
+        // #25/#62s: geometry-only reconfiguration. Displays present in BOTH
+        // snapshots whose frame/visibleFrame changed produce no connect/
+        // disconnect event, so without this diff the reconciler never reapplies
+        // layouts after a resolution/scaling/Dock change.
+        let newGeometry = captureDisplayGeometry()
+        let geometryChanged = DisplayGeometryPolicy.changedDisplays(
+            old: oldGeometry, new: newGeometry)
+        for displayUUID in geometryChanged {
+            // #62s instrumentation (load-bearing — also drives the #25 fix).
+            JSONLogger.shared.log("dsp.geometry.change", data: [
+                "display": displayUUID,
+                "oldFrame": String(describing: oldGeometry[displayUUID]?.frame),
+                "newFrame": String(describing: newGeometry[displayUUID]?.frame),
+            ])
+            await EventRouter.shared.route(
+                .displayGeometryChanged(displayUUID: displayUUID),
                 from: .workspaceObserver
             )
         }
@@ -1962,7 +2273,7 @@ return
         state.applications.removeValue(forKey: pidKey)
 
         // Remove observer
-        removeObserver(for: pid)
+        await removeObserver(for: pid)
 
         // Remove all windows for this PID
         state.windows = state.windows.filter { $0.value.pid != pid }
@@ -1990,7 +2301,7 @@ return
     /// Query an app's focused window via AX API and update focusedWindowID
     /// This provides a fallback when AX notifications don't fire reliably
     private func updateFocusedWindowForApp(pid: pid_t) async {
-        let appElement = AXUIElementCreateApplication(pid)
+        let appElement = makeAppElement(pid: pid)
 
         var focusedWindow: CFTypeRef?
         let result = AXUIElementCopyAttributeValue(
@@ -2065,6 +2376,12 @@ return
         // Without this delay, SkyLight/AX queries return stale or incomplete data.
         // BFD uses a similar 1s delay for event tap recovery.
         try? await Task.sleep(nanoseconds: 2_000_000_000)
+
+        // #36: re-probe MSS availability after wake. The Dock-side scripting
+        // addition may have been torn down across sleep; without this the
+        // cached verdict is permanent and every space move stays degraded.
+        mssClient.resetAvailabilityCache()
+        jlog("mss.reset", msg: "wake re-probe")
 
         await refreshCompleteState()
 

@@ -32,11 +32,18 @@ enum StateEvent {
     case spaceDestroyed(spaceID: UInt64)
     // macOS reassigned a space ID on a display (e.g. fullscreen app create/destroy)
     case spaceIDReassigned(oldSpaceID: String, newSpaceID: String, displayUUID: String)
+    // Plain desktop switch — the old space still exists (#2). No migration;
+    // the reconciler resyncs borders for the newly-active space.
+    case spaceActivated(spaceID: String, displayUUID: String)
 
     // Display lifecycle
     case displayConnected(displayUUID: String)
     case displayDisconnected(displayUUID: String)
     case displayReconfigured(displayUUID: String)
+    // Geometry-only reconfiguration (#25): resolution/scaling/Dock change with
+    // the same display UUID set. Carries the affected display; reconciler
+    // reapplies layouts (debounced).
+    case displayGeometryChanged(displayUUID: String)
 
     // App lifecycle
     case appLaunched(app: NSRunningApplication)
@@ -70,6 +77,11 @@ struct FocusState {
     let previousSpaceID: UInt64?
     let previousDisplayUUID: String?
     let trigger: FocusTrigger
+    // #17: monotonic sequence stamped in-order at notification-capture time.
+    // The per-callback Task{} can reorder events before they reach the actor;
+    // applyWindowFocus consults FocusSequenceGate to drop an older-than-current
+    // event so a stale focus cannot overwrite a newer one. 0 = unstamped.
+    let seq: UInt64
 
     /// Convenience initializer with defaults for previous state fields
     init(
@@ -79,7 +91,8 @@ struct FocusState {
         previousWindowID: UInt32? = nil,
         previousSpaceID: UInt64? = nil,
         previousDisplayUUID: String? = nil,
-        trigger: FocusTrigger
+        trigger: FocusTrigger,
+        seq: UInt64 = 0
     ) {
         self.windowID = windowID
         self.spaceID = spaceID
@@ -88,6 +101,25 @@ struct FocusState {
         self.previousSpaceID = previousSpaceID
         self.previousDisplayUUID = previousDisplayUUID
         self.trigger = trigger
+        self.seq = seq
+    }
+}
+
+// MARK: - FocusEventSequence (#17)
+
+// Thread-safe monotonic source for focus-event sequence numbers. Stamped
+// synchronously at the in-order notification-capture sites (AX callback /
+// workspace activation) BEFORE the reordering per-callback Task{}, so the
+// apply-side gate can reject a stale event that lost the race.
+enum FocusEventSequence {
+    private static let lock = NSLock()
+    private static var counter: UInt64 = 0
+
+    static func next() -> UInt64 {
+        lock.lock()
+        defer { lock.unlock() }
+        counter &+= 1
+        return counter
     }
 }
 
@@ -308,6 +340,9 @@ extension StateEvent {
                 "display": displayUUID
             ])
 
+        case .spaceActivated(let spaceID, let displayUUID):
+            return ("ev.spc.activate", ["sid": spaceID, "display": displayUUID])
+
         // Display lifecycle
         case .displayConnected(let displayUUID):
             return ("ev.dsp.connect", ["display": displayUUID])
@@ -317,6 +352,9 @@ extension StateEvent {
 
         case .displayReconfigured(let displayUUID):
             return ("ev.dsp.reconfig", ["display": displayUUID])
+
+        case .displayGeometryChanged(let displayUUID):
+            return ("ev.dsp.geometry", ["display": displayUUID])
 
         // App lifecycle
         case .appLaunched(let app):

@@ -132,6 +132,11 @@ actor StateValidator {
         return axOrphanCounts[wid] ?? 0
     }
 
+    // _test_isPaused: read the paused flag (DW-2.5 wake-lock gating tests).
+    func _test_isPaused() -> Bool {
+        return paused
+    }
+
     // start() -- called once from main.swift after all components are wired.
     // Creates a repeating background timer that fires validate() every 30 seconds.
     func start() {

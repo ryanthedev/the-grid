@@ -39,6 +39,31 @@ final class EventAllowlistTests: XCTestCase {
         "app.term.reconcile",
         "srv.alive",
 
+        // Phase 2 (space & wake migration) — new events.
+        "cmd.space.reresolve",
+        "dsp.geometry.change",
+        "dsp.refresh.join",
+        "err.layout.zero_bounds",
+        "reconcile.dsp.geometry",
+        "reconcile.space.activated",
+        "reconcile.space.activated.no_display",
+        "reconcile.wake.validator.deferred",
+        "state.space_migrate.snapshot",
+        "warn.layout.stale_space",
+        "warn.reconcile.dsp.geometry.errors",
+        "warn.space.migrate.count_mismatch",
+        "warn.space.migrate.dest_significant",
+
+        // Phase 7 (silent errors, crash safety & infra) — new events.
+        "bfd.watch.rearm",
+        "err.term.show",
+        "grid.state.load.merge",
+        "msg.ready",
+        "mss.reprobe",
+        "mss.reset",
+        "warn.bfd.watch",
+        "warn.term.frame",
+
         // Preexisting events (snapshot as of Phase 2 build).
         "action.begin", "action.end", "action.err", "action.start",
         "app.hide", "app.launch", "app.refresh", "app.term", "app.unhide",
@@ -60,7 +85,8 @@ final class EventAllowlistTests: XCTestCase {
         "bfd.resume", "bfd.start", "bfd.stop", "bfd.suspend",
         "bfd.wake.check", "bfd.wake.reenable", "bfd.wake.restart",
         "cellops.init", "cfg.merge", "cfg.resolve", "cfg.skip",
-        "cmd.dispatch", "cmd.err",
+        // Phase 1 serialization foundation.
+        "cmd.dispatch", "cmd.err", "cmd.exec", "cmd.submit",
         "dbg.borders", "dbg.dsp.reconfig.diff", "dbg.dsp.reconfig.start",
         "dbg.wake.complete", "dbg.wake.start",
         "dsp.change", "dsp.connected", "dsp.disconnected",
@@ -84,6 +110,7 @@ final class EventAllowlistTests: XCTestCase {
         "focus.cycle.race",
         "focus.init", "focus.mismatch", "focus.mismatch.accept",
         "focus.move", "focus.prune", "focus.restore.stale",
+        "focus.seq.reject", "focus.skip_empty",
         "grid.cfg.borders.bridge", "grid.cfg.merge", "grid.cfg.ready",
         "grid.cfg.reload.ok", "grid.cfg.reload.start",
         "grid.cfg.resolve", "grid.cfg.skip", "grid.cfg.warn",
@@ -119,11 +146,14 @@ final class EventAllowlistTests: XCTestCase {
         "reconcile.focus.suppressed",
         "reconcile.init",
         "reconcile.lift.migrate",
+        // FIX 1 / DW-D2: displaced-sweep skip for a window within cross-move grace.
+        "reconcile.lift.skip",
         "reconcile.pending.expired", "reconcile.pending.pid",
         "reconcile.pending.set", "reconcile.pending.skip",
         "reconcile.pending.space.mismatch", "reconcile.pending.space.moved",
         "reconcile.space.change",
         "reconcile.space.reassign", "reconcile.space.reassign.noop",
+        "reconcile.suppressed.queue", "reconcile.suppressed.replay",
         "reconcile.wake.done", "reconcile.wake.migrated",
         "reconcile.wake.refresh.start", "reconcile.wake.start",
         "reconcile.win.create", "reconcile.win.create.bail",
@@ -150,7 +180,7 @@ final class EventAllowlistTests: XCTestCase {
         "state.init", "state.poll", "state.refresh",
         "state.shutdown.done", "state.shutdown.start",
         "state.space_migrated", "state.space_migrated.live",
-        "sweep.correct", "sweep.timer.start", "sweep.unrejected",
+        "sweep.correct", "sweep.skip", "sweep.timer.start", "sweep.unrejected",
         "term.frames.loaded", "term.hide", "term.launch", "term.launched",
         "term.show", "term.toggle.skip",
         "test.panel.hide", "test.panel.show",
@@ -161,7 +191,7 @@ final class EventAllowlistTests: XCTestCase {
         "validate.space.prune",
         "validate.start", "validate.timer.start",
         "validate.win.dedup", "validate.win.prune",
-        "warn.action.end.underflow", "warn.ax.permission",
+        "warn.action.end.consumed", "warn.action.end.underflow", "warn.ax.permission",
         "warn.bdr.bad_bounds", "warn.bdr.exists", "warn.bdr.missing",
         "warn.bdr.no_ctx", "warn.bdr.setup",
         "warn.bfd.init", "warn.broadcast", "warn.client_response",
@@ -173,13 +203,35 @@ final class EventAllowlistTests: XCTestCase {
         "warn.resize.cli_not_found", "warn.resize.exec_failed",
         "warn.sls", "warn.spaces", "warn.spc", "warn.win", "warn.zorder",
         "win.created", "win.deminimized", "win.destroyed",
-        "win.focus", "win.focus.app", "win.focus.restore",
+        "win.focus", "win.focus.app", "win.focus.restore", "win.focus.restore.skip",
         "win.minimized", "win.move", "win.refresh",
         "win.size.fixed", "win.space.timing", "win.spaces",
         "winmove.cross.timing", "winmove.init", "winmove.setup",
         "ws.lock", "ws.register", "ws.screen", "ws.space",
         "ws.stop", "ws.unlock", "ws.wake", "ws.willsleep",
         "zorder.map",
+
+        // Phase 4 (window creation, classification & adoption) — new events.
+        "ax.fallback",
+        "ax.observer.create.failed",
+        "reconcile.not_standard.expired",
+        "reconcile.not_standard.reeval",
+        "reconcile.not_standard.refresh_gone",
+        "validate.win.untracked",
+        "warn.pick.launch_fail",
+        // #29s/#60s/#61s instrumentation (confirm-or-drop in UAT).
+        "warn.space.derive_override",
+        "warn.poll.readd",
+        "warn.subrole.unknown",
+
+        // Phase 5 (geometry writes) — new events.
+        // #10: cross-display move abort when SLS call fails.
+        "err.move.cross_display",
+        // #48: autoflow silent drop when all cells are locked.
+        "warn.assign.dropped",
+        // #16 regression fix: SLS-fallback space move issued but not confirmed
+        // within the verification retry window (best-effort success).
+        "warn.move.sls_unverified",
     ]
 
     // Resolve the Sources/GridServer root by walking up from this file.

@@ -125,7 +125,7 @@ class ApplicationObserver {
     }
 
     /// Handle AX notification callback
-    func handleNotification(element: AXUIElement, notification: CFString) async {
+    func handleNotification(element: AXUIElement, notification: CFString, seq: UInt64 = 0) async {
         let notifName = notification as String
 
         // For AXCreated, check element role to avoid processing non-window elements
@@ -177,7 +177,8 @@ class ApplicationObserver {
                     windowID: fallbackWindowID,
                     spaceID: 0,
                     displayUUID: "",
-                    trigger: .windowActivated
+                    trigger: .windowActivated,
+                    seq: seq
                 )
                 await EventRouter.shared.route(.focusChanged(focusState), from: source)
                 return
@@ -187,7 +188,8 @@ class ApplicationObserver {
                 windowID: windowID,
                 spaceID: 0,
                 displayUUID: "",
-                trigger: .windowActivated
+                trigger: .windowActivated,
+                seq: seq
             )
             let event = StateEvent.focusChanged(focusState)
             await EventRouter.shared.route(event, from: source)
@@ -339,8 +341,12 @@ private func axNotificationCallback(
     }
 
     let appObserver = Unmanaged<ApplicationObserver>.fromOpaque(refcon).takeUnretainedValue()
+    // #17: stamp the focus sequence HERE — the AX callback fires in-order on the
+    // main run loop. The Task{} below can then reorder events on the global
+    // executor, but the stamp preserves arrival order for the apply-side gate.
+    let seq = FocusEventSequence.next()
     Task {
-        await appObserver.handleNotification(element: element, notification: notification)
+        await appObserver.handleNotification(element: element, notification: notification, seq: seq)
     }
 }
 

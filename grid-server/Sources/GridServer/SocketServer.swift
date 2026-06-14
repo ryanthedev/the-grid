@@ -9,6 +9,11 @@ class SocketServer {
     private var clientSockets: Set<Int32> = []
     private let clientQueue = DispatchQueue(label: "com.thegrid.client", attributes: .concurrent)
     private let socketQueue = DispatchQueue(label: "com.thegrid.socket")
+    // #46: a single serial queue funnels EVERY write (request replies AND event
+    // broadcasts) so two send() calls for the same client fd cannot interleave
+    // bytes of two JSONL frames. The full-write loop below handles partial
+    // writes; this queue handles concurrency between writers.
+    private let writeQueue = DispatchQueue(label: "com.thegrid.socket.write")
 
     weak var messageHandler: MessageHandler?
     weak var eventBroadcaster: EventBroadcaster?
@@ -120,6 +125,12 @@ class SocketServer {
                 continue
             }
 
+            // #1: SO_NOSIGPIPE on the accepted socket. macOS has no MSG_NOSIGNAL,
+            // so without this a write to a client that hung up raises SIGPIPE.
+            // With it, send() returns -1/EPIPE which the sock.err branch handles
+            // and the server stays alive.
+            SocketServer.setNoSigPipe(clientSocket)
+
             // Log client connect event
             Task {
                 JSONLogger.shared.log("sock.connect", data: ["cid": clientSocket])
@@ -229,26 +240,51 @@ class SocketServer {
         }
     }
 
-    /// Send a message to a specific client
+    /// Enable SO_NOSIGPIPE on a socket fd so a write to a hung-up peer returns
+    /// EPIPE instead of raising a fatal SIGPIPE (#1).
+    static func setNoSigPipe(_ fd: Int32) {
+        var on: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+    }
+
+    /// Send a message to a specific client. Serialized per-server through
+    /// writeQueue (#46) so frames cannot interleave, and written via a
+    /// full-write loop so a partial send() never truncates a JSONL frame.
     func sendMessage(_ message: Message, to socket: Int32) {
+        let bytes: [UInt8]
         do {
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
             var data = try encoder.encode(message)
             data.append(UInt8(ascii: "\n"))
-
-            let sent = data.withUnsafeBytes { ptr in
-                send(socket, ptr.baseAddress, data.count, 0)
-            }
-
-            if sent < 0 {
-                Task {
-                    JSONLogger.shared.log("sock.err", data: ["op": "send", "socket": socket, "errno": errno])
-                }
-            }
+            bytes = [UInt8](data)
         } catch {
             Task {
                 JSONLogger.shared.log("msg.err", data: ["op": "encode", "error": "\(error)"])
+            }
+            return
+        }
+
+        // Serialize all writes to all client fds. The loop below is the only
+        // place send() is called, so frames are written atomically per message.
+        writeQueue.sync {
+            let result = FullWrite.writeAll(bytes) { ptr, len in
+                let n = send(socket, ptr, len, 0)
+                return (n, errno)
+            }
+            switch result {
+            case .ok:
+                break
+            case .disconnected:
+                // Peer hung up between request and reply (#1). Not fatal —
+                // drop the frame; handleClient's recv loop will reap the fd.
+                Task {
+                    JSONLogger.shared.log("sock.err", data: ["op": "send", "socket": socket, "reason": "disconnected"])
+                }
+            case .failed(let err):
+                Task {
+                    JSONLogger.shared.log("sock.err", data: ["op": "send", "socket": socket, "errno": Int(err)])
+                }
             }
         }
     }

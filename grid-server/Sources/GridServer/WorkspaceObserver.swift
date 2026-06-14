@@ -183,6 +183,9 @@ class WorkspaceObserver {
             return
         }
 
+        // #17: stamp in-order before the Task{} (the NSWorkspace notification
+        // fires in-order; the Task can reorder relative to AX focus events).
+        let seq = FocusEventSequence.next()
         Task {
             // Query the focused window of the activated app
             let windowID = getFocusedWindowID(for: app.processIdentifier)
@@ -191,7 +194,8 @@ class WorkspaceObserver {
                 windowID: windowID,
                 spaceID: 0,
                 displayUUID: "",
-                trigger: .appActivated
+                trigger: .appActivated,
+                seq: seq
             )
             await EventRouter.shared.route(.focusChanged(focusState), from: .workspaceObserver)
         }

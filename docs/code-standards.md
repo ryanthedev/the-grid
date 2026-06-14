@@ -1,5 +1,6 @@
-<!-- base-commit: 89adf80 -->
+<!-- base-commit: 0bff8ad -->
 <!-- generated: 2026-05-18 -->
+<!-- updated: 2026-06-11 -->
 
 # Code Standards
 
@@ -146,6 +147,13 @@ Dependency direction inside `grid-server/Sources/GridServer/`:
 - `MessageHandler` → top of the stack; depends on Grid/* and StateManager
 - Modules use `private weak var` for parent→child references; never strong, to avoid retain cycles in the wiring graph
 
+**Hexagonal ports (`Ports/`)** — protocol seams extracted so Grid modules depend on abstractions, not concrete infra. Each protocol is implemented by a concrete adapter:
+- `WindowController` (protocol) ← `WindowManipulator` (adapter) — AX/SkyLight window ops
+- `StateProvider` (protocol) ← `StateManager` (adapter) — state queries
+- `BorderRendering` (protocol) ← `SimpleBorderManager` (adapter) — border overlays
+- `GridStorage` (protocol) ← `FileGridStorage` (adapter) — persistence
+Grid modules hold the protocol type (`private weak var windowController: WindowController?`), wired to the concrete adapter in `main.swift`. When fixing a bug in window ops / borders / persistence, the behavior lives in the adapter; the port defines the contract.
+
 ---
 
 ## 5. Testing Patterns
@@ -209,6 +217,11 @@ grid-server/
 │       │   ├── GridApply.swift
 │       │   ├── StateValidator.swift
 │       │   └── ...
+│       ├── Ports/               # Hexagonal port protocols + adapters
+│       │   ├── WindowController.swift   # protocol ← WindowManipulator
+│       │   ├── StateProvider.swift      # protocol ← StateManager
+│       │   ├── BorderRendering.swift    # protocol ← SimpleBorderManager
+│       │   └── GridStorage.swift        # protocol ← FileGridStorage
 │       ├── BFD/                 # Hotkey daemon
 │       ├── Picker/              # Window picker overlay
 │       ├── StateManager.swift   # Actor — single source of OS state

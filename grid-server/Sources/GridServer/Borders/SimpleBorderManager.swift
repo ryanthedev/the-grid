@@ -182,9 +182,17 @@ class SimpleBorderManager: @unchecked Sendable {
                 let stackMode = cellStackModes[cellID] ?? "tabs"
                 isActiveCellTabbed = (stackMode == "tabs")
                 reassignBorders(previousFocused: previousFocusedWindow)
+            } else if BorderMembershipPolicy.activeCellMembersChanged(
+                cellID: cellID,
+                old: oldAssignments,
+                new: assignments
+            ) {
+                // Same cell, same window, but cell membership changed (window added/removed).
+                // Must rebuild so borders track the new member set (finding #9).
+                rebuildBorderPool(source: "atomic-membershipChange")
             } else {
-                // Same cell, same window: position-only refresh (windows may have moved
-                // during suppressed operations like layout apply or swap).
+                // Same cell, same window, same members: position-only refresh (windows may
+                // have moved during suppressed operations like layout apply or swap).
                 // Avoids the expensive release-reacquire cycle of a full rebuild.
                 refreshBorderPositions()
             }
@@ -369,9 +377,21 @@ class SimpleBorderManager: @unchecked Sendable {
             }
         }
 
-        // Clean up from all display caches to prevent unbounded growth
+        // Clean up from all display caches to prevent unbounded growth.
         for displayUUID in cellAssignmentsPerDisplay.keys {
             cellAssignmentsPerDisplay[displayUUID]?.removeValue(forKey: windowID)
+        }
+
+        // Also prune windowOrderPerDisplay (finding #56 fix): the destroy path only
+        // removed the wid from cellAssignmentsPerDisplay; windowOrderPerDisplay retained
+        // it and inflated the stack indicator count with dead window IDs.
+        for displayUUID in windowOrderPerDisplay.keys {
+            if windowOrderPerDisplay[displayUUID] != nil {
+                windowOrderPerDisplay[displayUUID] = WindowOrderPrunePolicy.prune(
+                    wid: windowID,
+                    from: windowOrderPerDisplay[displayUUID]!
+                )
+            }
         }
     }
 
@@ -474,21 +494,21 @@ class SimpleBorderManager: @unchecked Sendable {
 
     // MARK: - Query Methods
 
-    /// Query border info for a specific window
-    /// Returns: (borderWindowID, targetWindowID, rgba, width, isVisible, isFocused) or nil if no border exists
-    func queryBorderInfo(forWindowID windowID: UInt32) -> [String: Any]? {
-        // Must be called on main queue for thread safety
-        var result: [String: Any]?
-
-        if Thread.isMainThread {
-            result = queryBorderInfoImpl(forWindowID: windowID)
-        } else {
-            DispatchQueue.main.sync {
-                result = self.queryBorderInfoImpl(forWindowID: windowID)
+    /// Query border info for a specific window (async — finding #55 fix).
+    ///
+    /// The old implementation used DispatchQueue.main.sync which would deadlock if the
+    /// main queue was wedged. This async version bridges to main via withCheckedContinuation
+    /// + DispatchQueue.main.async, matching the same pattern used by the BorderRendering
+    /// conformance extension below.
+    ///
+    /// Returns: (borderWindowID, targetWindowID, rgba, width, isVisible, isFocused) or nil
+    func queryBorderInfo(forWindowID windowID: UInt32) async -> [String: Any]? {
+        return await withCheckedContinuation { (continuation: CheckedContinuation<[String: Any]?, Never>) in
+            DispatchQueue.main.async { [weak self] in
+                let result = self?.queryBorderInfoImpl(forWindowID: windowID)
+                continuation.resume(returning: result)
             }
         }
-
-        return result
     }
 
     private func queryBorderInfoImpl(forWindowID windowID: UInt32) -> [String: Any]? {
@@ -581,11 +601,20 @@ class SimpleBorderManager: @unchecked Sendable {
         let config = BorderConfigManager.shared
 
         if isActiveCellTabbed {
-            // Tabbed mode: retarget the single active border (no inactive borders exist)
+            // Tabbed mode: retarget the single active border (no inactive borders exist).
+            // On retarget failure (finding #53): the new target window's bounds are
+            // unavailable (destroyed window). Release the border to the pool and
+            // fall back to rebuildBorderPool so the next valid state repairs it.
             if let border = activeBorder {
-                border.retarget(to: newFocused)
-                // Reapply active style (updates stack indicator for new index)
-                applyActiveStyle(to: border)
+                if border.retarget(to: newFocused) {
+                    // Retarget succeeded — reapply active style (updates stack indicator)
+                    applyActiveStyle(to: border)
+                } else {
+                    // Retarget failed: hide and release border, trigger full rebuild
+                    releaseBorder(border)
+                    activeBorder = nil
+                    rebuildBorderPool(source: "retarget-failure")
+                }
             } else {
                 // Edge case: no active border -- acquire one
                 if let border = acquireBorder(for: newFocused) {
@@ -673,14 +702,23 @@ class SimpleBorderManager: @unchecked Sendable {
             }
         }
 
+        // Capture mutable-state values into immutable locals BEFORE spawning Task.
+        // SimpleBorderManager is @unchecked Sendable with the invariant "all mutable
+        // state on DispatchQueue.main"; Task{} inherits no actor isolation and runs on
+        // the global executor — reading mutable properties inside the Task violates the
+        // invariant (finding #27). destroyAllBorders already uses this pattern correctly.
+        let capturedTabbed = isActiveCellTabbed
+        let capturedBorderCount = capturedTabbed ? (activeBorder != nil ? 1 : 0) : windowsInCell.count
+        let capturedFocused = focusedWindowID ?? 0
+        let capturedPoolSize = freePool.count
         Task {
             JSONLogger.shared.log("bdr.rebuild", data: [
                 "source": source,
                 "cell": cellID,
-                "count": isActiveCellTabbed ? (activeBorder != nil ? 1 : 0) : windowsInCell.count,
-                "focused": focusedWindowID ?? 0,
-                "tabbed": isActiveCellTabbed,
-                "poolSize": freePool.count
+                "count": capturedBorderCount,
+                "focused": capturedFocused,
+                "tabbed": capturedTabbed,
+                "poolSize": capturedPoolSize
             ])
         }
     }
@@ -709,9 +747,11 @@ class SimpleBorderManager: @unchecked Sendable {
             }
         }
 
+        // Capture immutable local before spawning Task (finding #27).
+        let capturedCellID = activeCellID ?? "nil"
         Task {
             JSONLogger.shared.log("bdr.refresh", data: [
-                "cell": activeCellID ?? "nil",
+                "cell": capturedCellID,
                 "count": refreshCount
             ])
         }
@@ -784,10 +824,13 @@ class SimpleBorderManager: @unchecked Sendable {
         if freePool.count >= maxPoolSize {
             let oldest = freePool.removeFirst()
             oldest.destroy()
+            // Capture immutable locals before spawning Task (finding #27).
+            let capturedEvictWid = oldest.windowID
+            let capturedPoolSize = freePool.count
             Task {
                 JSONLogger.shared.log("bdr.pool.evict", data: [
-                    "wid": oldest.windowID,
-                    "poolSize": freePool.count
+                    "wid": capturedEvictWid,
+                    "poolSize": capturedPoolSize
                 ])
             }
         }
@@ -813,11 +856,13 @@ class SimpleBorderManager: @unchecked Sendable {
         }
         inactiveBorders.removeAll()
 
+        // Capture immutable local before spawning Task (finding #27).
+        let capturedPoolSize = freePool.count
         Task {
             JSONLogger.shared.log("bdr.pool.releaseAll", data: [
                 "activeCount": activeCount,
                 "inactiveCount": inactiveCount,
-                "poolSize": freePool.count
+                "poolSize": capturedPoolSize
             ])
         }
     }

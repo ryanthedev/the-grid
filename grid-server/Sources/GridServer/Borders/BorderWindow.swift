@@ -412,8 +412,16 @@ class BorderWindow {
 
                     // Restore visibility
                     show()
+                } else {
+                    // Context creation failed: alpha is already 0 from the hide above.
+                    // Set isVisible=false so the next updateStyle/show repairs the border
+                    // (finding #54: if isVisible stays true, the next show() guard skips it).
+                    isVisible = false
+                    JSONLogger.shared.log(BorderResizePolicy.resizeContextFailureLogEvent, data: [
+                        "wid": windowID,
+                        "targetID": targetWindowID
+                    ])
                 }
-                // Note: If context creation fails, border stays hidden until next update
             }
 
             // Resize complete - process any queued frame
@@ -437,18 +445,24 @@ class BorderWindow {
         performUpdate(frame)
     }
 
-    /// Re-target this border to track a different window
-    /// Used for tabbed cells where we keep one border and switch targets on focus change
-    func retarget(to newTargetID: UInt32) {
+    /// Re-target this border to track a different window.
+    /// Used for tabbed cells where we keep one border and switch targets on focus change.
+    ///
+    /// Returns true on success, false when bounds cannot be obtained for the new target
+    /// (finding #53 fix: targetWindowID is committed only AFTER the bounds guard succeeds,
+    /// so a failure never leaves the border pointing at a destroyed window).
+    @discardableResult
+    func retarget(to newTargetID: UInt32) -> Bool {
         // Capture windowID upfront to avoid race with concurrent destroy()
         let currentWindowID = windowID
-        guard currentWindowID != 0 else { return }
-        guard newTargetID != targetWindowID else { return }
+        guard currentWindowID != 0 else { return false }
+        guard newTargetID != targetWindowID else { return true }
 
         let oldTarget = targetWindowID
-        targetWindowID = newTargetID
 
-        // Get new target's frame and update position
+        // Get new target's frame BEFORE committing targetWindowID.
+        // If bounds are unavailable (window already destroyed), do not commit —
+        // the border keeps its old target and the caller handles the failure.
         var frame = CGRect.zero
         guard SLSGetWindowBounds(connectionID, newTargetID, &frame) == .success else {
             Task {
@@ -459,8 +473,11 @@ class BorderWindow {
                     "reason": "no_bounds"
                 ])
             }
-            return
+            return false
         }
+
+        // Bounds obtained — safe to commit the new target.
+        targetWindowID = newTargetID
 
         // Update position to new target
         update(targetFrame: frame)
@@ -480,6 +497,7 @@ class BorderWindow {
                 "newTarget": newTargetID
             ])
         }
+        return true
     }
 
     /// Update the border's style and visibility

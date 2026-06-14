@@ -369,7 +369,13 @@ enum GridAssignment {
         // Skip locked cells — non-matching windows must not land there
         sortedCells = sortedCells.filter { !lockedCells.contains($0) }
 
-        guard !sortedCells.isEmpty else { return }
+        guard !sortedCells.isEmpty else {
+            // All cells are locked — every window in this batch is dropped.
+            // Log so the operator can diagnose silently-missing windows (#48).
+            let droppedWIDs = windows.map { Int($0.id) }
+            JSONLogger.shared.log("warn.assign.dropped", data: ["wids": droppedWIDs])
+            return
+        }
 
         // Round-robin: window[i] goes to cell[i % cellCount]
         for (i, window) in windows.enumerated() {

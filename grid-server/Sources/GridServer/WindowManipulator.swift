@@ -55,7 +55,7 @@ class WindowManipulator: @unchecked Sendable {
 
     /// Get the AXUIElement for a window given its window ID and owner PID
     func getAXElement(pid: pid_t, windowID: UInt32) -> AXUIElement? {
-        let app = AXUIElementCreateApplication(pid)
+        let app = makeAppElement(pid: pid)
 
         // Get all windows for the application
         var windowsValue: CFTypeRef?
@@ -73,10 +73,36 @@ class WindowManipulator: @unchecked Sendable {
             }
         }
 
-        // Fallback: If only one AX window exists, use it (handles apps like Ghostty
-        // where SkyLight reports multiple phantom window IDs but AX only sees one real window)
+        // Fallback: a single AX window whose own CG ID is UNRESOLVABLE (or equals
+        // the queried ID) is ambiguous — assume the queried ID refers to it
+        // (handles apps like Ghostty where SkyLight reports phantom window IDs
+        // but AX exposes one real window that does not resolve back to a CG ID).
+        //
+        // But when that single AX window DOES resolve to a concrete DIFFERENT
+        // id, the queried window is a distinct phantom — substituting it would
+        // land the manipulation on the app's real window while state is written
+        // under the phantom id (#15). Reuse the exact StateManager guard from
+        // commit 1cf354e (do not fork) and log when the fallback fires.
         if windows.count == 1 {
-            return windows[0]
+            var soleWindowID: UInt32 = 0
+            let resolved = _AXUIElementGetWindow(windows[0], &soleWindowID)
+            if StateManager.shouldUseSoleWindowFallback(
+                resolved: resolved,
+                soleWindowID: soleWindowID,
+                queriedID: windowID
+            ) {
+                JSONLogger.shared.log("ax.fallback", data: [
+                    "pid": pid,
+                    "wid": windowID,
+                    "resolved": soleWindowID,
+                    "op": "getAXElement",
+                ])
+                return windows[0]
+            }
+            JSONLogger.shared.log("ax.fail", data: [
+                "pid": pid, "wid": windowID, "reason": "sole_window_phantom", "resolved": soleWindowID,
+            ])
+            return nil
         }
 
         JSONLogger.shared.log("ax.fail", data: ["pid": pid, "wid": windowID, "reason": "not_in_list"])
@@ -397,8 +423,7 @@ return true
                 if !success {
                     return false
                 }
-                let newSpace = getWindowSpace(windowID: windowID)
-                return newSpace == spaceID
+                return confirmSLSMove(windowID: windowID, spaceID: spaceID)
             }
         } else {
             // Older macOS - use direct API
@@ -410,15 +435,34 @@ return true
                 return false
             }
 
-            let newSpace = getWindowSpace(windowID: windowID)
-            let verified = newSpace == spaceID
-
-            if !verified {
-                JSONLogger.shared.log("err.verify", data: ["wid": windowID, "expected": spaceID, "actual": newSpace as Any])
-            }
-
-            return verified
+            return confirmSLSMove(windowID: windowID, spaceID: spaceID)
         }
+    }
+
+    /// Confirm a SkyLight-fallback space move.
+    ///
+    /// `SLSMoveWindowsToManagedSpace` is asynchronous and exposes no synchronous
+    /// success signal, so an immediate `getWindowSpace` re-query races the move and
+    /// reports the old space. Retry the verification briefly; if the window reflects
+    /// the target space, the move is confirmed. If it still has not reflected after
+    /// the retry window, treat the issued move as best-effort success (the SLS path
+    /// gives us nothing better to decide on, and callers must not block a move that
+    /// the OS likely honored) and surface the uncertainty via a warning. Only the
+    /// MSS path — which has a real success Bool — reports a hard move failure.
+    private func confirmSLSMove(windowID: UInt32, spaceID: UInt64) -> Bool {
+        var newSpace = getWindowSpace(windowID: windowID)
+        var attempts = 0
+        // ~100ms worst case; resolves in 1–2 iterations for an honored move.
+        while newSpace != spaceID && attempts < 5 {
+            usleep(20_000)
+            newSpace = getWindowSpace(windowID: windowID)
+            attempts += 1
+        }
+        if newSpace == spaceID {
+            return true
+        }
+        JSONLogger.shared.log("warn.move.sls_unverified", data: ["wid": windowID, "expected": spaceID, "actual": newSpace as Any])
+        return true
     }
 
     // MARK: - Window Focus
@@ -463,9 +507,15 @@ return true
             return focusWindowFallback(pid: pid, windowID: windowID)
         }
 
-        // 2. Set front process with window context
+        // 2. Set front process with window context.
+        // #21: capture the CGError instead of discarding it.
+        var slpsFrontSucceeded = false
         withUnsafePointer(to: psn) { psnPtr in
-            _ = SLPSSetFrontProcessWithOptions(psnPtr, windowID, kCPSUserGenerated)
+            let err = SLPSSetFrontProcessWithOptions(psnPtr, windowID, kCPSUserGenerated)
+            slpsFrontSucceeded = (err == .success)
+        }
+        if !slpsFrontSucceeded {
+            JSONLogger.shared.log("warn.focus", data: ["reason": "slps_front_fail", "wid": windowID])
         }
 
         // 3. Synthesize key window events
@@ -473,12 +523,29 @@ return true
             makeKeyWindow(psn: psnPtr, windowID: windowID)
         }
 
-        // 4. AX raise as final step (same order as yabai)
+        // 4. AX raise as final step (same order as yabai).
+        // #21: a missing AX element means no raise happened — that is a real
+        // failure, not a silent success.
+        var axElementPresent = false
+        var axRaiseSucceeded = false
         if let element = getAXElement(pid: pid, windowID: windowID) {
-            AXUIElementPerformAction(element, kAXRaiseAction as CFString)
+            axElementPresent = true
+            let raiseErr = AXUIElementPerformAction(element, kAXRaiseAction as CFString)
+            axRaiseSucceeded = (raiseErr == .success)
+            if !axRaiseSucceeded {
+                JSONLogger.shared.log("warn.focus", data: ["reason": "ax_raise_fail", "wid": windowID])
+            }
+        } else {
+            JSONLogger.shared.log("warn.focus", data: ["reason": "no_ax_element", "wid": windowID])
         }
 
-        return true
+        // #21: classify the real outcome instead of returning true unconditionally.
+        return classifyFocusResult(FocusRaiseOutcome(
+            psnResolved: true,
+            slpsFrontSucceeded: slpsFrontSucceeded,
+            axElementPresent: axElementPresent,
+            axRaiseSucceeded: axRaiseSucceeded
+        ))
     }
 
     /// Fallback focus method (MSS + NSRunningApplication + AX)
@@ -490,8 +557,16 @@ return true
         if let app = NSRunningApplication(processIdentifier: pid) {
             app.activate(options: [.activateIgnoringOtherApps])
         }
-        if let element = getAXElement(pid: pid, windowID: windowID) {
-            AXUIElementPerformAction(element, kAXRaiseAction as CFString)
+        // #21: the AX raise is the only step whose outcome confirms focus
+        // actually moved. A missing element / failed raise is a real failure.
+        guard let element = getAXElement(pid: pid, windowID: windowID) else {
+            JSONLogger.shared.log("warn.focus", data: ["reason": "fallback_no_ax_element", "wid": windowID])
+            return false
+        }
+        let raiseErr = AXUIElementPerformAction(element, kAXRaiseAction as CFString)
+        if raiseErr != .success {
+            JSONLogger.shared.log("warn.focus", data: ["reason": "fallback_ax_raise_fail", "wid": windowID])
+            return false
         }
         return true
     }

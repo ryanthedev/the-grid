@@ -115,12 +115,37 @@ actor GridState {
             guard let decoded = try await storage.load() else {
                 return
             }
+            // #45: defense in depth. load() is sequenced before wiring in
+            // main.swift, but if any in-memory space already carries
+            // significant state (an early create/apply handled before load
+            // completed), do NOT wholesale-replace it — merge the persisted
+            // spaces in only for keys we don't already hold non-empty state for.
+            if hasAnySignificantState() {
+                for (key, value) in decoded.spaces where !spaceHasSignificantState(key) {
+                    spaces[key] = value
+                }
+                for (key, value) in decoded.displaySpaces where displaySpaces[key] == nil {
+                    displaySpaces[key] = value
+                }
+                jlog("grid.state.load.merge", data: ["spaces": spaces.count])
+                return
+            }
             spaces = decoded.spaces
             displaySpaces = decoded.displaySpaces
             lastUpdated = decoded.lastUpdated
         } catch {
             jlog("err.grid.state.load", msg: "\(error)")
         }
+    }
+
+    /// True if any in-memory space already holds layout/cell state worth keeping.
+    private func hasAnySignificantState() -> Bool {
+        return spaces.values.contains { hasSignificantState($0) }
+    }
+
+    private func spaceHasSignificantState(_ spaceID: String) -> Bool {
+        guard let s = spaces[spaceID] else { return false }
+        return hasSignificantState(s)
     }
 
     // MARK: - Persistence (debounced)
@@ -194,6 +219,14 @@ actor GridState {
         return Array(spaces.keys)
     }
 
+    // #52: space IDs GridState believes belong to a display, read from its OWN
+    // per-display map (snapshotted on wake/migrate). The reconciler's old
+    // disconnect prune diffed post-refresh wmState.spaces, which no longer
+    // lists the gone display — so it found nothing and was dead code.
+    func getSpaceIDsForDisplay(_ displayUUID: String) -> [String] {
+        return displaySpaces[displayUUID] ?? []
+    }
+
     func removeSpace(_ spaceID: String) {
         spaces.removeValue(forKey: spaceID)
         markDirty()
@@ -208,6 +241,20 @@ actor GridState {
         guard oldSpaceID != newSpaceID,
               var oldState = spaces[oldSpaceID],
               hasSignificantState(oldState) else {
+            return []
+        }
+
+        // #6 destination guard: never overwrite a destination that already
+        // holds significant grid state (its own layout/cells). Doing so wipes
+        // a laid-out space. Skip + log instead.
+        let destSignificant = spaces[newSpaceID].map { hasSignificantState($0) } ?? false
+        guard SpaceMigrationPolicy.canMigrate(
+            sourceHasSignificantState: true,
+            destinationHasSignificantState: destSignificant) else {
+            jlog("warn.space.migrate.dest_significant", data: [
+                "old": oldSpaceID,
+                "new": newSpaceID,
+            ])
             return []
         }
 
@@ -233,16 +280,32 @@ actor GridState {
     }
 
     // Bulk migration: positional matching across displays (used on wake).
+    // #6: old/new lists are paired positionally after a NUMERIC sort (the
+    // caller sorts both legs with SpaceMigrationPolicy.numericallySorted), and
+    // a migration is refused when the destination already holds significant
+    // state. Count-mismatched lists migrate the common prefix and log the skip.
     func migrateSpaceIDs(currentDisplaySpaces: [String: [String]]) -> Bool {
         var migrated = false
 
-        for (displayUUID, newSpaceList) in currentDisplaySpaces {
-            if displayUUID.isEmpty || newSpaceList.isEmpty {
+        for (displayUUID, rawNewSpaceList) in currentDisplaySpaces {
+            if displayUUID.isEmpty || rawNewSpaceList.isEmpty {
                 continue
             }
 
-            let oldSpaceList = displaySpaces[displayUUID] ?? []
+            // Numeric pairing on both legs (#6): lexicographic order paired the
+            // wrong spaces ("999" > "1001").
+            let newSpaceList = SpaceMigrationPolicy.numericallySorted(rawNewSpaceList)
+            let oldSpaceList = SpaceMigrationPolicy.numericallySorted(displaySpaces[displayUUID] ?? [])
             let limit = min(oldSpaceList.count, newSpaceList.count)
+
+            if oldSpaceList.count != newSpaceList.count {
+                jlog("warn.space.migrate.count_mismatch", data: [
+                    "display": displayUUID,
+                    "old": oldSpaceList.count,
+                    "new": newSpaceList.count,
+                    "paired": limit,
+                ])
+            }
 
             for i in 0..<limit {
                 let oldSpaceID = oldSpaceList[i]
@@ -252,19 +315,34 @@ actor GridState {
                     continue
                 }
 
-                if var oldState = spaces[oldSpaceID], hasSignificantState(oldState) {
-                    oldState.spaceId = newSpaceID
-                    spaces[newSpaceID] = oldState
-                    spaces.removeValue(forKey: oldSpaceID)
-                    migrated = true
+                guard var oldState = spaces[oldSpaceID], hasSignificantState(oldState) else {
+                    continue
+                }
 
-                    jlog("state.space_migrated", data: [
+                // #6 destination guard: refuse to clobber a laid-out destination.
+                let destSignificant = spaces[newSpaceID].map { hasSignificantState($0) } ?? false
+                guard SpaceMigrationPolicy.canMigrate(
+                    sourceHasSignificantState: true,
+                    destinationHasSignificantState: destSignificant) else {
+                    jlog("warn.space.migrate.dest_significant", data: [
                         "display": displayUUID,
                         "old": oldSpaceID,
                         "new": newSpaceID,
-                        "position": i,
                     ])
+                    continue
                 }
+
+                oldState.spaceId = newSpaceID
+                spaces[newSpaceID] = oldState
+                spaces.removeValue(forKey: oldSpaceID)
+                migrated = true
+
+                jlog("state.space_migrate.snapshot", data: [
+                    "display": displayUUID,
+                    "old": oldSpaceID,
+                    "new": newSpaceID,
+                    "paired": i,
+                ])
             }
 
             displaySpaces[displayUUID] = newSpaceList
@@ -295,26 +373,27 @@ actor GridState {
         markDirty()
     }
 
-    func cycleLayout(spaceID: String, availableLayouts: [String]) -> String {
+    // #58: compute the next/previous layout id WITHOUT mutating state. The
+    // router passes the computed id to applyLayout, whose body commits the
+    // layout switch (the single writer) only after the layout def is fetched
+    // and bounds validated. The old cycleLayout/previousLayout wiped cells +
+    // focus BEFORE applyLayout ran, so a throwing apply left the space wiped.
+    func computeCycleLayout(spaceID: String, availableLayouts: [String]) -> String {
         if availableLayouts.isEmpty {
             return spaces[spaceID]?.currentLayoutId ?? ""
         }
         let space = getSpace(spaceID)
         let newIndex = (space.layoutIndex + 1) % availableLayouts.count
-        let newLayoutID = availableLayouts[newIndex]
-        setCurrentLayout(spaceID: spaceID, layoutID: newLayoutID, layoutIndex: newIndex)
-        return newLayoutID
+        return availableLayouts[newIndex]
     }
 
-    func previousLayout(spaceID: String, availableLayouts: [String]) -> String {
+    func computePreviousLayout(spaceID: String, availableLayouts: [String]) -> String {
         if availableLayouts.isEmpty {
             return spaces[spaceID]?.currentLayoutId ?? ""
         }
         let space = getSpace(spaceID)
         let newIndex = (space.layoutIndex - 1 + availableLayouts.count) % availableLayouts.count
-        let newLayoutID = availableLayouts[newIndex]
-        setCurrentLayout(spaceID: spaceID, layoutID: newLayoutID, layoutIndex: newIndex)
-        return newLayoutID
+        return availableLayouts[newIndex]
     }
 
     func getCurrentLayout(spaceID: String) -> String {
@@ -333,10 +412,18 @@ actor GridState {
 
         removeWindowInternal(windowID, from: &space)
 
+        // Re-fetch cell after removeWindowInternal may have mutated it
+        cell = space.cells[cellID] ?? GridCellStateData(cellId: cellID)
+
+        let insertionIndex = cell.windows.count
         cell.windows.append(windowID)
-        cell.lastFocusedIdx = cell.windows.count - 1
+        cell.lastFocusedIdx = insertionIndex
         cell.lastFocusedWid = windowID
-        cell.splitRatios = equalRatios(cell.windows.count)
+        // Recalculate ratios to preserve existing proportions (not equalize)
+        cell.splitRatios = GridLayout.recalculateSplitsAfterAddition(
+            ratios: cell.splitRatios,
+            newIndex: insertionIndex
+        )
         space.cells[cellID] = cell
         spaces[spaceID] = space
         markDirty()
@@ -353,10 +440,16 @@ actor GridState {
         removeWindowInternal(windowID, from: &space)
         cell = space.cells[cellID] ?? GridCellStateData(cellId: cellID)
 
+        // Recalculate ratios before inserting so the existing ratios are the
+        // source of truth for the proportional split (index 0 = prepend position)
+        let newRatios = GridLayout.recalculateSplitsAfterAddition(
+            ratios: cell.splitRatios,
+            newIndex: 0
+        )
         cell.windows.insert(windowID, at: 0)
         cell.lastFocusedIdx = 0
         cell.lastFocusedWid = windowID
-        cell.splitRatios = equalRatios(cell.windows.count)
+        cell.splitRatios = newRatios
         space.cells[cellID] = cell
         spaces[spaceID] = space
         markDirty()
@@ -369,10 +462,15 @@ actor GridState {
         var cell = space.cells[cellID] ?? GridCellStateData(cellId: cellID)
 
         let clampedIndex = max(0, min(index, cell.windows.count))
+        // Recalculate ratios before inserting to preserve existing proportions
+        let newRatios = GridLayout.recalculateSplitsAfterAddition(
+            ratios: cell.splitRatios,
+            newIndex: clampedIndex
+        )
         cell.windows.insert(windowID, at: clampedIndex)
         cell.lastFocusedIdx = clampedIndex
         cell.lastFocusedWid = windowID
-        cell.splitRatios = equalRatios(cell.windows.count)
+        cell.splitRatios = newRatios
         space.cells[cellID] = cell
         spaces[spaceID] = space
         markDirty()
@@ -383,6 +481,13 @@ actor GridState {
 
         for (cellID, var cell) in space.cells {
             guard let idx = cell.windows.firstIndex(of: windowID) else { continue }
+
+            // Recalculate split ratios before removing to preserve proportions.
+            // The removed window's ratio is distributed equally to the remaining ones.
+            let updatedRatios = GridLayout.recalculateSplitsAfterRemoval(
+                ratios: cell.splitRatios,
+                removedIndex: idx
+            )
 
             cell.windows.remove(at: idx)
 
@@ -415,7 +520,7 @@ actor GridState {
             if cell.windows.isEmpty {
                 cell.splitRatios = []
             } else {
-                cell.splitRatios = equalRatios(cell.windows.count)
+                cell.splitRatios = updatedRatios
             }
 
             // Fix space-level focus if the removed window's cell was focused
@@ -464,6 +569,12 @@ actor GridState {
         for (cellID, var cell) in space.cells {
             guard let idx = cell.windows.firstIndex(of: windowID) else { continue }
 
+            // Recalculate split ratios before removing to preserve proportions
+            let updatedRatios = GridLayout.recalculateSplitsAfterRemoval(
+                ratios: cell.splitRatios,
+                removedIndex: idx
+            )
+
             cell.windows.remove(at: idx)
 
             if cell.windows.isEmpty {
@@ -495,7 +606,7 @@ actor GridState {
             if cell.windows.isEmpty {
                 cell.splitRatios = []
             } else {
-                cell.splitRatios = equalRatios(cell.windows.count)
+                cell.splitRatios = updatedRatios
             }
 
             space.cells[cellID] = cell
@@ -862,5 +973,15 @@ actor GridState {
         }
         space.cells[cellID] = cell
         spaces[spaceID] = space
+    }
+
+    // Seed the per-display space snapshot (the wake-migration old list).
+    func _test_seedDisplaySpaces(_ displayUUID: String, _ spaceIDs: [String]) {
+        displaySpaces[displayUUID] = spaceIDs
+    }
+
+    // Read the per-display space snapshot.
+    func _test_displaySpaces(_ displayUUID: String) -> [String] {
+        return displaySpaces[displayUUID] ?? []
     }
 }
