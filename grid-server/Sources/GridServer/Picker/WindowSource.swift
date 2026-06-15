@@ -54,12 +54,28 @@ struct WindowSource: PickerSource {
             let bundleID = app?.bundleIdentifier ?? ""
             let windowTitle = window.title ?? ""
 
+            // Re-poll AX for Chrome windows whose cached axTitle is empty or
+            // lacks the profile suffix (the live kAXTitleChangedNotification
+            // path can leave a suffix-less title). Fires ONLY here, at picker
+            // enrichment — never in response to live title-change events.
+            var axTitle = window.axTitle
+            if ChromeTitlePolicy.decide(bundleID: bundleID, cachedAXTitle: axTitle) == .repoll {
+                let wid = UInt32(windowIDStr) ?? 0
+                jlog("chrome.repoll", data: ["wid": wid])
+                // refreshWindowAXProperties returns nil if the window is gone
+                // and only writes a non-empty axTitle, so a failed/empty
+                // re-poll degrades to the prior cached value (no empty write,
+                // no crash).
+                let refreshed = await StateManager.shared.refreshWindowAXProperties(wid)
+                axTitle = refreshed?.axTitle ?? window.axTitle
+            }
+
             // Enrichment: tmux session, SSH connection, or Chrome profile
             let enrichment = await enricher.enrich(
                 bundleID: bundleID,
                 pid: pid_t(window.pid),
                 title: windowTitle,
-                axTitle: window.axTitle
+                axTitle: axTitle
             )
 
             // Build title and subtitle from enrichment result

@@ -51,12 +51,19 @@ class ChromeEnricher {
         return supportedBundleIDs.contains(bundleID)
     }
 
-    func enrich(windowTitle: String) -> EnrichmentResult? {
+    func enrich(windowTitle: String, userDataDir: String? = nil) -> EnrichmentResult? {
         // Load Local State lazily (once per enricher lifetime)
         if !loaded {
             loadLocalState()
             loaded = true
         }
+
+        // Resolve the separate-instance label (basename of a non-default
+        // --user-data-dir). nil for the default/real browser instance.
+        let dirLabel = ChromeInstancePolicy.instanceLabel(
+            forUserDataDir: userDataDir,
+            defaultDataDir: ChromeInstancePolicy.defaultChromeDataDir()
+        )
 
         let nsTitle = windowTitle as NSString
         let range = NSRange(location: 0, length: nsTitle.length)
@@ -76,46 +83,47 @@ class ChromeEnricher {
                 email = info.userName
             }
 
-            let subtitle: String
+            let baseSubtitle: String
             if !email.isEmpty {
-                subtitle = "\(profileName) (\(email))"
+                baseSubtitle = "\(profileName) (\(email))"
             } else {
-                subtitle = profileName
+                baseSubtitle = profileName
             }
 
             return EnrichmentResult(
                 title: pageTitle.isEmpty ? windowTitle : pageTitle,
-                subtitle: subtitle,
-                stableIDSuffix: "chrome:\(profileName)",
+                subtitle: Self.composeSubtitle(base: baseSubtitle, profileLabel: profileName, dirLabel: dirLabel),
+                stableIDSuffix: Self.composeStableID(profileLabel: profileName, dirLabel: dirLabel),
                 kind: .chrome
             )
         }
 
         // 2. Check for browser suffix without profile: "Page - Google Chrome"
-        //    This is the default profile (Chrome omits profile name for it)
+        //    This is the default profile (Chrome omits profile name for it).
+        //    Separate single-profile instances (e.g. /tmp CDP dirs) land here.
         if let match = Self.browserSuffixPattern.firstMatch(in: windowTitle, range: range) {
             let pageTitleRange = match.range(at: 1)
             let pageTitle = nsTitle.substring(with: pageTitleRange)
 
             // Look up the actual default profile name from Local State
-            let subtitle: String
+            let baseSubtitle: String
             let profileLabel: String
             if let name = defaultProfileName, !name.isEmpty {
                 if let email = defaultProfileEmail, !email.isEmpty {
-                    subtitle = "\(name) (\(email))"
+                    baseSubtitle = "\(name) (\(email))"
                 } else {
-                    subtitle = name
+                    baseSubtitle = name
                 }
                 profileLabel = name
             } else {
-                subtitle = ""
+                baseSubtitle = ""
                 profileLabel = "Default"
             }
 
             return EnrichmentResult(
                 title: pageTitle,
-                subtitle: subtitle,
-                stableIDSuffix: "chrome:\(profileLabel)",
+                subtitle: Self.composeSubtitle(base: baseSubtitle, profileLabel: profileLabel, dirLabel: dirLabel),
+                stableIDSuffix: Self.composeStableID(profileLabel: profileLabel, dirLabel: dirLabel),
                 kind: .chrome
             )
         }
@@ -123,6 +131,30 @@ class ChromeEnricher {
         // 3. No browser suffix at all — not a recognizable Chrome title
         //    (CGWindowList fallback title, popups, etc.)
         return nil
+    }
+
+    // MARK: - Subtitle / Stable-ID Composition
+
+    // Append the separate-instance dir label to the subtitle as " · <basename>".
+    // When the base subtitle is empty (bare "Default" with no metadata), fall
+    // back to the profileLabel so the user still sees "Default · <basename>".
+    // No dir label → subtitle is unchanged (default instance, DW-2.3).
+    private static func composeSubtitle(base: String, profileLabel: String, dirLabel: String?) -> String {
+        guard let dirLabel = dirLabel else {
+            return base
+        }
+        let lead = base.isEmpty ? profileLabel : base
+        return "\(lead) · \(dirLabel)"
+    }
+
+    // Fold the dir label into the stable-ID suffix so two instances sharing a
+    // profile display name get distinct picker IDs (DW-2.4). No dir label →
+    // suffix is unchanged.
+    private static func composeStableID(profileLabel: String, dirLabel: String?) -> String {
+        guard let dirLabel = dirLabel else {
+            return "chrome:\(profileLabel)"
+        }
+        return "chrome:\(profileLabel)@\(dirLabel)"
     }
 
     // MARK: - Local State Loading

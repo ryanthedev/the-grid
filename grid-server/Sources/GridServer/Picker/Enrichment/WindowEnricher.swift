@@ -14,6 +14,11 @@ class WindowEnricher {
     private let sshEnricher = SSHEnricher()
     private let chromeEnricher = ChromeEnricher()
 
+    // Reads a Chrome PID's --user-data-dir via KERN_PROCARGS2, cached per PID.
+    // Session-scoped: the registry is rebuilt per picker session, bounding
+    // cache staleness.
+    private let processArgsReader = ProcessArgsReader()
+
     // Process tree for current session — rebuilt per discovery call
     private var processTree: ProcessTree?
 
@@ -53,9 +58,13 @@ class WindowEnricher {
         }
 
         // Chrome enrichment (exclusive — no terminal enrichment for Chrome windows)
-        // Use axTitle (has profile suffix) with fallback to CGWindowList title
+        // Use axTitle (has profile suffix) with fallback to CGWindowList title.
+        // Resolve the per-PID --user-data-dir so separate instances (distinct
+        // user-data-dir, e.g. /tmp CDP profiles) get a "· <basename>" label and
+        // a distinct stable ID.
         if chromeEnricher.supports(bundleID: bundleID) {
-            return chromeEnricher.enrich(windowTitle: axTitle ?? title)
+            let userDataDir = processArgsReader.userDataDir(forPID: pid)
+            return chromeEnricher.enrich(windowTitle: axTitle ?? title, userDataDir: userDataDir)
         }
 
         // Combine SSH + Tmux results
