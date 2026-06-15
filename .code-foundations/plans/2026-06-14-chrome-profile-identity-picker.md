@@ -1,9 +1,10 @@
 # Plan: Chrome Profile Identity in the Picker
 
 **Created:** 2026-06-14
-**Status:** in-progress
+**Status:** complete
 **Started:** 2026-06-14 16:30
-**Current Phase:** 2
+**Completed:** 2026-06-14 23:05
+**Duration:** ~35 min
 **Complexity:** simple
 
 ---
@@ -122,3 +123,10 @@ Phase 2:
 - [x] Committed
 Commit: cbdcfdb
 Summary: Stopped the empty-title clobber (guarded `handleWindowTitleChanged`, the lone unguarded of five `axTitle` writers) and added picker-open re-poll via `refreshWindowAXProperties` (logged `chrome.repoll`) when a Chrome window's cached `axTitle` is empty/suffix-less, gated by a new pure `ChromeTitlePolicy` (suffix predicate + re-poll decision + overwrite guard, named-result enums, no I/O). `ChromeEnricher.enrich(windowTitle:)` deliberately left single-arg for Phase 2 to widen with `userDataDir`. 9 new tests, 308/308 suite green, clean build.
+
+### Phase 2: Distinguish --user-data-dir instances (Gate: Standard)
+- [x] BUILD: Discovery + design + implementation (stub → implement → validate) complete
+- [x] REVIEW: SKIPPED — tests are gate
+- [x] Committed
+Commit: 3aa1999
+Summary: Added `ProcessArgsReader` (impure `KERN_PROCARGS2` boundary — per-PID cached, fully bounds-checked, returns distinguishable nil + logs `err.chrome.procargs` once on failure/truncation) and pure `ChromeInstancePolicy` (`extractUserDataDir` for both arg forms; `instanceLabel` → basename, nil for default/absent). Widened `ChromeEnricher.enrich(windowTitle:userDataDir:)` to fold the basename into subtitle (`"Default · <basename>"`) and stableID (`"chrome:Default@<basename>"`); `WindowEnricher` resolves the dir per-PID and threads it in. Separate CDP instances now distinct and labeled; default Chrome unlabeled. 10 new tests, 318/318 suite green, clean build.
