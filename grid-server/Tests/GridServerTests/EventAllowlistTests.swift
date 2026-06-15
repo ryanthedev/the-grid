@@ -30,6 +30,10 @@ final class EventAllowlistTests: XCTestCase {
         // picker enrichment.
         "chrome.repoll",
 
+        // Chrome profile identity in the picker (Phase 2) — KERN_PROCARGS2 read
+        // failure when resolving a Chrome PID's --user-data-dir (logged once).
+        "err.chrome.procargs",
+
         // Phase 1 crash instrumentation (grep-visible subset).
         "srv.fatal.exception",
         "srv.atexit",

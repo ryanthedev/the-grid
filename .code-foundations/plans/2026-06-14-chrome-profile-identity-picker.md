@@ -3,7 +3,7 @@
 **Created:** 2026-06-14
 **Status:** in-progress
 **Started:** 2026-06-14 16:30
-**Current Phase:** 1
+**Current Phase:** 2
 **Complexity:** simple
 
 ---
@@ -115,4 +115,10 @@ Phase 2:
 ---
 
 ## Execution Log
-_To be filled during /code-foundations:build_
+
+### Phase 1: Fix AX-title capture (Gate: Standard)
+- [x] BUILD: Discovery + design + implementation (stub → implement → validate) complete
+- [x] REVIEW: SKIPPED — tests are gate
+- [x] Committed
+Commit: cbdcfdb
+Summary: Stopped the empty-title clobber (guarded `handleWindowTitleChanged`, the lone unguarded of five `axTitle` writers) and added picker-open re-poll via `refreshWindowAXProperties` (logged `chrome.repoll`) when a Chrome window's cached `axTitle` is empty/suffix-less, gated by a new pure `ChromeTitlePolicy` (suffix predicate + re-poll decision + overwrite guard, named-result enums, no I/O). `ChromeEnricher.enrich(windowTitle:)` deliberately left single-arg for Phase 2 to widen with `userDataDir`. 9 new tests, 308/308 suite green, clean build.
