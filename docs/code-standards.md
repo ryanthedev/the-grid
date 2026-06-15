@@ -1,6 +1,6 @@
-<!-- base-commit: 0bff8ad -->
+<!-- base-commit: 5ac4af6 -->
 <!-- generated: 2026-05-18 -->
-<!-- updated: 2026-06-11 -->
+<!-- updated: 2026-06-14 -->
 
 # Code Standards
 
@@ -232,6 +232,19 @@ grid-server/
 ```
 
 New Grid features: one new file under `Grid/`. Wire dependencies in `main.swift`. Subscribe to events via `EventRouter.shared.register(self)` from a `StateEventHandler`.
+
+**Pure decision modules (`*Policy.swift`)** — when a feature has branching logic that decides *what* to do (vs. *performing* AX/SkyLight I/O), extract the decision into a `enum XPolicy { static func … }` with no I/O, no actor isolation, no side effects, so it is unit-testable off the OS boundary. Examples: `Grid/SpaceMigrationPolicy.swift`, `Grid/FocusOwnershipPolicy.swift`, `Grid/WindowAdoptionPolicy.swift`, `Borders/BordersPolicy.swift`, `Phase7Policy.swift`. Each gets a co-located `XPolicyTests.swift`. The actor/handler calls the policy, then executes the I/O.
+
+```swift
+// Decision predicates return a NAMED result enum, never a bare Bool (OP-1).
+enum SpaceChangeRouting: Equatable { case reassigned, activated }
+
+enum SpaceMigrationPolicy {
+    static func classifySpaceChange(
+        oldSpaceID: String, newSpaceID: String, refreshedSpaceIDs: Set<String>
+    ) -> SpaceChangeRouting { ... }
+}
+```
 
 ---
 

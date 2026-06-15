@@ -1894,7 +1894,13 @@ var windows: [String: WindowState] = [:]
     private func handleWindowTitleChanged(_ windowID: UInt32, title: String) {
         let key = String(windowID)
         guard var window = state.windows[key] else { return }
-        // AX title notifications carry the full title (e.g., with profile suffix)
+        // AX title notifications carry the full title (e.g., with profile
+        // suffix), but Chrome emits transient empty titles mid-load. An empty
+        // title is never worth persisting over a known-good one — skip the
+        // write so the profile-bearing axTitle survives.
+        guard ChromeTitlePolicy.shouldOverwriteAXTitle(existing: window.axTitle, incoming: title) else {
+            return
+        }
         window.axTitle = title
         window.lastUpdated = Date()
         state.windows[key] = window

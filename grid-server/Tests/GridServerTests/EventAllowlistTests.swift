@@ -26,6 +26,10 @@ final class EventAllowlistTests: XCTestCase {
     // JSONLogger.shared.log(...) in GridServer sources. Raw-write-only events
     // (srv.fatal) are intentionally absent.
     private let allowlist: Set<String> = [
+        // Chrome profile identity in the picker — AX-title re-poll during
+        // picker enrichment.
+        "chrome.repoll",
+
         // Phase 1 crash instrumentation (grep-visible subset).
         "srv.fatal.exception",
         "srv.atexit",
