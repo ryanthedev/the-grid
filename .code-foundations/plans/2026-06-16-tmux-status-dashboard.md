@@ -486,3 +486,10 @@ Summary: Added `TmuxStatusDriver.swift` in grid-notify — `start()` (immediate 
 - [x] Committed
 Commit: f3e6dc3
 Summary: Wired the feature into grid-notify `AppDelegate.swift` via a sprouted `setupTmuxDashboard()` (only active when `config.tmux.enabled`): builds viewmodel+window+watcher+driver, observes `com.thegrid.tmux.toggle` (show→start watcher+driver / hide→stop driver, the window-bound lifecycle) and `com.thegrid.tmux.refresh` (→`driver.refreshNow()`), wires `watcher.onChange`→`viewModel.load` (MainActor) for live updates and the in-view button via `onRefreshRequested`→`refreshNow`, and tears down watcher+driver in `applicationWillTerminate`. Extracted a pure `TmuxDashboardLifecyclePolicy` (show+start vs hide+stop) for unit testing off the AppKit boundary. 75 tests pass (11 new). P6 will post the two notifications from the CLI/server.
+
+### Phase 6: CLI + grid-server relay + config docs (Gate: Standard)
+- [x] BUILD: Discovery + design + implementation (stub → implement → validate) complete
+- [x] REVIEW: SKIPPED — tests are the gate (Standard). Orchestrator verified `swift build` clean (no NEW warnings; the `log(event:)` deprecation is pre-existing GridServer infra, not touched by P6) + 324 grid-server tests pass.
+- [x] Committed
+Commit: 372206d
+Summary: Added the external refresh surface. CLI `grid-server/Sources/GridCLI/TmuxCommand.swift` (`thegrid tmux toggle|refresh` → `client.call("grid.tmux.toggle"|"grid.tmux.refresh")`, mirrors `NotifyCommand`/`TerminalCommand`), registered in `GridCLI.swift`. grid-server RPC handlers `grid.tmux.toggle`/`grid.tmux.refresh` in `MessageHandler.swift` dispatch to `GridCommandRouter.handleTmux`, which posts `com.thegrid.tmux.toggle`/`com.thegrid.tmux.refresh` via the existing `DistributedNotificationCenter` mechanism (same as `grid.notify.*`). `docs/TMUX_DASHBOARD.md` documents the `notify.yaml` `tmux:` block + BFD hotkey snippets + manual verify steps. 324 grid-server tests pass (6 new). End-to-end CLI→server→notification→dashboard is a documented manual check.
