@@ -1,8 +1,8 @@
 #!/bin/bash
-set -e
+set -ex
+
 cd /Users/r/repos/theGrid/.claude/worktrees/tmux-status-dashboard/grid-notify
-echo "=== BUILDING ==="
+
+# Build and test
 swift build
-echo ""
-echo "=== RUNNING TESTS ==="
-swift test 2>&1
+swift test

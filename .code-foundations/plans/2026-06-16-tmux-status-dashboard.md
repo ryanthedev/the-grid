@@ -472,3 +472,10 @@ Summary: Added the Swift data layer in grid-notify — `TmuxStatusModel.swift` (
 - [x] Committed
 Commit: 7cbe3e1
 Summary: Added the dashboard presentation layer in grid-notify — `TmuxDashboardViewModel.swift` (`@MainActor ObservableObject`: `@Published sessions`/`generatedAt`, `load(_:)`, `onRefreshRequested`, `requestRefresh()`, `openDetailCommand(for:)` → `tmux capture-pane -pt <target> -S -200`, `toggleCollapsed`), `TmuxDashboardView.swift` (collapsible session rows, window rows with statusKind glyph + summary, Refresh button, zero-state), and `TmuxDashboardWindow.swift` (NSWindow + NSHostingView, frame autosave, Return→pane detail via `DetailWindowController`). 47 tests pass (12 new). P5 consumes this window + viewmodel (`onRefreshRequested`). Note: the NSWindow keyDown→detail path needs a live event loop — manual check when wired in P5.
+
+### Phase 4: Driver + flock mutex (Gate: Full, Security-sensitive)
+- [x] BUILD: Discovery + design + implementation (stub → implement → validate) complete
+- [x] REVIEW: PASS — 3 independent security-sensitive samples (haiku), unanimous 3/3 PASS; mutex, spawn safety, and all edge cases verified with execution evidence
+- [x] Committed
+Commit: 12667a8
+Summary: Added `TmuxStatusDriver.swift` in grid-notify — `start()` (immediate run + interval timer), `stop()` (cancel timer, terminate in-flight, release lock), `refreshNow()` (immediate if idle, no-op while running). Single-instance via `flock(2)` `LOCK_EX|LOCK_NB` on the lockfile (skip+`tmux.driver.skip` on contention) plus in-process guard. Secure spawn: resolves `claude` to an absolute real binary, builds a discrete `Process.arguments` array (no shell, no config interpolation), `bypassPermissions` with a narrow allowedTools list, hung-run timeout kill, claude-mux/bun env specifics in one `TmuxDriverCommand` constant. Spawn target is injectable so 17 tests use stubs (no real claude). 64 tests pass. P5 calls start/stop/refreshNow.
