@@ -479,3 +479,10 @@ Summary: Added the dashboard presentation layer in grid-notify — `TmuxDashboar
 - [x] Committed
 Commit: 12667a8
 Summary: Added `TmuxStatusDriver.swift` in grid-notify — `start()` (immediate run + interval timer), `stop()` (cancel timer, terminate in-flight, release lock), `refreshNow()` (immediate if idle, no-op while running). Single-instance via `flock(2)` `LOCK_EX|LOCK_NB` on the lockfile (skip+`tmux.driver.skip` on contention) plus in-process guard. Secure spawn: resolves `claude` to an absolute real binary, builds a discrete `Process.arguments` array (no shell, no config interpolation), `bypassPermissions` with a narrow allowedTools list, hung-run timeout kill, claude-mux/bun env specifics in one `TmuxDriverCommand` constant. Spawn target is injectable so 17 tests use stubs (no real claude). 64 tests pass. P5 calls start/stop/refreshNow.
+
+### Phase 5: AppDelegate wiring + lifecycle + observers (Gate: Full)
+- [x] BUILD: Discovery + design + implementation (stub → implement → validate) complete
+- [x] REVIEW: PASS — single post-gate review (haiku); all DW items + lifecycle/idempotency/teardown edge cases verified with execution evidence
+- [x] Committed
+Commit: f3e6dc3
+Summary: Wired the feature into grid-notify `AppDelegate.swift` via a sprouted `setupTmuxDashboard()` (only active when `config.tmux.enabled`): builds viewmodel+window+watcher+driver, observes `com.thegrid.tmux.toggle` (show→start watcher+driver / hide→stop driver, the window-bound lifecycle) and `com.thegrid.tmux.refresh` (→`driver.refreshNow()`), wires `watcher.onChange`→`viewModel.load` (MainActor) for live updates and the in-view button via `onRefreshRequested`→`refreshNow`, and tears down watcher+driver in `applicationWillTerminate`. Extracted a pure `TmuxDashboardLifecyclePolicy` (show+start vs hide+stop) for unit testing off the AppKit boundary. 75 tests pass (11 new). P6 will post the two notifications from the CLI/server.
