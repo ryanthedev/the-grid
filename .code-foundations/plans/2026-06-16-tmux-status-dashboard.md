@@ -456,5 +456,12 @@ work; the pure-logic seams (P2 decode, P4 mutex) carry the bulk of the dirty cas
 - [x] BUILD: Discovery + design + implementation complete
 - [x] REVIEW: SKIPPED — tests are the gate (Standard). Additionally ran `oberskills:skill-craft`: `validate_skill` clean (0 errors/warnings), `test_triggers` 12/12 after adding a "Not for:" near-miss exclusion to the description (was overtriggering on generic tmux ops `list`/`create window`).
 - [x] Committed
-Commit: e83feae
+Commit: 4c52f28
 Summary: Authored `.claude/skills/tmux-status/SKILL.md` + `.claude/commands/tmux-status.md` defining the JSON status-file contract (sessions→windows with statusKind/summary/target/active, generatedAt int epoch), the DistributedNotification names `com.thegrid.tmux.toggle`/`com.thegrid.tmux.refresh`, and the lockfile path. **Verified end-to-end (DW-1.2 real):** headless `claude -p "/tmux-status"` with the claude-mux MCP wrote a schema-valid file covering all 11 live tmux sessions with useful per-window AI summaries. DW-1.3 (tmux-down → empty sessions) is schema-validated only — not executed, since it would require killing live sessions. Downstream phases consume the contract from this skill file.
+
+### Phase 2: Model + watcher + config (Gate: Full, Security-sensitive)
+- [x] BUILD: Discovery + design + implementation (stub → implement → validate) complete
+- [x] REVIEW: PASS — 3 independent security-sensitive samples (haiku), unanimous 3/3 PASS; all DW items + decode-boundary edge cases verified with execution evidence
+- [x] Committed
+Commit: a833dfe
+Summary: Added the Swift data layer in grid-notify — `TmuxStatusModel.swift` (`TmuxStatusData`/`TmuxSession`/`TmuxWindow` + `TmuxStatusKind` enum with `glyph`/`color`, lenient unknown→`.idle` decode), `TmuxStatusWatcher.swift` (mirrors `AnimationConfigWatcher`; O_EVTONLY file-watch, atomic-rename reopen, decode barricade with last-good retention + `jlog`, summary length cap), and a `tmux:` section in `NotifyConfig.swift` (`enabled`/`interval` clamped ≥1/`repoDir`/`model`). 35 tests pass (15 new). P3 consumes the model + viewmodel seam; P5 consumes the watcher + config.
