@@ -465,3 +465,10 @@ Summary: Authored `.claude/skills/tmux-status/SKILL.md` + `.claude/commands/tmux
 - [x] Committed
 Commit: a833dfe
 Summary: Added the Swift data layer in grid-notify — `TmuxStatusModel.swift` (`TmuxStatusData`/`TmuxSession`/`TmuxWindow` + `TmuxStatusKind` enum with `glyph`/`color`, lenient unknown→`.idle` decode), `TmuxStatusWatcher.swift` (mirrors `AnimationConfigWatcher`; O_EVTONLY file-watch, atomic-rename reopen, decode barricade with last-good retention + `jlog`, summary length cap), and a `tmux:` section in `NotifyConfig.swift` (`enabled`/`interval` clamped ≥1/`repoDir`/`model`). 35 tests pass (15 new). P3 consumes the model + viewmodel seam; P5 consumes the watcher + config.
+
+### Phase 3: Dashboard view + viewmodel + window (Gate: Standard)
+- [x] BUILD: Discovery + design + implementation (stub → implement → validate) complete
+- [x] REVIEW: SKIPPED — tests are the gate (Standard). Orchestrator verified `swift build` clean + 47/47 tests pass.
+- [x] Committed
+Commit: 7cbe3e1
+Summary: Added the dashboard presentation layer in grid-notify — `TmuxDashboardViewModel.swift` (`@MainActor ObservableObject`: `@Published sessions`/`generatedAt`, `load(_:)`, `onRefreshRequested`, `requestRefresh()`, `openDetailCommand(for:)` → `tmux capture-pane -pt <target> -S -200`, `toggleCollapsed`), `TmuxDashboardView.swift` (collapsible session rows, window rows with statusKind glyph + summary, Refresh button, zero-state), and `TmuxDashboardWindow.swift` (NSWindow + NSHostingView, frame autosave, Return→pane detail via `DetailWindowController`). 47 tests pass (12 new). P5 consumes this window + viewmodel (`onRefreshRequested`). Note: the NSWindow keyDown→detail path needs a live event loop — manual check when wired in P5.
