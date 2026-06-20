@@ -110,6 +110,30 @@ final class TmuxStatusTests: XCTestCase {
         XCTAssertEqual(claudeMux.windows[0].statusKind, .waiting)
     }
 
+    // MARK: - Activity field (session ranking source)
+
+    func test_activity_decodesWhenPresent() throws {
+        let json = """
+        { "generatedAt": 100, "sessions": [
+          { "name": "a", "attached": true, "activity": 1718499990, "windows": [] }
+        ] }
+        """
+        let result = try decode(json)
+        XCTAssertEqual(result.sessions[0].activity, 1718499990)
+    }
+
+    func test_activity_defaultsToZeroWhenAbsent() throws {
+        // Back-compat: status files written before the activity field omit it.
+        // Absent must decode to 0, not throw.
+        let json = """
+        { "generatedAt": 100, "sessions": [
+          { "name": "a", "attached": true, "windows": [] }
+        ] }
+        """
+        let result = try decode(json)
+        XCTAssertEqual(result.sessions[0].activity, 0)
+    }
+
     func test_DW_2_1_allStatusKindGlyphsDistinct() {
         // All five status kinds have distinct, non-empty glyphs.
         let kinds: [TmuxStatusKind] = [.active, .running, .waiting, .idle, .error]

@@ -16,6 +16,11 @@ class TmuxDashboardViewModel: ObservableObject {
     // Timestamp of the last loaded status file. Nil until first load.
     @Published var generatedAt: Date? = nil
 
+    // Monotonic counter bumped on every load(). The view watches this (not generatedAt)
+    // to auto-scroll to the newest session — generatedAt is AI-written and may repeat or
+    // stall, so it is not a reliable "new data arrived" signal.
+    @Published var loadGeneration: Int = 0
+
     // Sessions currently collapsed (showing only the session header, not windows).
     @Published var collapsedSessions: Set<String> = []
 
@@ -37,9 +42,20 @@ class TmuxDashboardViewModel: ObservableObject {
 
     // Load new status data and update all published state.
     // Called by the watcher's onChange callback (P5).
+    // Sessions are ranked newest-activity-first; the view flips the list so the
+    // most recently active session renders at the bottom (mirrors the notifications panel).
+    // Stable sort: equal-activity sessions (including back-compat files where every
+    // activity is 0) keep the skill's original emission order via the index tiebreaker.
     func load(_ data: TmuxStatusData) {
-        sessions = data.sessions
+        sessions = data.sessions.enumerated()
+            .sorted {
+                $0.element.activity != $1.element.activity
+                    ? $0.element.activity > $1.element.activity
+                    : $0.offset < $1.offset
+            }
+            .map(\.element)
         generatedAt = Date(timeIntervalSince1970: TimeInterval(data.generatedAt))
+        loadGeneration &+= 1
         jlog("tmux.dashboard.load", data: [
             "sessions": data.sessions.count,
             "generatedAt": data.generatedAt,

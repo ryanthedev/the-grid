@@ -34,6 +34,7 @@ then rename over the target. Never leave a partial file at the real path.
     {
       "name": "work",
       "attached": true,
+      "activity": 1718499900,
       "windows": [
         {
           "index": 0,
@@ -54,10 +55,11 @@ then rename over the target. Never leave a partial file at the real path.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `generatedAt` | integer | Unix epoch seconds (NOT milliseconds) at time of write |
+| `generatedAt` | integer | Unix epoch seconds (NOT milliseconds) at time of write. Get the real value with Bash `date +%s` — never copy the example or guess it. |
 | `sessions` | array | All tmux sessions; empty array `[]` if tmux is not running |
 | `sessions[].name` | string | Session name as returned by `tmux list-sessions` |
 | `sessions[].attached` | boolean | Whether any client is attached to this session |
+| `sessions[].activity` | integer | Unix epoch seconds of the session's last activity (`#{session_activity}`). The dashboard ranks sessions by this — newest at the bottom. Omit only if unobtainable; the dashboard treats absent as `0`. |
 | `sessions[].windows` | array | All windows in this session |
 | `windows[].index` | integer | Window index (0-based) |
 | `windows[].name` | string | Window name from tmux |
@@ -114,6 +116,18 @@ session-name/
 ```
 
 Extract: session name, attached status, window index, window name, active marker.
+
+### 2b. Capture each session's last-activity time
+
+Get the per-session activity epoch so the dashboard can rank sessions by recency. Run:
+
+```bash
+tmux list-sessions -F "#{session_name} #{session_activity}"
+```
+
+Each line is `<session-name> <epoch-seconds>`. Map the epoch onto the matching session's
+`activity` field. If `tmux` is not reachable from this run, omit `activity` (the dashboard
+defaults absent values to `0` and falls back to name order) — do not abort the run.
 
 ### 3. Capture each window's pane
 
@@ -285,6 +299,7 @@ Schema-valid JSON for testing decoders (Phase 2):
     {
       "name": "work",
       "attached": true,
+      "activity": 1718499990,
       "windows": [
         {
           "index": 0,
@@ -309,6 +324,7 @@ Schema-valid JSON for testing decoders (Phase 2):
     {
       "name": "claude-mux",
       "attached": false,
+      "activity": 1718499500,
       "windows": [
         {
           "index": 0,

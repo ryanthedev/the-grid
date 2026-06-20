@@ -32,6 +32,18 @@ Parse the `list` output. For each named session, call
 `mcp__claude-mux__tmux` with `action: "session", target: "<session-name>"` to get the
 window list with single-line pane previews.
 
+### Step 2b — Capture each session's last-activity time
+
+Get the per-session activity epoch so the dashboard can rank sessions by recency. Run:
+
+```bash
+tmux list-sessions -F "#{session_name} #{session_activity}"
+```
+
+Each line is `<session-name> <epoch-seconds>`. Map the epoch onto the matching session's
+`activity` field (see Step 4). If `tmux` is not reachable, omit `activity` (the dashboard
+defaults absent values to `0`); do not abort the run.
+
 ### Step 3 — Capture each window's pane
 
 For each window in each session, call `mcp__claude-mux__tmux` with
@@ -41,6 +53,15 @@ If `tail` returns an error for a window, set that window's `statusKind` to `"err
 use the error message as `summary`, and continue to the next window.
 
 ### Step 4 — Build the JSON
+
+For each session, produce a JSON object with these fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | Session name from `tmux list-sessions` |
+| `attached` | boolean | Whether any client is attached to this session |
+| `activity` | integer | Unix epoch seconds of last activity (`#{session_activity}`, from Step 2b). Omit if unobtainable. |
+| `windows` | array | The window objects below |
 
 For each window, produce a JSON object with these fields:
 
@@ -74,6 +95,15 @@ Assemble the complete JSON:
   "sessions": [...]
 }
 ```
+
+**`generatedAt` must be the real current time.** Get it with Bash — do NOT copy the
+example value or guess it:
+
+```bash
+date +%s
+```
+
+Use that integer verbatim. (The same applies to the tmux-not-running case in Step 1.)
 
 1. Create `~/.local/state/thegrid/` if it does not exist.
 2. Write the JSON to `~/.local/state/thegrid/tmux-status.json.tmp` using the Write tool.

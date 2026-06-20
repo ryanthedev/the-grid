@@ -87,6 +87,43 @@ final class TmuxDashboardTests: XCTestCase {
         XCTAssertEqual(vm.sessions[1].name, "claude-mux")
     }
 
+    // load(_:) ranks sessions newest-activity-first (the view flips this so newest
+    // renders at the bottom).
+    func test_load_ranksSessionsByActivityDescending() throws {
+        let json = """
+        { "generatedAt": 200, "sessions": [
+          { "name": "old",    "attached": false, "activity": 100, "windows": [] },
+          { "name": "newest", "attached": false, "activity": 300, "windows": [] },
+          { "name": "mid",    "attached": false, "activity": 200, "windows": [] }
+        ] }
+        """
+        let vm = TmuxDashboardViewModel()
+        vm.load(try decode(json))
+
+        XCTAssertEqual(vm.sessions.map(\.name), ["newest", "mid", "old"],
+            "Sessions must be ordered newest activity first")
+    }
+
+    // loadGeneration bumps on every load so the view's auto-scroll fires even when
+    // generatedAt repeats (the AI-written timestamp is not a reliable change signal).
+    func test_load_bumpsLoadGenerationEachCall() throws {
+        let vm = TmuxDashboardViewModel()
+        XCTAssertEqual(vm.loadGeneration, 0)
+        vm.load(try decode(canonicalJSON))
+        XCTAssertEqual(vm.loadGeneration, 1)
+        // Same data again — generatedAt unchanged, but loadGeneration must still advance.
+        vm.load(try decode(canonicalJSON))
+        XCTAssertEqual(vm.loadGeneration, 2)
+    }
+
+    // Equal/absent activity preserves the skill's original emission order (stable sort).
+    func test_load_equalActivityPreservesInputOrder() throws {
+        let vm = TmuxDashboardViewModel()
+        // canonicalJSON has no activity fields → all 0 → original order kept.
+        vm.load(try decode(canonicalJSON))
+        XCTAssertEqual(vm.sessions.map(\.name), ["work", "claude-mux"])
+    }
+
     // load(_:) converts the generatedAt Unix int into a Date.
     func test_DW_3_1_generatedAtConvertedToDate() throws {
         let vm = TmuxDashboardViewModel()

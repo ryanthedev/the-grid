@@ -80,6 +80,25 @@ struct TmuxSession: Decodable {
     let attached: Bool
     // All windows in this session; may be empty.
     let windows: [TmuxWindow]
+    // Unix epoch seconds of the session's last activity (tmux #{session_activity}).
+    // Used to rank sessions by recency. Older status files omit it, so the decode
+    // is lenient: absent → 0, which sorts the session to the "oldest" end.
+    let activity: Int
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case attached
+        case windows
+        case activity
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try container.decode(String.self, forKey: .name)
+        attached = try container.decode(Bool.self, forKey: .attached)
+        windows = try container.decode([TmuxWindow].self, forKey: .windows)
+        activity = try container.decodeIfPresent(Int.self, forKey: .activity) ?? 0
+    }
 }
 
 // MARK: - TmuxStatusData

@@ -89,14 +89,34 @@ struct TmuxDashboardHeaderView: View {
 // MARK: - TmuxDashboardSessionListView
 
 // Scrollable list of sessions with collapsible window rows.
+// Sessions are ranked newest-activity-first by the viewModel; this view applies the
+// notifications-panel double-flip trick so the newest session renders at the bottom and
+// the list auto-scrolls there on every refresh.
 struct TmuxDashboardSessionListView: View {
     @ObservedObject var viewModel: TmuxDashboardViewModel
 
     var body: some View {
-        ScrollView {
-            LazyVStack(spacing: 0) {
-                ForEach(viewModel.sessions, id: \.name) { session in
-                    TmuxDashboardSessionRow(session: session, viewModel: viewModel)
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(viewModel.sessions, id: \.name) { session in
+                        TmuxDashboardSessionRow(session: session, viewModel: viewModel)
+                            .id(session.name)
+                            // Flip each session block back upright.
+                            .scaleEffect(x: 1, y: -1, anchor: .center)
+                    }
+                }
+            }
+            // Flip the whole list — sessions now grow from the bottom, so the newest
+            // (first in the activity-sorted array) lands at the bottom.
+            .scaleEffect(x: 1, y: -1, anchor: .center)
+            // Snap to the newest session on every load (loadGeneration bumps each time);
+            // generatedAt is AI-written and unreliable as a change signal.
+            .onChange(of: viewModel.loadGeneration) { _ in
+                guard let newest = viewModel.sessions.first else { return }
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    // .top in flipped space is the bottom visually.
+                    proxy.scrollTo(newest.name, anchor: .top)
                 }
             }
         }
