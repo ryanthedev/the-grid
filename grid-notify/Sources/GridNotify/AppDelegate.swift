@@ -175,6 +175,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             driver?.refreshNow()
         }
 
+        // Waiting-transition path: viewModel detects the edge into .waiting (deduped,
+        // baseline-suppressed) and hands us the newly-entered windows. Build one
+        // GridNotification per window and post to the NotificationStore actor via Task.
+        vm.onWaitingEntered = { [weak self] windows in
+            guard let self else { return }
+            let notifications = windows.map { TmuxDashboardViewModel.makeWaitingNotification(for: $0) }
+            let store = self.store
+            Task {
+                for notification in notifications {
+                    await store?.add(notification)
+                }
+            }
+            jlog("tmux.waiting.notify", data: ["count": notifications.count])
+        }
+
         self.tmuxViewModel = vm
         self.tmuxDashboardWindow = dashWindow
         self.tmuxWatcher = watcher
