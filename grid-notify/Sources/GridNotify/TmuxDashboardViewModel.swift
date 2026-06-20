@@ -126,6 +126,23 @@ class TmuxDashboardViewModel: ObservableObject {
         )
     }
 
+    // MARK: - Dashboard indicator (Phase 2)
+
+    // Header badge label for the "needs input" count. Pure/static so DW-2.1 can
+    // assert the label and the 0-case without touching SwiftUI. Returns nil when
+    // there is nothing waiting, which the view uses to hide the badge entirely.
+    static func badgeText(waitingCount: Int) -> String? {
+        guard waitingCount > 0 else { return nil }
+        return "\(waitingCount) need input"
+    }
+
+    // Row-highlight decision for a window. Pure/static so DW-2.2 can assert the
+    // predicate over a mix of waiting and non-waiting windows. The view uses this
+    // to apply the yellow tint + left accent bar.
+    static func isWaitingHighlight(_ window: TmuxWindow) -> Bool {
+        window.statusKind == .waiting
+    }
+
     // MARK: - Collapse / Expand
 
     // Toggle the collapsed state of a session by name.

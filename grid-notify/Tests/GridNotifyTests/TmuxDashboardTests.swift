@@ -284,6 +284,145 @@ final class TmuxDashboardTests: XCTestCase {
         XCTAssertTrue(text.contains("3 windows"), "expected '3 windows' in '\(text)'")
     }
 
+    // MARK: - DW-2.1: Header "N need input" badge
+
+    // badgeText returns "N need input" for a positive waiting count.
+    func test_DW_2_1_badgeTextShowsCountWhenWaiting() {
+        XCTAssertEqual(TmuxDashboardViewModel.badgeText(waitingCount: 1), "1 need input")
+        XCTAssertEqual(TmuxDashboardViewModel.badgeText(waitingCount: 4), "4 need input")
+    }
+
+    // badgeText returns nil for 0 (and defensively for negatives) so the view hides it.
+    func test_DW_2_1_badgeTextNilWhenZeroWaiting() {
+        XCTAssertNil(TmuxDashboardViewModel.badgeText(waitingCount: 0))
+        XCTAssertNil(TmuxDashboardViewModel.badgeText(waitingCount: -1))
+    }
+
+    // End-to-end of the badge source: load real data → waitingCount → badge label.
+    // canonicalJSON has exactly one .waiting window (claude-mux:0).
+    func test_DW_2_1_waitingCountDrivesBadgeText() throws {
+        let vm = TmuxDashboardViewModel()
+        vm.load(try decode(canonicalJSON))
+
+        XCTAssertEqual(vm.waitingCount, 1)
+        XCTAssertEqual(
+            TmuxDashboardViewModel.badgeText(waitingCount: vm.waitingCount),
+            "1 need input"
+        )
+    }
+
+    // With no waiting windows loaded, waitingCount is 0 and the badge is absent.
+    func test_DW_2_1_badgeAbsentWhenNoWaiting() throws {
+        let json = """
+        {
+          "generatedAt": 1718500000,
+          "sessions": [
+            {
+              "name": "work",
+              "attached": true,
+              "windows": [
+                { "index": 0, "name": "nvim", "command": "nvim", "active": true,
+                  "statusKind": "active", "summary": "editing", "target": "work:0" },
+                { "index": 1, "name": "srv", "command": "npm", "active": false,
+                  "statusKind": "running", "summary": "dev server", "target": "work:1" }
+              ]
+            }
+          ]
+        }
+        """
+        let vm = TmuxDashboardViewModel()
+        vm.load(try decode(json))
+
+        XCTAssertEqual(vm.waitingCount, 0)
+        XCTAssertNil(TmuxDashboardViewModel.badgeText(waitingCount: vm.waitingCount))
+    }
+
+    // Many waiting windows → badge shows the full count (rows still scroll — view concern).
+    func test_DW_2_1_badgeCountsAllWaitingWindows() throws {
+        let json = """
+        {
+          "generatedAt": 1718500000,
+          "sessions": [
+            {
+              "name": "a", "attached": false, "windows": [
+                { "index": 0, "name": "w0", "command": "claude", "active": true,
+                  "statusKind": "waiting", "summary": "needs input", "target": "a:0" },
+                { "index": 1, "name": "w1", "command": "claude", "active": false,
+                  "statusKind": "waiting", "summary": "needs input", "target": "a:1" }
+              ]
+            },
+            {
+              "name": "b", "attached": false, "windows": [
+                { "index": 0, "name": "w0", "command": "claude", "active": true,
+                  "statusKind": "waiting", "summary": "needs input", "target": "b:0" }
+              ]
+            }
+          ]
+        }
+        """
+        let vm = TmuxDashboardViewModel()
+        vm.load(try decode(json))
+
+        XCTAssertEqual(vm.waitingCount, 3)
+        XCTAssertEqual(TmuxDashboardViewModel.badgeText(waitingCount: vm.waitingCount), "3 need input")
+    }
+
+    // MARK: - DW-2.2: Row highlight predicate
+
+    // isWaitingHighlight is true only for .waiting rows across a mixed set.
+    func test_DW_2_2_highlightPredicateTrueOnlyForWaiting() throws {
+        let json = """
+        {
+          "generatedAt": 1718500000,
+          "sessions": [
+            {
+              "name": "mix", "attached": false, "windows": [
+                { "index": 0, "name": "a", "command": "x", "active": false,
+                  "statusKind": "active",  "summary": "s", "target": "mix:0" },
+                { "index": 1, "name": "b", "command": "x", "active": false,
+                  "statusKind": "waiting", "summary": "s", "target": "mix:1" },
+                { "index": 2, "name": "c", "command": "x", "active": false,
+                  "statusKind": "running", "summary": "s", "target": "mix:2" },
+                { "index": 3, "name": "d", "command": "x", "active": false,
+                  "statusKind": "waiting", "summary": "s", "target": "mix:3" },
+                { "index": 4, "name": "e", "command": "x", "active": false,
+                  "statusKind": "idle",    "summary": "s", "target": "mix:4" }
+              ]
+            }
+          ]
+        }
+        """
+        let vm = TmuxDashboardViewModel()
+        vm.load(try decode(json))
+        let windows = vm.sessions[0].windows
+
+        let highlighted = windows.filter { TmuxDashboardViewModel.isWaitingHighlight($0) }
+        XCTAssertEqual(highlighted.map(\.target), ["mix:1", "mix:3"],
+            "only the two .waiting rows get the highlight")
+        // waitingCount (badge source) agrees with the highlight count.
+        XCTAssertEqual(vm.waitingCount, highlighted.count)
+    }
+
+    // No non-waiting kind triggers the highlight.
+    func test_DW_2_2_highlightPredicateFalseForNonWaitingKinds() {
+        for kind in ["active", "running", "idle", "error"] {
+            let window = TmuxWindow(
+                index: 0, name: "n", command: "c", active: false,
+                statusKind: TmuxStatusKind(rawValue: kind)!,
+                summary: "s", target: "t:0"
+            )
+            XCTAssertFalse(
+                TmuxDashboardViewModel.isWaitingHighlight(window),
+                "\(kind) must not be highlighted"
+            )
+        }
+        let waiting = TmuxWindow(
+            index: 0, name: "n", command: "c", active: false,
+            statusKind: .waiting, summary: "s", target: "t:0"
+        )
+        XCTAssertTrue(TmuxDashboardViewModel.isWaitingHighlight(waiting))
+    }
+
     // MARK: - Additional: Empty summary falls back to command
 
     // Window rows with an empty summary display the command name instead.

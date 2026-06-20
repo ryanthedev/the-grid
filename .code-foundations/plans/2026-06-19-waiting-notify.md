@@ -3,7 +3,7 @@
 **Created:** 2026-06-19
 **Status:** in-progress
 **Started:** 2026-06-19
-**Current Phase:** 1
+**Current Phase:** 2
 **Complexity:** simple
 
 ---
@@ -193,4 +193,10 @@ pure predicate (dedupe/re-arm/baseline/disappear are the dirty cases), as requir
 ---
 
 ## Execution Log
-_To be filled during /code-foundations:build_
+
+### Phase 1: Transition/dedupe predicate + notification emission (Gate: Full)
+- [x] BUILD: Discovery + design + implementation (stub → implement → validate) complete
+- [x] REVIEW: PASS — single post-gate review; all 7 DW items + all 6 edge cases verified with executed-test evidence; 93/93 tests pass, clean build
+- [x] Committed
+Commit: 4914cc4
+Summary: Added the waiting→notification core in grid-notify — pure `TmuxWaitingPolicy.diff` (newlyWaiting vs waitingNow), `TmuxDashboardViewModel` baseline-seeded transition detection in `load(_:)` with re-arm, `onWaitingEntered` closure, computed `waitingCount`, and the AppDelegate wiring that posts one `<target> needs input` notification per entry to `NotificationStore`. 12 new tests (93 total). Phase 2 consumes `viewModel.waitingCount` (reactive computed over `@Published sessions`) for the header badge and `.waiting` for the row highlight.
