@@ -303,6 +303,21 @@ final class TmuxStatusDriverTests: XCTestCase {
             "Lock should be acquirable after holder closes fd")
     }
 
+    // MARK: - Run-output verification predicate (failure logging)
+
+    // runProducedNoOutput is the pure rule behind warn.tmux.driver.nofile:
+    // a run "produced nothing" if it exited non-zero OR the status file did not advance.
+    func test_runProducedNoOutput_truthTable() {
+        // Success: exit 0 AND file advanced.
+        XCTAssertFalse(TmuxStatusDriver.runProducedNoOutput(exitCode: 0, fileAdvanced: true))
+        // Exit 0 but file unchanged (the silent-failure bug we hit) → failure.
+        XCTAssertTrue(TmuxStatusDriver.runProducedNoOutput(exitCode: 0, fileAdvanced: false))
+        // Non-zero exit, even if the file somehow advanced → failure.
+        XCTAssertTrue(TmuxStatusDriver.runProducedNoOutput(exitCode: 1, fileAdvanced: true))
+        // Non-zero exit and no file → failure.
+        XCTAssertTrue(TmuxStatusDriver.runProducedNoOutput(exitCode: 1, fileAdvanced: false))
+    }
+
     // MARK: - Additional: TmuxDriverCommand constant validation
 
     func test_claudeDefault_arguments_are_constants() {

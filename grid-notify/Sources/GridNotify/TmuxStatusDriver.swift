@@ -103,6 +103,19 @@ class TmuxStatusDriver {
         "\(XDG.stateHome)/thegrid/tmux-status.lock"
     }
 
+    // Status file the skill writes; the driver checks its mtime to confirm a run
+    // actually produced output (a run can exit 0 yet write nothing).
+    static var defaultStatusFilePath: String {
+        "\(XDG.stateHome)/thegrid/tmux-status.json"
+    }
+
+    // Pure predicate: did a finished run fail to produce a status update?
+    // A non-zero exit OR an unchanged status file both count as "no output".
+    // Extracted as a static so the failure rule is unit-testable off the OS boundary.
+    static func runProducedNoOutput(exitCode: Int32, fileAdvanced: Bool) -> Bool {
+        exitCode != 0 || !fileAdvanced
+    }
+
     // MARK: - Mutable state (queue-protected)
 
     private var isRunning: Bool = false
@@ -123,8 +136,38 @@ class TmuxStatusDriver {
     var _test_spawnCount: Int = 0
     var _test_isRunning: Bool { isRunning }
 
+    // Override the status file path in tests so the file-advance check is deterministic.
+    var _test_statusFilePath: String? = nil
+
     private var lockfilePath: String {
         _test_lockfilePath ?? TmuxStatusDriver.defaultLockfilePath
+    }
+
+    private var statusFilePath: String {
+        _test_statusFilePath ?? TmuxStatusDriver.defaultStatusFilePath
+    }
+
+    // Rolling capture of the last run's stderr, for post-mortem diagnosis.
+    // Isolated per test via the lockfile sibling so parallel drivers don't clobber it.
+    private var stderrLogPath: String {
+        if let lock = _test_lockfilePath {
+            return lock + ".stderr"
+        }
+        return "\(XDG.stateHome)/thegrid/tmux-driver.log"
+    }
+
+    // Modification time of the status file in epoch seconds, or 0 if absent.
+    private func statusFileMtime() -> TimeInterval {
+        let attrs = try? FileManager.default.attributesOfItem(atPath: statusFilePath)
+        return (attrs?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
+    }
+
+    // Trailing slice of the captured stderr, for inclusion in the failure log.
+    private func stderrTail(maxLength: Int = 800) -> String {
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: stderrLogPath)),
+              let text = String(data: data, encoding: .utf8) else { return "" }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return String(trimmed.suffix(maxLength))
     }
 
     // MARK: - Init
@@ -281,13 +324,23 @@ class TmuxStatusDriver {
             proc.currentDirectoryURL = URL(fileURLWithPath: config.repoDir)
         }
 
-        // Discard stdout/stderr — the skill writes the file directly.
+        // Record the status file's pre-run mtime so the termination handler can tell
+        // whether this run actually produced output. A run can exit 0 yet write nothing
+        // (wrong cwd, MCP server failed to launch) — that must not look like success.
+        let preRunMtime = statusFileMtime()
+
+        // Capture stderr to a rolling log file (truncated each run) instead of /dev/null,
+        // so a failed run leaves a diagnosable trail. A file sink (vs a Pipe) can't deadlock
+        // on a full pipe buffer. stdout is unused by the skill, so it stays discarded.
         proc.standardOutput = FileHandle.nullDevice
-        proc.standardError = FileHandle.nullDevice
+        FileManager.default.createFile(atPath: stderrLogPath, contents: nil)
+        let errHandle = FileHandle(forWritingAtPath: stderrLogPath)
+        proc.standardError = errHandle ?? FileHandle.nullDevice
 
         let capturedFd = lockFd
 
         proc.terminationHandler = { [weak self] p in
+            try? errHandle?.close()
             guard let self else {
                 // Self deallocated — still release the lock fd.
                 if capturedFd >= 0 { close(capturedFd) }
@@ -300,6 +353,20 @@ class TmuxStatusDriver {
                 "exit": exitCode,
                 "reason": reason == .uncaughtSignal ? "signal" : "exit",
             ])
+            // Verify the run did its job. A non-zero exit or an unchanged status file
+            // means it produced nothing — surface it with a tail of stderr so the cause
+            // (MCP/bun failure, command not found, auth error) is visible, not silent.
+            let fileAdvanced = self.statusFileMtime() > preRunMtime
+            if TmuxStatusDriver.runProducedNoOutput(exitCode: exitCode, fileAdvanced: fileAdvanced) {
+                jlog("warn.tmux.driver.nofile",
+                     msg: "run produced no status update",
+                     data: [
+                        "pid": p.processIdentifier,
+                        "exit": exitCode,
+                        "fileAdvanced": fileAdvanced,
+                        "stderr": self.stderrTail(),
+                     ])
+            }
             self.queue.async { [weak self] in
                 guard let self else {
                     if capturedFd >= 0 { close(capturedFd) }
@@ -318,7 +385,8 @@ class TmuxStatusDriver {
             ])
             scheduleHungRunTimeout()
         } catch {
-            // Spawn failed — release lock and reset state immediately.
+            // Spawn failed — close the stderr sink, release lock, reset state immediately.
+            try? errHandle?.close()
             jlog("err.tmux.driver.spawn", data: ["err": "\(error)"])
             releaseRun(fd: capturedFd)
         }
