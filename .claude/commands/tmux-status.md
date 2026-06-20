@@ -32,17 +32,21 @@ Parse the `list` output. For each named session, call
 `mcp__claude-mux__tmux` with `action: "session", target: "<session-name>"` to get the
 window list with single-line pane previews.
 
-### Step 2b — Capture each session's last-activity time
+### Step 2b — Capture each session's activity time and attached state
 
-Get the per-session activity epoch so the dashboard can rank sessions by recency. Run:
+Get the per-session activity epoch (for recency ranking) AND attached state directly from
+tmux — the MCP `list`/`session` output does NOT reliably report either, so they must not be
+inferred from pane output. Run:
 
 ```bash
-tmux list-sessions -F "#{session_name} #{session_activity}"
+tmux list-sessions -F "#{session_name} #{session_activity} #{session_attached}"
 ```
 
-Each line is `<session-name> <epoch-seconds>`. Map the epoch onto the matching session's
-`activity` field (see Step 4). If `tmux` is not reachable, omit `activity` (the dashboard
-defaults absent values to `0`); do not abort the run.
+Each line is `<session-name> <epoch-seconds> <attached>`, where `<attached>` is `1` when a
+client is attached and `0` otherwise. Map both onto the matching session (see Step 4):
+`activity` = the epoch; `attached` = (the third field is not `0`). Use these verbatim — do
+NOT guess `attached` from the pane contents. If `tmux` is not reachable, omit `activity` and
+set `attached: false`; do not abort the run.
 
 ### Step 3 — Capture each window's pane
 
@@ -59,7 +63,7 @@ For each session, produce a JSON object with these fields:
 | Field | Type | Description |
 |-------|------|-------------|
 | `name` | string | Session name from `tmux list-sessions` |
-| `attached` | boolean | Whether any client is attached to this session |
+| `attached` | boolean | `true` if a client is attached, from `#{session_attached}` in Step 2b (NOT inferred from pane output) |
 | `activity` | integer | Unix epoch seconds of last activity (`#{session_activity}`, from Step 2b). Omit if unobtainable. |
 | `windows` | array | The window objects below |
 

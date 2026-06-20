@@ -58,7 +58,7 @@ then rename over the target. Never leave a partial file at the real path.
 | `generatedAt` | integer | Unix epoch seconds (NOT milliseconds) at time of write. Get the real value with Bash `date +%s` — never copy the example or guess it. |
 | `sessions` | array | All tmux sessions; empty array `[]` if tmux is not running |
 | `sessions[].name` | string | Session name as returned by `tmux list-sessions` |
-| `sessions[].attached` | boolean | Whether any client is attached to this session |
+| `sessions[].attached` | boolean | `true` if a client is attached, from `#{session_attached}` (step 2b) — never inferred from pane output |
 | `sessions[].activity` | integer | Unix epoch seconds of the session's last activity (`#{session_activity}`). The dashboard ranks sessions by this — newest at the bottom. Omit only if unobtainable; the dashboard treats absent as `0`. |
 | `sessions[].windows` | array | All windows in this session |
 | `windows[].index` | integer | Window index (0-based) |
@@ -115,19 +115,23 @@ session-name/
   :1 other-window (2p)
 ```
 
-Extract: session name, attached status, window index, window name, active marker.
+Extract: session name, window index, window name, active marker. (Attached state is NOT
+reliably in this output — get it from tmux in step 2b, not by guessing.)
 
-### 2b. Capture each session's last-activity time
+### 2b. Capture each session's activity time and attached state
 
-Get the per-session activity epoch so the dashboard can rank sessions by recency. Run:
+Get the per-session activity epoch (for recency ranking) AND attached state directly from
+tmux — the MCP output does not reliably report either. Run:
 
 ```bash
-tmux list-sessions -F "#{session_name} #{session_activity}"
+tmux list-sessions -F "#{session_name} #{session_activity} #{session_attached}"
 ```
 
-Each line is `<session-name> <epoch-seconds>`. Map the epoch onto the matching session's
-`activity` field. If `tmux` is not reachable from this run, omit `activity` (the dashboard
-defaults absent values to `0` and falls back to name order) — do not abort the run.
+Each line is `<session-name> <epoch-seconds> <attached>`, where `<attached>` is `1` when a
+client is attached and `0` otherwise. Map both onto the matching session: `activity` = the
+epoch; `attached` = (the third field is not `0`). Use these verbatim — never infer `attached`
+from pane contents. If `tmux` is not reachable from this run, omit `activity` (the dashboard
+defaults absent values to `0`) and set `attached: false` — do not abort the run.
 
 ### 3. Capture each window's pane
 
