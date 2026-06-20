@@ -1,9 +1,10 @@
 # Plan: tmux window enters `waiting` → notification + dashboard indicator
 
 **Created:** 2026-06-19
-**Status:** in-progress
+**Status:** complete
 **Started:** 2026-06-19
-**Current Phase:** 2
+**Completed:** 2026-06-19
+**Current Phase:** 2/2 (done)
 **Complexity:** simple
 
 ---
@@ -200,3 +201,10 @@ pure predicate (dedupe/re-arm/baseline/disappear are the dirty cases), as requir
 - [x] Committed
 Commit: 4914cc4
 Summary: Added the waiting→notification core in grid-notify — pure `TmuxWaitingPolicy.diff` (newlyWaiting vs waitingNow), `TmuxDashboardViewModel` baseline-seeded transition detection in `load(_:)` with re-arm, `onWaitingEntered` closure, computed `waitingCount`, and the AppDelegate wiring that posts one `<target> needs input` notification per entry to `NotificationStore`. 12 new tests (93 total). Phase 2 consumes `viewModel.waitingCount` (reactive computed over `@Published sessions`) for the header badge and `.waiting` for the row highlight.
+
+### Phase 2: Dashboard "needs input" indicator (Gate: Standard)
+- [x] BUILD: Discovery + design + implementation (stub → implement → validate) complete
+- [x] REVIEW: PASS — single post-gate review; both DW items + all 3 edge cases verified with executed-test evidence; 100/100 tests pass, clean build; dependency `waitingCount` consumed correctly
+- [x] Committed
+Commit: cbd17ca
+Summary: Added the dashboard indicator in grid-notify — a reactive systemYellow `<N> need input` header capsule bound to `viewModel.waitingCount` (hidden at 0) and a yellow tint + left accent bar on `.waiting` rows (glyph/summary retained, non-waiting rows and zero-state untouched, activity sort preserved). Badge/highlight decisions extracted as pure helpers `badgeText(waitingCount:)` and `isWaitingHighlight(_:)`. 7 new tests (100 total).
