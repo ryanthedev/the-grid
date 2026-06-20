@@ -44,7 +44,7 @@ tmux:
 
   # Absolute path to the git repo root where the .claude/commands/tmux-status.md
   # slash command lives. The driver runs headless Claude from this directory.
-  repoDir: /Users/r/repos/theGrid
+  repo_dir: /Users/r/repos/theGrid
 
   # Claude model for the headless summarization run.
   # Use a fast, cheap model — summaries are short and the context is small.
@@ -58,7 +58,7 @@ tmux:
 
 tmux:
   interval: 120
-  repoDir: /Users/yourname/repos/theGrid
+  repo_dir: /Users/yourname/repos/theGrid
 ```
 
 ---
@@ -89,7 +89,7 @@ Save and reload BFD (or restart theGrid) for hotkeys to take effect.
 
 ### Step 1: Enable in notify.yaml
 
-Add the `tmux:` block above to `~/.config/thegrid/notify.yaml`. At minimum, set `repoDir`
+Add the `tmux:` block above to `~/.config/thegrid/notify.yaml`. At minimum, set `repo_dir`
 to the absolute path of your theGrid repo clone.
 
 ### Step 2: Verify grid-server RPC is registered
@@ -170,6 +170,6 @@ Written to `~/.local/state/thegrid/tmux-status.json`:
 | Symptom | Check |
 |---------|-------|
 | `thegrid tmux toggle` returns error | `thegrid ping` — is grid-server running? `make run` to rebuild and restart. |
-| Dashboard shows but never updates | Check `notify.yaml` `tmux.enabled: true` and `repoDir` path. Run `thegrid tmux refresh` manually. |
-| Status file missing after refresh | Verify headless Claude path: `/Users/r/.local/bin/claude`. Check `~/.local/state/thegrid/thegrid-server.json` for `tmux.driver.*` log events. |
+| Dashboard shows but never updates | Check `notify.yaml` `tmux.enabled: true` and `repo_dir` path. Run `thegrid tmux refresh` manually. |
+| Status file missing after refresh | Verify headless Claude path: `/Users/r/.local/bin/claude`. Check `~/.local/state/thegrid/thegrid-notify.json` for `tmux.driver.*` log events (the driver runs in grid-notify, not grid-server). |
 | BFD hotkeys not working | Run `thegrid config show` to verify BFD config loaded. Check `bfd.yaml` syntax. |
