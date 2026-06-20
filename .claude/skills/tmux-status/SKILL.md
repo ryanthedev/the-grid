@@ -353,3 +353,20 @@ Empty-sessions sample (tmux not running):
   "sessions": []
 }
 ```
+
+---
+
+## Implementation
+
+This skill executes the following workflow:
+
+1. Get current Unix timestamp via `date +%s`
+2. Call `mcp__claude-mux__tmux` with `action: "list"` to enumerate sessions
+3. If tmux is not running, write empty result and stop
+4. For each session:
+   - Call `mcp__claude-mux__tmux` with `action: "session"` to get windows
+   - Parse window indices and names
+5. Run `tmux list-sessions -F "#{session_name} #{session_activity} #{session_attached}"` to get activity + attached state
+6. For each window, call `mcp__claude-mux__tmux` with `action: "tail"` to get pane content
+7. Analyze pane content to determine foreground command, statusKind, and summary
+8. Assemble JSON and write atomically (temp → final with mv)
