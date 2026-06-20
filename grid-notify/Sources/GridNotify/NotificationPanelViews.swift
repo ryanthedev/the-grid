@@ -501,6 +501,18 @@ struct NotificationItemView: View {
             )
             .lineLimit(1)
             .parallax(isActive: isActive("parallax"), tick: tick, layer: 0)
+        } else if isActive("marquee_title") {
+            // MarqueeText wraps a GeometryReader, which has no intrinsic
+            // height; pin it to the body line box so the row keeps its
+            // normal height instead of collapsing to the meta-time text.
+            MarqueeText(
+                text: displayTitle,
+                font: berkeleyMono(size: TypeSize.body),
+                color: titleColor,
+                speed: 30
+            )
+            .frame(height: TypeSize.body + 4)
+            .parallax(isActive: isActive("parallax"), tick: tick, layer: 0)
         } else {
             Text(displayTitle)
                 .font(berkeleyMono(size: TypeSize.body))
@@ -635,6 +647,7 @@ struct NotificationHelpView: View {
     private let textAnimations: [(String, String)] = [
         ("matrix_title", "Characters resolve from random glyphs"),
         ("wave_title", "Wavy motion (unread only)"),
+        ("marquee_title", "Scrolls horizontally when text overflows"),
         ("glitch", "Random character corruption"),
         ("redact", "Text reveals from block characters"),
         ("typing_indicator", "Character-by-character reveal"),
