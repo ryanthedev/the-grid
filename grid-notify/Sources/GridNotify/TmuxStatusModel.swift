@@ -68,6 +68,27 @@ struct TmuxWindow: Decodable {
     // Maximum characters to trust from the summary field.
     // Longer summaries are truncated at display time (not at decode).
     static let maxSummaryLength = 200
+
+    // Memberwise initializer. Decodable's synthesized init still applies to the
+    // file-loading path; this exists so pure policy/viewModel unit tests can
+    // build windows directly off the JSON boundary.
+    init(
+        index: Int,
+        name: String,
+        command: String,
+        active: Bool,
+        statusKind: TmuxStatusKind,
+        summary: String,
+        target: String
+    ) {
+        self.index = index
+        self.name = name
+        self.command = command
+        self.active = active
+        self.statusKind = statusKind
+        self.summary = summary
+        self.target = target
+    }
 }
 
 // MARK: - TmuxSession

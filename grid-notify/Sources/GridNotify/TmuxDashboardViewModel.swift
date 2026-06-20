@@ -34,6 +34,21 @@ class TmuxDashboardViewModel: ObservableObject {
     // The driver (P4) sets this to trigger an immediate run.
     var onRefreshRequested: (() -> Void)?
 
+    // Invoked from load(_:) when one or more windows transition INTO .waiting on
+    // a non-baseline load. AppDelegate wires this to post a GridNotification per
+    // window. Injectable so emission is testable off the store/AppKit boundary.
+    var onWaitingEntered: (([TmuxWindow]) -> Void)?
+
+    // Targets that were .waiting on the previous load. The dedupe/re-arm anchor:
+    // a target already here is not re-notified; a target that leaves drops out
+    // and re-arms. Long-lived (window-bound viewModel) so it persists across loads.
+    private var previousWaiting: Set<String> = []
+
+    // Whether the first load has occurred. The first load seeds previousWaiting
+    // without notifying (baseline), so a restart with already-waiting windows
+    // does not dump a notification per window.
+    private var didBaseline = false
+
     init(theme: NotificationPanelTheme = .default) {
         self.theme = theme
     }
@@ -60,6 +75,72 @@ class TmuxDashboardViewModel: ObservableObject {
             "sessions": data.sessions.count,
             "generatedAt": data.generatedAt,
         ])
+
+        detectWaitingTransitions(in: data)
+    }
+
+    // MARK: - Waiting transitions
+
+    // Diff this load's waiting set against the prior one and surface windows that
+    // newly entered .waiting. The very first load only seeds the baseline so a
+    // restart with already-waiting windows does not spam; subsequent loads emit.
+    // previousWaiting is always advanced to the current waiting set (so vanished
+    // targets re-arm).
+    private func detectWaitingTransitions(in data: TmuxStatusData) {
+        let allWindows = data.sessions.flatMap(\.windows)
+        let result = TmuxWaitingPolicy.diff(previousWaiting: previousWaiting, windows: allWindows)
+        previousWaiting = result.waitingNow
+
+        guard didBaseline else {
+            didBaseline = true
+            jlog("tmux.waiting.baseline", data: ["waiting": result.waitingNow.count])
+            return
+        }
+
+        guard !result.newlyWaiting.isEmpty else { return }
+
+        jlog("tmux.waiting.entered", data: ["count": result.newlyWaiting.count])
+        onWaitingEntered?(result.newlyWaiting)
+    }
+
+    // Number of windows currently in .waiting across all loaded sessions.
+    // Computed from @Published sessions so SwiftUI re-renders the Phase-2 badge
+    // reactively when sessions changes; no separate @Published storage needed.
+    var waitingCount: Int {
+        sessions.reduce(0) { count, session in
+            count + session.windows.filter { $0.statusKind == .waiting }.count
+        }
+    }
+
+    // Build the notification for a window that entered .waiting. Pure/static so
+    // DW-1.5 can assert title/body/detailCmd without crossing the actor boundary.
+    // A fresh id per call keeps each waiting episode distinct, so NotificationStore.add
+    // (idempotent by id) never silently drops a re-entry post.
+    static func makeWaitingNotification(for window: TmuxWindow) -> GridNotification {
+        GridNotification(
+            id: "tmux-waiting-\(window.target)-\(UUID().uuidString)",
+            source: "tmux",
+            title: "\(window.target) needs input",
+            body: window.summary,
+            detailCmd: "tmux capture-pane -pt \(window.target) -S -200"
+        )
+    }
+
+    // MARK: - Dashboard indicator (Phase 2)
+
+    // Header badge label for the "needs input" count. Pure/static so DW-2.1 can
+    // assert the label and the 0-case without touching SwiftUI. Returns nil when
+    // there is nothing waiting, which the view uses to hide the badge entirely.
+    static func badgeText(waitingCount: Int) -> String? {
+        guard waitingCount > 0 else { return nil }
+        return "\(waitingCount) need input"
+    }
+
+    // Row-highlight decision for a window. Pure/static so DW-2.2 can assert the
+    // predicate over a mix of waiting and non-waiting windows. The view uses this
+    // to apply the yellow tint + left accent bar.
+    static func isWaitingHighlight(_ window: TmuxWindow) -> Bool {
+        window.statusKind == .waiting
     }
 
     // MARK: - Collapse / Expand

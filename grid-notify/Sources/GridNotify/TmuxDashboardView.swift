@@ -65,6 +65,19 @@ struct TmuxDashboardHeaderView: View {
                 .font(dashboardMono(size: DashTypeSize.title, weight: .bold))
                 .foregroundColor(viewModel.theme.textPrimary)
 
+            // "N need input" badge — present only when one or more windows are
+            // .waiting. waitingCount is computed over @Published sessions, so the
+            // badge appears/updates/disappears reactively on every load.
+            if let badge = TmuxDashboardViewModel.badgeText(waitingCount: viewModel.waitingCount) {
+                Text(badge)
+                    .font(dashboardMono(size: DashTypeSize.meta, weight: .bold))
+                    .foregroundColor(viewModel.theme.background)
+                    .padding(.horizontal, DashSpace.sm)
+                    .padding(.vertical, 2)
+                    .background(Color(TmuxStatusKind.waiting.color))
+                    .clipShape(Capsule())
+            }
+
             Spacer()
 
             Button(action: { viewModel.requestRefresh() }) {
@@ -202,6 +215,20 @@ struct TmuxDashboardWindowRow: View {
             && viewModel.selectedWindow?.windowIndex == window.index
     }
 
+    // Whether this row gets the "needs input" highlight (yellow tint + accent bar).
+    // Decision lives in the unit-tested pure helper so the visual stays in sync
+    // with what DW-2.2 asserts.
+    private var isWaiting: Bool {
+        TmuxDashboardViewModel.isWaitingHighlight(window)
+    }
+
+    // Subtle yellow fill for waiting rows; selection still wins when both apply.
+    private var rowBackground: Color {
+        if isSelected { return viewModel.theme.surfaceSelected }
+        if isWaiting { return Color(TmuxStatusKind.waiting.color).opacity(0.12) }
+        return Color.clear
+    }
+
     // Display summary: fall back to the command name if summary is empty.
     private var displaySummary: String {
         let trimmed = window.summary.trimmingCharacters(in: .whitespaces)
@@ -249,7 +276,15 @@ struct TmuxDashboardWindowRow: View {
             .padding(.leading, DashSpace.xxl)
             .padding(.trailing, DashSpace.lg)
             .padding(.vertical, DashSpace.md)
-            .background(isSelected ? viewModel.theme.surfaceSelected : Color.clear)
+            .background(rowBackground)
+            // Left accent bar at full waiting color marks "needs input" rows.
+            .overlay(alignment: .leading) {
+                if isWaiting {
+                    Rectangle()
+                        .fill(Color(TmuxStatusKind.waiting.color))
+                        .frame(width: DashSpace.xs)
+                }
+            }
         }
         .buttonStyle(.plain)
 
