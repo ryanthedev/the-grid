@@ -65,3 +65,7 @@ docs/plans/
 
 # Claude worktrees
 .claude/worktrees/
+
+# Tool artifacts / local state
+graphify-out/
+.local/
