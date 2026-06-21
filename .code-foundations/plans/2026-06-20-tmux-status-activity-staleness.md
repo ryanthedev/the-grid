@@ -1,9 +1,9 @@
 # Plan: tmux-status activity staleness + age display
 
 **Created:** 2026-06-20
-**Status:** in-progress
+**Status:** complete
 **Started:** 2026-06-20
-**Current Phase:** 2
+**Completed:** 2026-06-20
 **Complexity:** simple
 
 ---
@@ -163,5 +163,5 @@ Summary: `tmux-status.py` is now time-aware — `list-windows -F` captures `#{wi
 - [x] BUILD: Discovery + design + implementation (stub → implement → validate) complete
 - [x] REVIEW: Verification passed — POST-GATE PASS, all 5 DW items + 4 edge cases with execution evidence (swift build clean, 104/104 tests, baseline 100 → +4, no regressions)
 - [x] Committed
-Commit: <pending>
+Commit: 9ee027d
 Summary: grid-notify now consumes the `activity` contract — `TmuxWindow` gains `activity: Int` with a custom `init(from:)` (`decodeIfPresent ?? 0`, mirroring `TmuxSession`) + defaulted memberwise param (existing call sites compile); `TmuxDashboardViewModel.relativeAge(activity:now:)` formats nil@0 / "now" / "Nm" / "Nh" / "Nd" (negative→"now"); `TmuxDashboardWindowRow` renders the age muted/right-aligned without disturbing the existing name/`*`/summary/waiting-highlight layout. `docs/TMUX_DASHBOARD.md` documents the field + staleness behavior. Orchestrator updated grug: `tmux-status-accuracy-backlog` marked RESOLVED and `tmux-dashboard-driver-gotchas` records the window_activity-gating + parse/path fixes. 4 new tests; full suite 104/104 green.
