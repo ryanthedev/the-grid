@@ -64,14 +64,44 @@ struct TmuxWindow: Decodable {
     let summary: String
     // tmux target string in "session:index" form (e.g. "work:0").
     let target: String
+    // Unix epoch seconds of the window's last activity (tmux #{window_activity}).
+    // Drives the relative-age label in the row. Older status files omit it, so the
+    // decode is lenient: absent → 0, which relativeAge renders as "no age shown".
+    let activity: Int
 
     // Maximum characters to trust from the summary field.
     // Longer summaries are truncated at display time (not at decode).
     static let maxSummaryLength = 200
 
-    // Memberwise initializer. Decodable's synthesized init still applies to the
-    // file-loading path; this exists so pure policy/viewModel unit tests can
-    // build windows directly off the JSON boundary.
+    private enum CodingKeys: String, CodingKey {
+        case index
+        case name
+        case command
+        case active
+        case statusKind
+        case summary
+        case target
+        case activity
+    }
+
+    // Lenient decode for the file-loading path. The status file is external input
+    // written by a headless AI process; the seven original fields stay required, but
+    // activity is back-compat-optional (absent → 0) so older status files still decode.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        index = try container.decode(Int.self, forKey: .index)
+        name = try container.decode(String.self, forKey: .name)
+        command = try container.decode(String.self, forKey: .command)
+        active = try container.decode(Bool.self, forKey: .active)
+        statusKind = try container.decode(TmuxStatusKind.self, forKey: .statusKind)
+        summary = try container.decode(String.self, forKey: .summary)
+        target = try container.decode(String.self, forKey: .target)
+        activity = try container.decodeIfPresent(Int.self, forKey: .activity) ?? 0
+    }
+
+    // Memberwise initializer. The file-loading path uses init(from:) above; this exists
+    // so pure policy/viewModel unit tests can build windows directly off the JSON boundary.
+    // activity is defaulted so existing call sites that predate the field still compile.
     init(
         index: Int,
         name: String,
@@ -79,7 +109,8 @@ struct TmuxWindow: Decodable {
         active: Bool,
         statusKind: TmuxStatusKind,
         summary: String,
-        target: String
+        target: String,
+        activity: Int = 0
     ) {
         self.index = index
         self.name = name
@@ -88,6 +119,7 @@ struct TmuxWindow: Decodable {
         self.statusKind = statusKind
         self.summary = summary
         self.target = target
+        self.activity = activity
     }
 }
 

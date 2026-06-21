@@ -3,7 +3,7 @@
 **Created:** 2026-06-20
 **Status:** in-progress
 **Started:** 2026-06-20
-**Current Phase:** 1
+**Current Phase:** 2
 **Complexity:** simple
 
 ---
@@ -156,5 +156,12 @@ and render it in each window row — then record the change in the user doc and 
 - [x] BUILD: Discovery + design + implementation (stub → implement → validate) complete
 - [x] REVIEW: Verification passed — POST-GATE PASS, all 6 DW items + edge cases with execution evidence (24/24 unit assertions, live 21-window run, 0 stale active/running)
 - [x] Committed
-Commit: <pending>
+Commit: e267dce
 Summary: `tmux-status.py` is now time-aware — `list-windows -F` captures `#{window_activity}` with the window NAME moved LAST (new `parse_window_line` via `split(None, 3)` fixes the emoji/space name truncation + active-flag bug), `analyze_pane` applies a guarded 300s staleness gate at its tail that downgrades only `active`/`running` → `idle` (never `waiting`), and every emitted window carries an integer `activity`. Command script path fixed to repo-relative; `SKILL.md` + command-md document the `activity` field + staleness rule. **Contract for Phase 2:** `tmux-status.json` `windows[]` now include `"activity": <int epoch>` and no window stale > 300s is ever `active`/`running`.
+
+### Phase 2: Swift consumer + age display (+ doc) (Gate: Standard)
+- [x] BUILD: Discovery + design + implementation (stub → implement → validate) complete
+- [x] REVIEW: Verification passed — POST-GATE PASS, all 5 DW items + 4 edge cases with execution evidence (swift build clean, 104/104 tests, baseline 100 → +4, no regressions)
+- [x] Committed
+Commit: <pending>
+Summary: grid-notify now consumes the `activity` contract — `TmuxWindow` gains `activity: Int` with a custom `init(from:)` (`decodeIfPresent ?? 0`, mirroring `TmuxSession`) + defaulted memberwise param (existing call sites compile); `TmuxDashboardViewModel.relativeAge(activity:now:)` formats nil@0 / "now" / "Nm" / "Nh" / "Nd" (negative→"now"); `TmuxDashboardWindowRow` renders the age muted/right-aligned without disturbing the existing name/`*`/summary/waiting-highlight layout. `docs/TMUX_DASHBOARD.md` documents the field + staleness behavior. Orchestrator updated grug: `tmux-status-accuracy-backlog` marked RESOLVED and `tmux-dashboard-driver-gotchas` records the window_activity-gating + parse/path fixes. 4 new tests; full suite 104/104 green.

@@ -423,6 +423,48 @@ final class TmuxDashboardTests: XCTestCase {
         XCTAssertTrue(TmuxDashboardViewModel.isWaitingHighlight(waiting))
     }
 
+    // MARK: - DW-2.2 (Phase 2): relativeAge formatting
+
+    // Fixed reference clock; activity is built as (nowEpoch - offset) so each bucket
+    // lands exactly on the intended seconds-difference.
+    private static let nowEpoch = 1_718_500_000
+    private let now = Date(timeIntervalSince1970: TimeInterval(nowEpoch))
+
+    private func age(secondsAgo: Int) -> String? {
+        TmuxDashboardViewModel.relativeAge(activity: Self.nowEpoch - secondsAgo, now: now)
+    }
+
+    // The representative bucket from the plan/test plan: nil@0, 30s→now, 300s→5m,
+    // 7200s→2h, 172800s→2d.
+    func test_DW_2_2_relativeAgeFormatsBuckets() {
+        XCTAssertNil(TmuxDashboardViewModel.relativeAge(activity: 0, now: now),
+            "activity 0 (unknown) must render no age")
+        XCTAssertEqual(age(secondsAgo: 30), "now")
+        XCTAssertEqual(age(secondsAgo: 300), "5m")
+        XCTAssertEqual(age(secondsAgo: 7200), "2h")
+        XCTAssertEqual(age(secondsAgo: 172800), "2d")
+    }
+
+    // Bucket boundaries (each threshold is exclusive on its upper edge) plus the
+    // negative-diff (clock-skew) case, which must collapse into "now".
+    func test_DW_2_2_relativeAgeBoundariesAndNegative() {
+        // < 60 → "now"; 60 → first minute bucket.
+        XCTAssertEqual(age(secondsAgo: 59), "now")
+        XCTAssertEqual(age(secondsAgo: 60), "1m")
+        // < 3600 → "Nm"; 3600 → first hour bucket.
+        XCTAssertEqual(age(secondsAgo: 3599), "59m")
+        XCTAssertEqual(age(secondsAgo: 3600), "1h")
+        // < 86400 → "Nh"; 86400 → first day bucket.
+        XCTAssertEqual(age(secondsAgo: 86399), "23h")
+        XCTAssertEqual(age(secondsAgo: 86400), "1d")
+        // Negative diff: activity in the future (writer clock ahead) → "now".
+        XCTAssertEqual(age(secondsAgo: -500), "now")
+        XCTAssertEqual(
+            TmuxDashboardViewModel.relativeAge(activity: Self.nowEpoch + 10_000, now: now),
+            "now",
+            "future activity (negative age) must clamp to 'now'")
+    }
+
     // MARK: - Additional: Empty summary falls back to command
 
     // Window rows with an empty summary display the command name instead.

@@ -153,7 +153,8 @@ Written to `~/.local/state/thegrid/tmux-status.json`:
           "active": true,
           "statusKind": "active",
           "summary": "editing api.go — cursor in handleRequest() function",
-          "target": "work:0"
+          "target": "work:0",
+          "activity": 1718499994
         }
       ]
     }
@@ -162,6 +163,22 @@ Written to `~/.local/state/thegrid/tmux-status.json`:
 ```
 
 `statusKind` is one of: `active`, `running`, `waiting`, `idle`, `error`.
+
+### Per-window `activity` and staleness
+
+Each window object carries `activity`: the Unix epoch (seconds) of the window's last
+pane output, taken from tmux's `#{window_activity}`. The dashboard renders it as a muted,
+right-aligned relative age (`now` / `Nm` / `Nh` / `Nd`) in the window row.
+
+The field is **back-compat-optional**: status files written before this field was added
+omit it. A missing `activity` decodes to `0`, and `0` renders as *no age shown* (never a
+bogus epoch-derived span).
+
+`activity` also drives a **staleness gate** in the generator: any window whose last
+activity is more than **300 seconds** ago can never be reported as `active` or `running` —
+it is downgraded to `idle` (it is never flipped to `waiting`, so the
+waiting→notification feature is not tripped by long-idle sessions). Windows active within
+the last 300 s keep their text-derived `statusKind`.
 
 ---
 

@@ -264,6 +264,14 @@ struct TmuxDashboardWindowRow: View {
                         }
 
                         Spacer()
+
+                        // Muted, right-aligned relative last-activity age. Hidden when
+                        // activity is unknown (0) — relativeAge returns nil, so no label.
+                        if let age = TmuxDashboardViewModel.relativeAge(activity: window.activity, now: Date()) {
+                            Text(age)
+                                .font(dashboardMono(size: DashTypeSize.meta))
+                                .foregroundColor(viewModel.theme.textTertiary)
+                        }
                     }
 
                     // AI summary

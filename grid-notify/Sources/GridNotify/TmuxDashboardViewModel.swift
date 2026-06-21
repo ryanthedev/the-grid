@@ -143,6 +143,26 @@ class TmuxDashboardViewModel: ObservableObject {
         window.statusKind == .waiting
     }
 
+    // Relative last-activity age for a window row. Pure/static and now-injected so
+    // DW-2.2 can assert every bucket deterministically.
+    //
+    // activity is external input (AI-written status file); the decode barricade
+    // normalizes a missing field to the sentinel 0, and 0 means "unknown" → nil so
+    // the row shows no age rather than a bogus epoch-derived span.
+    //
+    // A negative diff (writer clock ahead of reader — anticipated runtime skew, not a
+    // programmer bug, so it is handled, not asserted) collapses into the "now" bucket.
+    static func relativeAge(activity: Int, now: Date) -> String? {
+        guard activity != 0 else { return nil }
+        let seconds = Int(now.timeIntervalSince1970) - activity
+        switch seconds {
+        case ..<60: return "now"
+        case ..<3600: return "\(seconds / 60)m"
+        case ..<86400: return "\(seconds / 3600)h"
+        default: return "\(seconds / 86400)d"
+        }
+    }
+
     // MARK: - Collapse / Expand
 
     // Toggle the collapsed state of a session by name.

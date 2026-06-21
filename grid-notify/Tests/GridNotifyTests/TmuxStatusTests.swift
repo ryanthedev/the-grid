@@ -134,6 +134,35 @@ final class TmuxStatusTests: XCTestCase {
         XCTAssertEqual(result.sessions[0].activity, 0)
     }
 
+    // MARK: - DW-2.1 (Phase 2): per-window activity field
+
+    // A window object that carries activity decodes it into TmuxWindow.activity.
+    func test_DW_2_1_windowDecodesActivityWhenPresent() throws {
+        let json = """
+        { "generatedAt": 100, "sessions": [
+          { "name": "s", "attached": false, "windows": [
+            { "index": 0, "name": "w", "command": "zsh", "active": true,
+              "statusKind": "idle", "summary": "x", "target": "s:0",
+              "activity": 1718499994 }
+          ] }
+        ] }
+        """
+        let result = try decode(json)
+        XCTAssertEqual(result.sessions[0].windows[0].activity, 1718499994)
+    }
+
+    // Back-compat: a window object written before the activity field omits it.
+    // Absent activity must decode to 0 (not throw), so the row shows no age.
+    func test_DW_2_1_windowActivityDefaultsToZeroWhenAbsent() throws {
+        let result = try decode(canonicalJSON)
+        for session in result.sessions {
+            for window in session.windows {
+                XCTAssertEqual(window.activity, 0,
+                    "window \(window.target) without an activity key must default to 0")
+            }
+        }
+    }
+
     func test_DW_2_1_allStatusKindGlyphsDistinct() {
         // All five status kinds have distinct, non-empty glyphs.
         let kinds: [TmuxStatusKind] = [.active, .running, .waiting, .idle, .error]
