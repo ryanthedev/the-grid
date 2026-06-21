@@ -69,3 +69,7 @@ docs/plans/
 # Tool artifacts / local state
 graphify-out/
 .local/
+
+# Python artifacts (tmux-status skill script)
+__pycache__/
+*.pyc

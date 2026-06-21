@@ -8,10 +8,10 @@ This command triggers the skill implementation, which uses `tmux` commands direc
 
 ## Execution
 
-Run the implementation script:
+Run the implementation script (repo-relative path — the command runs with `cwd=repo_dir`):
 
 ```bash
-python3 ~/.claude/skills/tmux-status/tmux-status.py
+python3 .claude/skills/tmux-status/tmux-status.py
 ```
 
 The script:
@@ -39,6 +39,7 @@ The script:
           "active": true,
           "statusKind": "active",
           "summary": "editing api.go — cursor in handleRequest() function",
+          "activity": 1718499995,
           "target": "work:0"
         }
       ]
@@ -47,6 +48,10 @@ The script:
 }
 ```
 
+Each `windows[]` object carries an integer `activity` (`#{window_activity}`, the
+Unix epoch of the window's last pane output). The dashboard renders it as a
+relative age; an absent/`0` value means unknown (no age shown).
+
 ## statusKind values
 
 - **active** — something is visibly happening (Claude typing, build running, editor with recent edits)
@@ -54,6 +59,15 @@ The script:
 - **waiting** — waiting for user input (Claude prompt, shell prompt, REPL ready)
 - **idle** — quiescent, no activity and no input prompt
 - **error** — pane capture failed or error condition visible
+
+### Staleness gate (time-aware)
+
+A window's `statusKind` is **downgraded to `idle`** when `generatedAt - activity > 300`
+(no pane output for over 300 seconds), even if its scrollback text would otherwise read
+`active`/`running`. The summary becomes `"idle — no output for <age>"`. Only `active`/`running`
+are ever downgraded — `error`, `waiting`, and `idle` are never touched, and a missing/`0`
+`activity` never triggers a downgrade. This keeps long-idle Claude sessions from spuriously
+reading `active` and from flipping into `waiting` (which would trip the notification feature).
 
 ## Edge cases
 

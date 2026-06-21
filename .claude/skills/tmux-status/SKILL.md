@@ -43,6 +43,7 @@ then rename over the target. Never leave a partial file at the real path.
           "active": true,
           "statusKind": "active",
           "summary": "editing api.go — cursor in handleRequest() function",
+          "activity": 1718499995,
           "target": "work:0"
         }
       ]
@@ -67,6 +68,7 @@ then rename over the target. Never leave a partial file at the real path.
 | `windows[].active` | boolean | Whether this is the session's currently active window |
 | `windows[].statusKind` | string | See statusKind vocabulary below |
 | `windows[].summary` | string | One-line AI summary of what is happening in this window |
+| `windows[].activity` | integer | Unix epoch seconds of the window's last pane output (`#{window_activity}`). The dashboard renders this as a relative age and the generator gates staleness on it (see below). Absent/`0` means unknown — no age shown, no staleness downgrade. |
 | `windows[].target` | string | tmux target in `session:window` form (e.g. `work:0`) for pane capture |
 
 ### statusKind vocabulary
@@ -86,6 +88,16 @@ signal the dashboard highlights for the user (which sessions need attention).
 
 Choose `error` as `statusKind` and use the error description as `summary` when a pane
 cannot be read (MCP returns an error for that target).
+
+#### Staleness rule (time-aware override)
+
+After text-based classification, a window whose last pane output is older than **300 seconds**
+(`generatedAt - windows[].activity > 300`) is **downgraded to `idle`** with the summary
+`"idle — no output for <age>"`, even if its scrollback would read `active`/`running`. Only
+`active`/`running` are downgraded; `error`, `waiting`, and `idle` are never touched by the gate,
+and a missing/`0` `activity` never triggers a downgrade. This is what keeps hours-to-weeks-stale
+windows from rendering as `active`, without mass-flipping them into `waiting` (which would trip
+the waiting→notification feature).
 
 ---
 
@@ -312,6 +324,7 @@ Schema-valid JSON for testing decoders (Phase 2):
           "active": true,
           "statusKind": "active",
           "summary": "editing api.go — cursor in handleRequest() function",
+          "activity": 1718499995,
           "target": "work:0"
         },
         {
@@ -321,6 +334,7 @@ Schema-valid JSON for testing decoders (Phase 2):
           "active": false,
           "statusKind": "running",
           "summary": "npm run dev watching on port 3000 — no recent changes",
+          "activity": 1718499980,
           "target": "work:1"
         }
       ]
@@ -337,6 +351,7 @@ Schema-valid JSON for testing decoders (Phase 2):
           "active": true,
           "statusKind": "waiting",
           "summary": "claude waiting for input at prompt",
+          "activity": 1718499500,
           "target": "claude-mux:0"
         }
       ]

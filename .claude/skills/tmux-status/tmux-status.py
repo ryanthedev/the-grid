@@ -16,7 +16,43 @@ def get_timestamp():
     """Get current Unix timestamp."""
     return int(datetime.now().timestamp())
 
-def analyze_pane(content, window_name, session_name, window_idx):
+# Windows untouched for longer than this (seconds) are downgraded to idle
+# regardless of what their scrollback text reads.
+STALENESS_THRESHOLD = 300
+
+def format_age(seconds):
+    """Render an age in seconds compactly: Ns / Nm / Nh / Nd."""
+    if seconds < 60:
+        return f"{seconds}s"
+    if seconds < 3600:
+        return f"{seconds // 60}m"
+    if seconds < 86400:
+        return f"{seconds // 3600}h"
+    return f"{seconds // 86400}d"
+
+def parse_window_line(wline):
+    """
+    Parse one `list-windows -F '#{window_index} #{window_active} #{window_activity} #{window_name}'`
+    line into (widx, wactive, wactivity, wname).
+
+    The window NAME is LAST so split(None, 3) keeps space/emoji names intact
+    (e.g. '🤖 2.1.183') instead of truncating at the first space. Returns None
+    on a malformed line so the caller can skip it without aborting the run.
+    """
+    # tmux output is external (process boundary) input: tolerate malformed lines.
+    wparts = wline.split(None, 3)
+    if len(wparts) < 4:
+        return None
+    try:
+        widx = int(wparts[0])
+        wactive = wparts[1] == '1'
+        wactivity = int(wparts[2])
+    except (ValueError, IndexError):
+        return None
+    wname = wparts[3]
+    return widx, wactive, wactivity, wname
+
+def analyze_pane(content, window_name, session_name, window_idx, window_activity, now):
     """
     Analyze pane content to determine command, statusKind, and summary.
 
@@ -26,6 +62,11 @@ def analyze_pane(content, window_name, session_name, window_idx):
     - waiting: waiting for user input (Claude prompt, shell prompt, REPL ready)
     - idle: quiescent, no activity and no input prompt
     - error: pane capture failed or error visible
+
+    Staleness gate (applied at the very end, just before returning): if the
+    window's last pane output (window_activity) is older than STALENESS_THRESHOLD
+    seconds, an otherwise-active/running window is downgraded to idle. Only
+    active/running are ever downgraded — error/waiting/idle are never touched.
     """
     if not content:
         return 'unknown', 'idle', f"{window_name}"
@@ -82,6 +123,14 @@ def analyze_pane(content, window_name, session_name, window_idx):
         statusKind = 'idle'
         summary = f"{window_name}"
 
+    # Staleness gate: a falsy/absent window_activity never triggers a downgrade,
+    # and only active/running are ever downgraded (error/waiting/idle untouched).
+    if window_activity and statusKind in ('active', 'running'):
+        age = now - window_activity
+        if age > STALENESS_THRESHOLD:
+            statusKind = 'idle'
+            summary = f"idle — no output for {format_age(age)}"
+
     return command, statusKind, summary
 
 def get_all_sessions_and_windows():
@@ -129,7 +178,7 @@ def get_all_sessions_and_windows():
         try:
             wresult = subprocess.run(
                 ['tmux', 'list-windows', '-t', session_name,
-                 '-F', '#{window_index} #{window_name} #{window_active}'],
+                 '-F', '#{window_index} #{window_active} #{window_activity} #{window_name}'],
                 capture_output=True, text=True, timeout=5
             )
             if wresult.returncode == 0:
@@ -137,14 +186,13 @@ def get_all_sessions_and_windows():
                     if not wline.strip():
                         continue
 
-                    wparts = wline.split(None, 2)
-                    if len(wparts) < 3:
+                    # Name is parsed LAST so space/emoji names survive intact.
+                    parsed = parse_window_line(wline)
+                    if parsed is None:
                         continue
 
                     try:
-                        widx = int(wparts[0])
-                        wname = wparts[1]
-                        wactive = wparts[2] == '1'
+                        widx, wactive, wactivity, wname = parsed
 
                         # Capture pane content
                         pane_content = ""
@@ -159,9 +207,11 @@ def get_all_sessions_and_windows():
                         except Exception:
                             pass
 
-                        # Analyze pane to get command, statusKind, summary
+                        # Analyze pane to get command, statusKind, summary.
+                        # window_activity + the run timestamp drive the staleness gate.
                         command, status_kind, summary = analyze_pane(
-                            pane_content, wname, session_name, widx
+                            pane_content, wname, session_name, widx,
+                            wactivity, timestamp
                         )
 
                         windows.append({
@@ -171,6 +221,7 @@ def get_all_sessions_and_windows():
                             'active': wactive,
                             'statusKind': status_kind,
                             'summary': summary,
+                            'activity': wactivity,
                             'target': f"{session_name}:{widx}"
                         })
                     except (ValueError, IndexError):
