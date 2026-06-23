@@ -1,25 +1,21 @@
 # tmux-status
 
 Enumerate every tmux session and window, analyze pane content to determine window state,
-and write the result atomically to `~/.local/state/thegrid/tmux-status.json`.
+and write the result atomically to `$XDG_STATE_HOME/thegrid/tmux-status.json`.
 
-This command triggers the skill implementation, which uses `tmux` commands directly
-(no MCP) for maximum compatibility and speed.
+This command runs the tmux-status skill, which uses `tmux` commands directly
+(no MCP) for maximum compatibility and speed. See `.claude/skills/tmux-status/SKILL.md` for implementation details.
 
 ## Execution
 
-Run the implementation script (repo-relative path — the command runs with `cwd=repo_dir`):
+The skill implementation runs automatically, performing these steps:
 
-```bash
-python3 .claude/skills/tmux-status/tmux-status.py
-```
-
-The script:
-1. Lists all tmux sessions with metadata (activity, attached state)
-2. For each session, lists all windows
+1. Lists all tmux sessions with metadata (activity timestamp, attached state)
+2. For each session, enumerates all windows with their metadata
 3. For each window, captures pane content via `tmux capture-pane`
-4. Analyzes pane content to determine: command, statusKind (active/running/waiting/idle/error), summary
-5. Writes JSON atomically to ~/.local/state/thegrid/tmux-status.json
+4. Analyzes pane content to determine: command, statusKind, and summary
+5. Applies staleness rule (>300s idle = downgrade to idle status)
+6. Writes JSON atomically to `~/.local/state/thegrid/tmux-status.json`
 
 ## Output format
 
