@@ -221,7 +221,7 @@ def get_all_sessions_and_windows():
                             'active': wactive,
                             'statusKind': status_kind,
                             'summary': summary,
-                            'activity': wactivity,
+                            'activity': wactivity or 0,
                             'target': f"{session_name}:{widx}"
                         })
                     except (ValueError, IndexError):
