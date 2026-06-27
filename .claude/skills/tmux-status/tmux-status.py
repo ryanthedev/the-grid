@@ -124,8 +124,8 @@ def analyze_pane(content, window_name, session_name, window_idx, window_activity
         summary = f"{window_name}"
 
     # Staleness gate: a falsy/absent window_activity never triggers a downgrade,
-    # and only active/running are ever downgraded (error/waiting/idle untouched).
-    if window_activity and statusKind in ('active', 'running'):
+    # and active/running/error are downgraded to idle (waiting/idle untouched).
+    if window_activity and statusKind in ('active', 'running', 'error'):
         age = now - window_activity
         if age > STALENESS_THRESHOLD:
             statusKind = 'idle'
