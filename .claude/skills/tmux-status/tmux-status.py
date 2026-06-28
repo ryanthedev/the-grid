@@ -82,18 +82,21 @@ def analyze_pane(content, window_name, session_name, window_idx, window_activity
         command = 'unknown'
 
     # Detect patterns in content
-    is_claude_session = '-- INSERT --' in content or 'Press Ctrl-C' in content
+    is_claude_session = '-- INSERT --' in content or 'Press Ctrl-C' in content or 'Permission rule' in content
     has_zsh_prompt = last_line_stripped.startswith('❯') or last_line_stripped.startswith('$')
     is_editor = 'nvim' in window_name.lower() or '-- INSERT --' in content
     is_running_metro = 'Metro' in content or 'expo run' in content or 'npm run' in content
-    has_error = 'error' in content.lower() or 'failed' in content.lower()
+    # Check for errors only in recent output (last 10 lines), not entire scrollback,
+    # to avoid false positives from stale error messages in pane history
+    recent_output = '\n'.join(lines[-10:]).lower()
+    has_error = 'error' in recent_output or 'failed' in recent_output
 
     # Determine statusKind and summary
     if is_claude_session:
-        if 'Press Ctrl-C' in content:
-            # Claude Code at prompt waiting for user input
+        if 'Press Ctrl-C' in content or 'Permission rule' in content or '❯' in last_line_stripped or '1. Yes' in content or '2. No' in content:
+            # Claude Code at prompt or permission dialog waiting for user input
             statusKind = 'waiting'
-            summary = 'claude waiting at prompt'
+            summary = 'claude waiting for input'
         elif '-- INSERT --' in last_line_stripped:
             # Claude Code in insert mode (entering text)
             statusKind = 'waiting'
@@ -123,8 +126,9 @@ def analyze_pane(content, window_name, session_name, window_idx, window_activity
         statusKind = 'idle'
         summary = f"{window_name}"
 
-    # Staleness gate: a falsy/absent window_activity never triggers a downgrade,
-    # and active/running/error are downgraded to idle (waiting/idle untouched).
+    # Staleness gate: a falsy/absent window_activity never triggers a downgrade.
+    # active/running/error are downgraded to idle if no pane output for >STALENESS_THRESHOLD.
+    # This prevents stale error messages in scrollback from being misclassified as active errors.
     if window_activity and statusKind in ('active', 'running', 'error'):
         age = now - window_activity
         if age > STALENESS_THRESHOLD:
