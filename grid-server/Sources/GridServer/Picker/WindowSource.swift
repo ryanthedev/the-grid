@@ -30,22 +30,8 @@ struct WindowSource: PickerSource {
         var items: [PickerItem] = []
 
         for (windowIDStr, window) in state.windows {
-            // Skip hidden and minimized windows
-            guard !window.isHidden, !window.isMinimized else { continue }
-
-            // Skip windows with alpha near zero (invisible)
-            guard window.alpha > 0.01 else { continue }
-
-            // Skip non-standard windows (popups, menus, sheets, etc.)
-            // Only include AXStandardWindow subrole, or nil subrole
-            if let subrole = window.subrole, subrole != "AXStandardWindow" {
-                continue
-            }
-
-            // Skip zero/tiny windows (helper windows that aren't user-facing)
-            if window.frame.width < 50 || window.frame.height < 50 {
-                continue
-            }
+            // Skip non-pickable windows (hidden, invisible, phantoms, helpers)
+            guard isPickableWindow(window) else { continue }
 
             // Look up application info
             let pidStr = "\(window.pid)"
@@ -163,6 +149,38 @@ struct WindowSource: PickerSource {
 
         return items
     }
+}
+
+// MARK: - Pickable Window Filtering
+
+/// Should this window appear as a focusable entry in the picker?
+///
+/// Mirrors the real-window checks in `isTileable(window:)`, but is intentionally
+/// more permissive about placement (no `level == 0` requirement, no 100pt tiling
+/// floor) because the picker focuses windows it would never tile.
+///
+/// The `role == "AXWindow"` guard is the load-bearing one. Chrome (and other
+/// apps) spawn phantom helper AX elements — favicon, tab-drag, and hover-preview
+/// surfaces — with a nil role, nil subrole, and empty title. They have no real
+/// title to enrich, so without this guard they render as a swarm of bare,
+/// duplicate "Google Chrome" rows. Genuine top-level windows report "AXWindow";
+/// phantoms report a nil role. Note the size floor alone does not catch them:
+/// some phantoms are wider than 50pt (e.g. tab hover previews).
+func isPickableWindow(_ window: WindowState) -> Bool {
+    if window.isHidden || window.isMinimized { return false }
+
+    // Skip windows with alpha near zero (invisible)
+    if window.alpha <= 0.01 { return false }
+
+    // Skip non-standard windows (popups, menus, sheets, etc.); nil subrole is
+    // tolerated here and disambiguated by the role check below.
+    if let subrole = window.subrole, subrole != "AXStandardWindow" { return false }
+
+    // Skip zero/tiny windows (helper windows that aren't user-facing)
+    if window.frame.width < 50 || window.frame.height < 50 { return false }
+
+    // Phantom guard: real top-level windows report role "AXWindow".
+    return window.role == "AXWindow"
 }
 
 // MARK: - Stable Window ID Generation

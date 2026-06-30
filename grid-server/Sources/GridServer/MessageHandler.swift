@@ -296,6 +296,8 @@ class MessageHandler {
                     for window in state.windows.values {
                         if window.isHidden { continue }
                         if window.frame.height < 100 { continue }
+                        // Skip phantoms (Chrome helper AX elements report nil role)
+                        if window.role != "AXWindow" { continue }
                         if ancestorSet.contains(window.pid) {
                             completion(Response(id: request.id, result: AnyCodable([
                                 "found": true,
@@ -316,6 +318,8 @@ class MessageHandler {
                     if let title = titleFilter, !(window.title?.contains(title) ?? false) { continue }
                     if window.isHidden { continue }
                     if window.frame.height < 100 { continue }
+                    // Skip phantoms (Chrome helper AX elements report nil role)
+                    if window.role != "AXWindow" { continue }
 
                     completion(Response(id: request.id, result: AnyCodable([
                         "found": true,
