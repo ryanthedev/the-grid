@@ -58,4 +58,46 @@ final class GridFocusRaceTests: XCTestCase {
     func test_detectFocusRace_empty_cell_returns_false() {
         XCTAssertFalse(GridFocus.detectFocusRace(actual: 100, cellWindows: []))
     }
+
+    // Regression: a phantom/stale window in the focused cell must not stall
+    // focus cycling.
+    //
+    // Background: an Activity Monitor window (wid 4201) stayed in the cell's
+    // window list with a cached role of "AXWindow" (so isTileable/adoption
+    // kept re-adopting it), but no longer resolved via AX (ax.fail
+    // not_in_list). focusWindowByID throws focusFailed for such a window, which
+    // the cycleFocus loop previously let propagate — aborting the whole cycle
+    // so `focus prev`/`focus next` silently no-oped. shouldCommitFocus models
+    // the loop's per-candidate decision; a `.failed` attempt must be SKIPPED,
+    // not committed, so the loop moves on to the genuine window.
+    private let cell: [UInt32] = [4201, 1622]
+
+    // The stale/unfocusable window (its focus attempt threw -> .failed) is
+    // excluded from the cycle: shouldCommitFocus returns false so the loop
+    // skips it instead of aborting.
+    func test_stale_unfocusable_window_is_skipped_not_committed() {
+        XCTAssertFalse(GridFocus.shouldCommitFocus(
+            requested: 4201, attempt: .failed, cellWindows: cell))
+    }
+
+    // A genuine window that focuses successfully is retained: the requested
+    // window matches the OS-reported focused window, so the loop commits it.
+    func test_genuine_window_focuses_successfully_and_is_committed() {
+        XCTAssertTrue(GridFocus.shouldCommitFocus(
+            requested: 1622, attempt: .focused(1622), cellWindows: cell))
+    }
+
+    // Same-cell late-notification race still commits (OS reported the OTHER
+    // in-cell window as focused): the fix must not regress this branch.
+    func test_same_cell_race_still_commits() {
+        XCTAssertTrue(GridFocus.shouldCommitFocus(
+            requested: 1622, attempt: .focused(4201), cellWindows: cell))
+    }
+
+    // OS focused a window OUTSIDE this cell: genuinely unfocusable, skip to the
+    // next candidate.
+    func test_focus_outside_cell_is_skipped() {
+        XCTAssertFalse(GridFocus.shouldCommitFocus(
+            requested: 1622, attempt: .focused(99999), cellWindows: cell))
+    }
 }
