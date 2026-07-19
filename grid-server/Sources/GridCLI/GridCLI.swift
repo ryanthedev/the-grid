@@ -20,7 +20,6 @@ struct GridCLI: ParsableCommand {
             TerminalCommand.self,
             ViewCommand.self,
             NotifyCommand.self,
-            TmuxCommand.self,
         ]
     )
 }

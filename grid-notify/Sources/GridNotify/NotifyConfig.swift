@@ -30,50 +30,18 @@ struct NotifyConfig {
         var restartDelay: TimeInterval
     }
 
-    // Configuration for the tmux status dashboard driver.
-    // Parsed from the `tmux:` block in notify.yaml.
-    struct Tmux {
-        // Whether the tmux dashboard is enabled. Default: false (off-by-default;
-        // each tick spends a Claude run).
-        var enabled: Bool
-        // How often (seconds) the driver runs a status refresh. Default: 60.
-        // Values < 1 are clamped to 1 to prevent restart-storm.
-        var interval: TimeInterval
-        // Absolute path to the repository root used as the cwd for headless claude.
-        var repoDir: String
-        // Claude model override for the headless run. nil = use claude default.
-        var model: String?
-
-        init(
-            enabled: Bool = false,
-            interval: TimeInterval = 60,
-            repoDir: String = "",
-            model: String? = nil
-        ) {
-            self.enabled = enabled
-            self.interval = interval
-            self.repoDir = repoDir
-            self.model = model
-        }
-    }
-
-    // tmux dashboard config. Defaults to disabled until the user enables it.
-    var tmux: Tmux
-
     init(
         pipePath: String = "\(XDG.stateHome)/thegrid/notify.pipe",
         pipeSourceLabel: String = "pipe",
         maxCount: Int = 0,
         themeColors: [String: String] = [:],
-        scripts: [ScriptEntry] = [],
-        tmux: Tmux = Tmux()
+        scripts: [ScriptEntry] = []
     ) {
         self.pipePath = pipePath
         self.pipeSourceLabel = pipeSourceLabel
         self.maxCount = maxCount
         self.themeColors = themeColors
         self.scripts = scripts
-        self.tmux = tmux
     }
 }
 
@@ -84,14 +52,12 @@ private struct NotifyConfigYAML: Codable {
     var maxCount: Int?
     var theme: [String: String]?
     var scripts: [ScriptYAML]?
-    var tmux: TmuxYAML?
 
     private enum CodingKeys: String, CodingKey {
         case pipe
         case maxCount = "max_count"
         case theme
         case scripts
-        case tmux
     }
 }
 
@@ -118,28 +84,6 @@ private struct ScriptYAML: Codable {
         case arguments
         case enabled
         case restartDelay = "restart_delay"
-    }
-}
-
-// YAML structure for the `tmux:` block in notify.yaml.
-//
-// Example:
-//   tmux:
-//     enabled: true
-//     interval: 60
-//     repo_dir: ~/repos/theGrid
-//     model: claude-sonnet-4-5
-private struct TmuxYAML: Codable {
-    var enabled: Bool?
-    var interval: Double?
-    var repoDir: String?
-    var model: String?
-
-    private enum CodingKeys: String, CodingKey {
-        case enabled
-        case interval
-        case repoDir = "repo_dir"
-        case model
     }
 }
 
@@ -199,19 +143,6 @@ func loadNotifyConfigFromYAML(yamlString: String) throws -> NotifyConfig {
                 restartDelay: s.restartDelay ?? 5.0
             )
         }
-    }
-
-    if let tmuxYAML = yaml.tmux {
-        // Clamp interval to at least 1 second to prevent restart-storm on
-        // invalid (zero or negative) config values.
-        let rawInterval = tmuxYAML.interval ?? 60
-        let clampedInterval = max(1, rawInterval)
-        config.tmux = NotifyConfig.Tmux(
-            enabled: tmuxYAML.enabled ?? false,
-            interval: clampedInterval,
-            repoDir: expandTilde(tmuxYAML.repoDir ?? ""),
-            model: tmuxYAML.model
-        )
     }
 
     return config

@@ -296,6 +296,8 @@ class MessageHandler {
                     for window in state.windows.values {
                         if window.isHidden { continue }
                         if window.frame.height < 100 { continue }
+                        // Skip phantoms (Chrome helper AX elements report nil role)
+                        if window.role != "AXWindow" { continue }
                         if ancestorSet.contains(window.pid) {
                             completion(Response(id: request.id, result: AnyCodable([
                                 "found": true,
@@ -316,6 +318,8 @@ class MessageHandler {
                     if let title = titleFilter, !(window.title?.contains(title) ?? false) { continue }
                     if window.isHidden { continue }
                     if window.frame.height < 100 { continue }
+                    // Skip phantoms (Chrome helper AX elements report nil role)
+                    if window.role != "AXWindow" { continue }
 
                     completion(Response(id: request.id, result: AnyCodable([
                         "found": true,
@@ -2024,16 +2028,6 @@ completion(Response(id: request.id, result: AnyCodable(["success": true])))
         // grid.notify.unassign -- {}
         register(method: "grid.notify.unassign") { request, completion in
             dispatchAndRespond(request, commandString: "@notify unassign", completion: completion)
-        }
-
-        // grid.tmux.toggle -- {} -- posts com.thegrid.tmux.toggle to grid-notify
-        register(method: "grid.tmux.toggle") { request, completion in
-            dispatchAndRespond(request, commandString: "@tmux toggle", completion: completion)
-        }
-
-        // grid.tmux.refresh -- {} -- posts com.thegrid.tmux.refresh to grid-notify
-        register(method: "grid.tmux.refresh") { request, completion in
-            dispatchAndRespond(request, commandString: "@tmux refresh", completion: completion)
         }
 
         jlog("grid.rpc.registered")

@@ -280,11 +280,34 @@ class GridFocus {
             }
 
             let windowID = cellWindows[tryIdx]
-            let actualFocused = try await focusWindowByID(windowID)
-            if actualFocused == windowID {
-                await gridState.setFocus(spaceID: spaceID, cellID: cellID, windowIndex: tryIdx)
-                return windowID
+
+            // Attempt AX focus. A stale/unfocusable candidate — e.g. an
+            // Activity Monitor window whose cached state still reports role
+            // "AXWindow" but no longer resolves via AX (logged upstream as
+            // ax.fail not_in_list -> warn.focus no_ax_element) — makes
+            // focusWindowByID throw focusFailed. The old code let that throw
+            // propagate, aborting the whole cycle, so focus prev/next silently
+            // no-oped whenever the cycle landed on the stale window first.
+            // Treat it like the outside-cell mismatch below: skip to the next
+            // candidate. This restores the loop's original "skip unfocusable
+            // windows" intent, which the throw short-circuited.
+            let attempt: CycleFocusAttempt
+            do {
+                attempt = .focused(try await focusWindowByID(windowID))
+            } catch let error as GridFocusError {
+                switch error {
+                case .focusFailed, .windowNotFound:
+                    jlog("focus.cycle.skip", data: [
+                        "wid": Int(windowID),
+                        "cell": cellID,
+                        "reason": "unfocusable",
+                    ])
+                    continue
+                default:
+                    throw error
+                }
             }
+
             // Same-cell async race: the OS reported a different window as
             // focused, but that window is itself a member of this cell. This
             // happens when an appActivated notification from a prior ax.focus
@@ -293,16 +316,25 @@ class GridFocus {
             // and stop iterating. Without this branch we'd issue extra
             // ax.focus calls that compound the race and ultimately throw a
             // spurious noWindowsInCell.
-            if GridFocus.detectFocusRace(actual: actualFocused, cellWindows: cellWindows) {
+            guard GridFocus.shouldCommitFocus(
+                requested: windowID,
+                attempt: attempt,
+                cellWindows: cellWindows
+            ) else {
+                // OS focused a window outside this cell — genuinely
+                // unfocusable, try the next index.
+                continue
+            }
+
+            if case .focused(let actual) = attempt, actual != windowID {
                 jlog("focus.cycle.race", data: [
                     "requested": Int(windowID),
-                    "actual": Int(actualFocused),
+                    "actual": Int(actual),
                     "cell": cellID,
                 ])
-                await gridState.setFocus(spaceID: spaceID, cellID: cellID, windowIndex: tryIdx)
-                return windowID
             }
-            // OS focused a window outside this cell — genuinely unfocusable, try next
+            await gridState.setFocus(spaceID: spaceID, cellID: cellID, windowIndex: tryIdx)
+            return windowID
         }
 
         // All windows in cell were unfocusable
@@ -316,6 +348,41 @@ class GridFocus {
     // walking the rest of the list.
     static func detectFocusRace(actual: UInt32, cellWindows: [UInt32]) -> Bool {
         return cellWindows.contains(actual)
+    }
+
+    // CycleFocusAttempt: the outcome of one focusWindowByID call inside the
+    // cycleFocus loop. `.failed` means the window had no resolvable AX element
+    // (stale/unfocusable — focusWindowByID threw focusFailed/windowNotFound);
+    // `.focused` carries the wid the OS reported as focused.
+    enum CycleFocusAttempt: Equatable {
+        case focused(UInt32)
+        case failed
+    }
+
+    // shouldCommitFocus: pure decision for one iteration of the cycleFocus
+    // loop. Returns true when the requested window's index should be committed
+    // and returned; false when the loop should skip to the next candidate.
+    //
+    // - .failed (unfocusable / no AX element): skip. This is the fix for the
+    //   stale-window no-op — a candidate that cannot be focused must not abort
+    //   the cycle, it simply isn't a valid successor.
+    // - .focused(actual) where actual == requested: exact success, commit.
+    // - .focused(actual) where actual is another member of this cell: a
+    //   same-cell late-notification race (see detectFocusRace), commit.
+    // - .focused(actual) otherwise: the OS focused a window outside the cell,
+    //   the requested window is genuinely unfocusable — skip.
+    static func shouldCommitFocus(
+        requested: UInt32,
+        attempt: CycleFocusAttempt,
+        cellWindows: [UInt32]
+    ) -> Bool {
+        switch attempt {
+        case .failed:
+            return false
+        case .focused(let actual):
+            return actual == requested
+                || detectFocusRace(actual: actual, cellWindows: cellWindows)
+        }
     }
 
     // focusCell: focus a specific cell by ID
