@@ -209,8 +209,6 @@ class GridCommandRouter {
                 return await gridTerminalManager.toggle()
             case "notify":
                 return await handleNotify(parsed)
-            case "tmux":
-                return handleTmux(parsed)
             case "nudge":
                 // Suppression managed via beginAction/endAction inside handleNudge --
                 // enter starts the session, exit ends it. No executeAction wrapper here.
@@ -1035,40 +1033,6 @@ class GridCommandRouter {
             NSNotification.Name(notificationName),
             object: nil,
             userInfo: userInfo,
-            deliverImmediately: true
-        )
-        return .ok(action)
-    }
-
-    // ============================================================
-    // PRIVATE: handleTmux
-    // ============================================================
-
-    // Notification names observed by grid-notify (defined in P1 SKILL.md).
-    // Internal (not private) so tests can assert the exact names without magic strings.
-    static let tmuxToggleNotification = "com.thegrid.tmux.toggle"
-    static let tmuxRefreshNotification = "com.thegrid.tmux.refresh"
-
-    // Posts the DistributedNotification corresponding to the tmux action.
-    // Supported actions: toggle (show/hide dashboard + driver), refresh (immediate update).
-    // Unknown actions return an error without posting.
-    private func handleTmux(_ cmd: ParsedCommand) -> CommandResult {
-        let action = cmd.action.isEmpty ? "toggle" : cmd.action
-        let notificationName: String
-        switch action {
-        case "toggle":
-            notificationName = Self.tmuxToggleNotification
-        case "refresh":
-            notificationName = Self.tmuxRefreshNotification
-        default:
-            return .error("unknown tmux action: \(action)")
-        }
-
-        jlog("grid.rpc.dispatch", data: ["cmd": "@tmux \(action)", "name": notificationName])
-        DistributedNotificationCenter.default().postNotificationName(
-            NSNotification.Name(notificationName),
-            object: nil,
-            userInfo: nil,
             deliverImmediately: true
         )
         return .ok(action)

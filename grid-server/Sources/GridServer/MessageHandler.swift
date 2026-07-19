@@ -2030,16 +2030,6 @@ completion(Response(id: request.id, result: AnyCodable(["success": true])))
             dispatchAndRespond(request, commandString: "@notify unassign", completion: completion)
         }
 
-        // grid.tmux.toggle -- {} -- posts com.thegrid.tmux.toggle to grid-notify
-        register(method: "grid.tmux.toggle") { request, completion in
-            dispatchAndRespond(request, commandString: "@tmux toggle", completion: completion)
-        }
-
-        // grid.tmux.refresh -- {} -- posts com.thegrid.tmux.refresh to grid-notify
-        register(method: "grid.tmux.refresh") { request, completion in
-            dispatchAndRespond(request, commandString: "@tmux refresh", completion: completion)
-        }
-
         jlog("grid.rpc.registered")
     }
 }
