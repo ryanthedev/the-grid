@@ -44,9 +44,18 @@ of the fresh file. Total usage is bounded at `maxBytes × (keep + 1)`.
 |---------|---------|-------------|
 | `THEGRID_LOG_MAX_BYTES` | `33554432` (32 MB) | Per-file ceiling. `0` disables rotation. |
 | `THEGRID_LOG_KEEP` | `5` | Archives kept alongside the live file. `0` discards with no history. |
+| `THEGRID_LOG_PATH` | unset | Full override of the log file path. |
 
 Only the server rotates. The CLI and notify logs have no rotation — they are
 orders of magnitude smaller.
+
+**Tests never write to the real log.** The suite exercises production code that
+calls `jlog`, so `swift test` used to append to `thegrid-server.json` (and,
+once rotation existed, could rotate it out from under the running server).
+When XCTest is loaded the log is redirected to
+`$TMPDIR/thegrid-tests/thegrid-server.json`. Note `XCTestConfigurationFilePath`
+is *not* set under `swift test` — the detection uses whether the XCTest class
+is loaded.
 
 ### Usage
 

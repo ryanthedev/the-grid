@@ -113,6 +113,7 @@ final class EventAllowlistTests: XCTestCase {
         "focus.cross.cells", "focus.cross.corrected", "focus.cross.err",
         "focus.cross.found", "focus.cross.no_adjacent", "focus.cross.no_display",
         "focus.cross.try",
+        "focus.cell.skip",
         "focus.cycle.race", "focus.cycle.skip",
         "focus.init", "focus.mismatch", "focus.mismatch.accept",
         "focus.move", "focus.prune", "focus.restore.stale",

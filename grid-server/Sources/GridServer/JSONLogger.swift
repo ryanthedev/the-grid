@@ -20,11 +20,43 @@ final class JSONLogWriter {
     private let maxBytes: Int
     private let keep: Int
 
+    /// Resolve the log file path.
+    ///
+    /// The test suite must never write to the real server log. It exercises
+    /// production code paths that call `jlog`, so `swift test` appended to
+    /// ~/.local/state/thegrid/thegrid-server.json — and once rotation landed,
+    /// a test run could rotate the user's live log out from under the running
+    /// server. XCTest being loaded is the signal that works for both `swift
+    /// test` and Xcode; XCTestConfigurationFilePath does not (SwiftPM leaves
+    /// it unset, verified on this toolchain).
+    ///
+    /// THEGRID_LOG_PATH overrides both, for redirecting a real run.
+    static func resolveLogPath(
+        stateHome: String,
+        environment: [String: String],
+        xctestLoaded: Bool,
+        temporaryDirectory: String
+    ) -> String {
+        if let override = environment["THEGRID_LOG_PATH"], !override.isEmpty {
+            return override
+        }
+        if xctestLoaded {
+            return (temporaryDirectory as NSString)
+                .appendingPathComponent("thegrid-tests/thegrid-server.json")
+        }
+        return (stateHome as NSString)
+            .appendingPathComponent("thegrid/thegrid-server.json")
+    }
+
     private convenience init() {
-        let logDir = "\(XDG.stateHome)/thegrid"
         let env = ProcessInfo.processInfo.environment
         self.init(
-            filePath: "\(logDir)/thegrid-server.json",
+            filePath: JSONLogWriter.resolveLogPath(
+                stateHome: XDG.stateHome,
+                environment: env,
+                xctestLoaded: NSClassFromString("XCTestCase") != nil,
+                temporaryDirectory: NSTemporaryDirectory()
+            ),
             maxBytes: LogRotationPolicy.envInt(
                 "THEGRID_LOG_MAX_BYTES",
                 default: LogRotationPolicy.defaultMaxBytes,

@@ -200,6 +200,71 @@ final class LogRotationPolicyTests: XCTestCase {
         XCTAssertEqual(live.split(separator: "\n").count, 20)
     }
 
+    // MARK: - resolveLogPath
+    //
+    // Regression guard: before this, `swift test` appended to the real server
+    // log, and after rotation landed a test run rotated the user's live 411 MB
+    // log out from under the running server.
+
+    func test_resolveLogPath_underTestsGoesToTempNotStateHome() {
+        let path = JSONLogWriter.resolveLogPath(
+            stateHome: "/Users/r/.local/state",
+            environment: [:],
+            xctestLoaded: true,
+            temporaryDirectory: "/var/tmp/"
+        )
+        XCTAssertFalse(path.contains("/.local/state"), "must not touch the real log: \(path)")
+        XCTAssertEqual(path, "/var/tmp/thegrid-tests/thegrid-server.json")
+    }
+
+    func test_resolveLogPath_inProductionUsesStateHome() {
+        XCTAssertEqual(
+            JSONLogWriter.resolveLogPath(
+                stateHome: "/Users/r/.local/state",
+                environment: [:],
+                xctestLoaded: false,
+                temporaryDirectory: "/var/tmp/"
+            ),
+            "/Users/r/.local/state/thegrid/thegrid-server.json"
+        )
+    }
+
+    func test_resolveLogPath_explicitOverrideWinsOverBoth() {
+        for loaded in [true, false] {
+            XCTAssertEqual(
+                JSONLogWriter.resolveLogPath(
+                    stateHome: "/Users/r/.local/state",
+                    environment: ["THEGRID_LOG_PATH": "/somewhere/else.json"],
+                    xctestLoaded: loaded,
+                    temporaryDirectory: "/var/tmp/"
+                ),
+                "/somewhere/else.json"
+            )
+        }
+    }
+
+    func test_resolveLogPath_emptyOverrideIsIgnored() {
+        XCTAssertEqual(
+            JSONLogWriter.resolveLogPath(
+                stateHome: "/state",
+                environment: ["THEGRID_LOG_PATH": ""],
+                xctestLoaded: false,
+                temporaryDirectory: "/var/tmp/"
+            ),
+            "/state/thegrid/thegrid-server.json"
+        )
+    }
+
+    // This process IS a test process, so the live singleton must already be
+    // pointed away from the real log.
+    func test_sharedWriterInThisProcessIsNotTheRealServerLog() {
+        let live = JSONLogWriter.shared.logPath
+        XCTAssertFalse(
+            live.hasSuffix("/.local/state/thegrid/thegrid-server.json"),
+            "the suite is writing to the real server log: \(live)"
+        )
+    }
+
     // MARK: - envInt
 
     func test_envInt_readsValue() {

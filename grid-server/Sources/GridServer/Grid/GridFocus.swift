@@ -17,6 +17,7 @@ enum GridFocusError: Error, LocalizedError {
     case noCellsWithWindows
     case noCellInDirection
     case noWindowsInCell(String)
+    case allWindowsUnfocusable(String)
     case windowNotFound(UInt32)
     case focusFailed(UInt32)
     case cannotDetermineDisplay
@@ -31,6 +32,7 @@ enum GridFocusError: Error, LocalizedError {
         case .noCellsWithWindows: return "no cells with windows"
         case .noCellInDirection: return "no cell in direction"
         case .noWindowsInCell(let id): return "no windows in cell \(id)"
+        case .allWindowsUnfocusable(let id): return "no focusable window in cell \(id)"
         case .windowNotFound(let id): return "window \(id) not found"
         case .focusFailed(let id): return "focus failed for window \(id)"
         case .cannotDetermineDisplay: return "cannot determine current display"
@@ -338,7 +340,7 @@ class GridFocus {
         }
 
         // All windows in cell were unfocusable
-        throw GridFocusError.noWindowsInCell(cellID)
+        throw GridFocusError.allWindowsUnfocusable(cellID)
     }
 
     // detectFocusRace: pure predicate for the same-cell race branch in
@@ -383,6 +385,24 @@ class GridFocus {
             return actual == requested
                 || detectFocusRace(actual: actual, cellWindows: cellWindows)
         }
+    }
+
+    // focusCandidateOrder: the order in which a cell's windows are tried when
+    // focusing the cell itself (as opposed to cycling within it). The restored
+    // window comes first; the rest follow in list order, wrapping, so no
+    // candidate is tried twice and none is skipped.
+    //
+    // Directional focus used to try only the preferred index and abort if it
+    // failed. A cell holding one unfocusable window — Spotify exposes a CG
+    // window with zero AX windows behind it — then dead-ended every direction:
+    // once focus landed there, `focus left/right/up/down` all threw
+    // focusFailed on the same wid until the user clicked something manually.
+    // cycleFocus already skipped unfocusable candidates; this is the same
+    // intent for the directional path.
+    static func focusCandidateOrder(preferredIdx: Int, windowCount: Int) -> [Int] {
+        guard windowCount > 0 else { return [] }
+        let start = max(0, min(preferredIdx, windowCount - 1))
+        return (0..<windowCount).map { (start + $0) % windowCount }
     }
 
     // focusCell: focus a specific cell by ID
@@ -447,15 +467,46 @@ class GridFocus {
             }
         }
 
-        let windowID = cellWindows[idx]
+        // Try the restored window first, then the cell's other windows. A
+        // candidate the OS refuses to focus must not abort the whole command —
+        // see focusCandidateOrder for the dead-end this fixes.
+        for candidateIdx in GridFocus.focusCandidateOrder(
+            preferredIdx: idx,
+            windowCount: cellWindows.count
+        ) {
+            let windowID = cellWindows[candidateIdx]
 
-        // Do the AX focus
-        try await focusWindowByID(windowID)
+            let attempt: CycleFocusAttempt
+            do {
+                attempt = .focused(try await focusWindowByID(windowID))
+            } catch let error as GridFocusError {
+                switch error {
+                case .focusFailed, .windowNotFound:
+                    jlog("focus.cell.skip", data: [
+                        "wid": Int(windowID),
+                        "cell": cellID,
+                        "reason": "unfocusable",
+                    ])
+                    continue
+                default:
+                    throw error
+                }
+            }
 
-        // Update GridState focus tracking
-        await gridState.setFocus(spaceID: spaceID, cellID: cellID, windowIndex: idx)
+            // Same decision the cycle path uses: commit on an exact hit or a
+            // same-cell late-notification race, skip when the OS focused
+            // something outside this cell.
+            guard GridFocus.shouldCommitFocus(
+                requested: windowID,
+                attempt: attempt,
+                cellWindows: cellWindows
+            ) else { continue }
 
-        return windowID
+            await gridState.setFocus(spaceID: spaceID, cellID: cellID, windowIndex: candidateIdx)
+            return windowID
+        }
+
+        throw GridFocusError.allWindowsUnfocusable(cellID)
     }
 
     // focusWindowByID: focus a window via WindowManipulator with mismatch retry.
