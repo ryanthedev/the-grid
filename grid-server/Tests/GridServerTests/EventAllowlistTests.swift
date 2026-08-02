@@ -67,8 +67,6 @@ final class EventAllowlistTests: XCTestCase {
         "err.term.show",
         "grid.state.load.merge",
         "msg.ready",
-        "mss.reprobe",
-        "mss.reset",
         "warn.bfd.watch",
         "warn.term.frame",
 
@@ -105,7 +103,7 @@ final class EventAllowlistTests: XCTestCase {
         "err.grid.cfg", "err.grid.cfg.reload", "err.grid.state.load",
         "err.grid.state.save", "err.mouse",
         "err.mouse.runloop_failed", "err.mouse.tap_failed",
-        "err.mss", "err.mss.batch_move", "err.resize.exec", "err.sls",
+        "err.resize.exec", "err.sls",
         "err.space", "err.srv.start", "err.stack.noDisplayFrame",
         "err.state", "err.term.frames.load", "err.term.frames.save",
         "err.term.launch", "err.term.timeout", "err.verify",
@@ -129,8 +127,6 @@ final class EventAllowlistTests: XCTestCase {
         "layout.refresh_all.done", "layout.refresh_all.start",
         "mouse.down", "mouse.drag", "mouse.init", "mouse.start", "mouse.stop",
         "msg.err", "msg.handle", "msg.register",
-        "mss.available", "mss.fail", "mss.focus", "mss.init",
-        "mss.minimize", "mss.shadow", "mss.unavailable", "mss.unminimize",
         "notify.err", "notify.launch",
         "nudge.enter", "nudge.err.tap", "nudge.exit",
         "nudge.init", "nudge.move", "nudge.resize",
@@ -227,10 +223,11 @@ final class EventAllowlistTests: XCTestCase {
         "reconcile.not_standard.refresh_gone",
         "validate.win.untracked",
         "warn.pick.launch_fail",
-        // #29s/#60s/#61s instrumentation (confirm-or-drop in UAT).
+        // #29s/#60s instrumentation (confirm-or-drop in UAT).
+        // #61s was confirmed and its trace ("warn.subrole.unknown") dropped —
+        // it accounted for 96% of all log volume. See StateManager.updateWindowFromPoll.
         "warn.space.derive_override",
         "warn.poll.readd",
-        "warn.subrole.unknown",
 
         // Phase 5 (geometry writes) — new events.
         // #10: cross-display move abort when SLS call fails.

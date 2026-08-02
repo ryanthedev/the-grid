@@ -29,15 +29,9 @@ let package = Package(
         .package(url: "https://github.com/open-telemetry/opentelemetry-swift-core.git", from: "2.3.0")
     ],
     targets: [
-        .systemLibrary(
-            name: "mss",
-            path: "include/mss",
-            pkgConfig: "mss"
-        ),
         .executableTarget(
             name: "GridServer",
             dependencies: [
-                "mss",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
                 .product(name: "Logging", package: "swift-log"),
                 .product(name: "Yams", package: "Yams"),
@@ -46,8 +40,6 @@ let package = Package(
             ],
             path: "Sources/GridServer",
             linkerSettings: [
-                .unsafeFlags(["-L", "lib"]),
-                .linkedLibrary("mss"),
                 .unsafeFlags(["-F", "/System/Library/PrivateFrameworks"]),
                 .linkedFramework("SkyLight")
             ]

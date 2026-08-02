@@ -1,6 +1,5 @@
 import Foundation
 import Logging
-import mss
 import CoreGraphics
 import AppKit
 
@@ -500,185 +499,7 @@ class MessageHandler {
             }
         }
 
-        // MARK: - Window Opacity Methods (MSS)
-
-        // Set window opacity
-        register(method: "window.setOpacity") { request, completion in
-            guard let params = request.params else {
-                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
-                return
-            }
-
-            guard let windowId = params["windowId"]?.value as? String,
-                  let windowID = UInt32(windowId),
-                  let opacity = ((params["opacity"]?.value as? NSNumber))?.floatValue else {
-                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Missing windowId or opacity")))
-                return
-            }
-
-            Task {
-                let state = await StateManager.shared.getState()
-                let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
-
-                if manipulator.mssClient.setWindowOpacity(windowID: windowID, opacity: opacity) {
-                    completion(Response(id: request.id, result: AnyCodable(["success": true, "windowId": windowId, "opacity": opacity])))
-                } else {
-                    completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to set window opacity. MSS may not be available.")))
-                }
-            }
-        }
-
-        // Fade window opacity
-        register(method: "window.fadeOpacity") { request, completion in
-            guard let params = request.params else {
-                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
-                return
-            }
-
-            guard let windowId = params["windowId"]?.value as? String,
-                  let windowID = UInt32(windowId),
-                  let opacity = ((params["opacity"]?.value as? NSNumber))?.floatValue,
-                  let duration = ((params["duration"]?.value as? NSNumber))?.floatValue else {
-                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Missing windowId, opacity, or duration")))
-                return
-            }
-
-            Task {
-                let state = await StateManager.shared.getState()
-                let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
-
-                if manipulator.mssClient.fadeWindowOpacity(windowID: windowID, opacity: opacity, duration: duration) {
-                    completion(Response(id: request.id, result: AnyCodable(["success": true, "windowId": windowId, "opacity": opacity, "duration": duration])))
-                } else {
-                    completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to fade window opacity. MSS may not be available.")))
-                }
-            }
-        }
-
-        // Get window opacity
-        register(method: "window.getOpacity") { request, completion in
-            guard let params = request.params else {
-                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
-                return
-            }
-
-            guard let windowId = params["windowId"]?.value as? String,
-                  let windowID = UInt32(windowId) else {
-                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Missing windowId")))
-                return
-            }
-
-            Task {
-                let state = await StateManager.shared.getState()
-                let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
-
-                if let opacity = manipulator.mssClient.getWindowOpacity(windowID) {
-                    completion(Response(id: request.id, result: AnyCodable(["windowId": windowId, "opacity": opacity])))
-                } else {
-                    completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to get window opacity")))
-                }
-            }
-        }
-
-        // MARK: - Window Layer Methods (MSS)
-
-        // Set window layer
-        register(method: "window.setLayer") { request, completion in
-            guard let params = request.params else {
-                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
-                return
-            }
-
-            guard let windowId = params["windowId"]?.value as? String,
-                  let windowID = UInt32(windowId),
-                  let layerStr = params["layer"]?.value as? String else {
-                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Missing windowId or layer")))
-                return
-            }
-
-            guard let layer = WindowLayer(string: layerStr) else {
-                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid layer. Must be 'below', 'normal', or 'above'")))
-                return
-            }
-
-            Task {
-                let state = await StateManager.shared.getState()
-                let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
-
-                if manipulator.mssClient.setWindowLayer(windowID: windowID, layer: layer) {
-                    completion(Response(id: request.id, result: AnyCodable(["success": true, "windowId": windowId, "layer": layer.description])))
-                } else {
-                    completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to set window layer. MSS may not be available.")))
-                }
-            }
-        }
-
-        // Get window layer
-        register(method: "window.getLayer") { request, completion in
-            guard let params = request.params else {
-                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
-                return
-            }
-
-            guard let windowId = params["windowId"]?.value as? String,
-                  let windowID = UInt32(windowId) else {
-                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Missing windowId")))
-                return
-            }
-
-            Task {
-                let state = await StateManager.shared.getState()
-                let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
-
-                if let layer = manipulator.mssClient.getWindowLayer(windowID) {
-                    let layerStr = layer.description
-                    completion(Response(id: request.id, result: AnyCodable(["windowId": windowId, "layer": layerStr])))
-                } else {
-                    completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to get window layer")))
-                }
-            }
-        }
-
-        // MARK: - Window Visibility Methods (SLS)
-
-        // Check if window is ordered in (visible)
-        register(method: "window.isOrderedIn") { request, completion in
-            guard let params = request.params else {
-                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
-                return
-            }
-
-            guard let windowId = params["windowId"]?.value as? String,
-                  let windowID = UInt32(windowId) else {
-                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Missing windowId")))
-                return
-            }
-
-            Task {
-                let state = await StateManager.shared.getState()
-                var value: UInt8 = 0
-                let err = SLSWindowIsOrderedIn(state.metadata.connectionID, windowID, &value)
-                if err == .success {
-                    // Include window's space membership and frame for space-aware toggle
-                    let win = state.windows[windowId]
-                    let spaces = win?.spaces ?? []
-                    let spacesStrings = spaces.map { String($0) }
-                    var result: [String: Any] = [
-                        "windowId": windowId,
-                        "isOrderedIn": value != 0,
-                        "spaces": spacesStrings
-                    ]
-                    if let f = win?.frame {
-                        result["frame"] = ["x": f.origin.x, "y": f.origin.y, "width": f.width, "height": f.height]
-                    }
-                    completion(Response(id: request.id, result: AnyCodable(result)))
-                } else {
-                    completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to check window ordered-in state")))
-                }
-            }
-        }
-
-        // Hide window (NSRunningApplication.hide for cross-process, MSS fallback)
+        // Hide window (hides the owning app process via NSRunningApplication)
         register(method: "window.hide") { request, completion in
             guard let params = request.params else {
                 completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
@@ -686,23 +507,18 @@ class MessageHandler {
             }
 
             guard let windowId = params["windowId"]?.value as? String,
-                  let windowID = UInt32(windowId) else {
+                  UInt32(windowId) != nil else {
                 completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Missing windowId")))
                 return
             }
 
             Task {
                 let state = await StateManager.shared.getState()
-                let cid = state.metadata.connectionID
 
-                // Try MSS first (works when available)
-                let manipulator = WindowManipulator(connectionID: cid)
-                if manipulator.mssClient.orderWindowOut(windowID) {
-                    completion(Response(id: request.id, result: AnyCodable(["success": true, "windowId": windowId])))
-                    return
-                }
-
-                // Fallback: hide via NSRunningApplication (hides entire app process)
+                // Hide via NSRunningApplication (hides entire app process).
+                // The MSS orderWindowOut attempt that used to run first is gone;
+                // it required SIP off and never completed a handshake, so this
+                // path already handled every call.
                 if let windowState = state.windows[windowId],
                    let app = NSRunningApplication(processIdentifier: windowState.pid) {
                     app.hide()
@@ -713,7 +529,7 @@ class MessageHandler {
             }
         }
 
-        // Show window (NSRunningApplication.unhide + activate, MSS fallback)
+        // Show window (unhide + activate the owning app via NSRunningApplication)
         register(method: "window.show") { request, completion in
             guard let params = request.params else {
                 completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
@@ -721,25 +537,18 @@ class MessageHandler {
             }
 
             guard let windowId = params["windowId"]?.value as? String,
-                  let windowID = UInt32(windowId) else {
+                  UInt32(windowId) != nil else {
                 completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Missing windowId")))
                 return
             }
 
             Task {
                 let state = await StateManager.shared.getState()
-                let cid = state.metadata.connectionID
 
-                // Try MSS first
-                let manipulator = WindowManipulator(connectionID: cid)
-                let ordered = manipulator.mssClient.orderWindowToFront(windowID)
-                let focused = manipulator.mssClient.focusWindow(windowID)
-                if ordered || focused {
-                    completion(Response(id: request.id, result: AnyCodable(["success": true, "windowId": windowId])))
-                    return
-                }
-
-                // Fallback: unhide + activate via NSRunningApplication
+                // Unhide + activate via NSRunningApplication. The MSS
+                // order-to-front/focus attempt that used to run first is gone;
+                // it required SIP off and never completed a handshake, so this
+                // path already handled every call.
                 if let windowState = state.windows[windowId],
                    let app = NSRunningApplication(processIdentifier: windowState.pid) {
                     app.unhide()
@@ -751,58 +560,7 @@ class MessageHandler {
             }
         }
 
-        // MARK: - Window Sticky/Minimize Methods (MSS)
-
-        // Set window sticky
-        register(method: "window.setSticky") { request, completion in
-            guard let params = request.params else {
-                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
-                return
-            }
-
-            guard let windowId = params["windowId"]?.value as? String,
-                  let windowID = UInt32(windowId),
-                  let sticky = (params["sticky"]?.value as? Bool) else {
-                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Missing windowId or sticky")))
-                return
-            }
-
-            Task {
-                let state = await StateManager.shared.getState()
-                let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
-
-                if manipulator.mssClient.setWindowSticky(windowID: windowID, sticky: sticky) {
-                    completion(Response(id: request.id, result: AnyCodable(["success": true, "windowId": windowId, "sticky": sticky])))
-                } else {
-                    completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to set window sticky. MSS may not be available.")))
-                }
-            }
-        }
-
-        // Get window sticky status
-        register(method: "window.isSticky") { request, completion in
-            guard let params = request.params else {
-                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
-                return
-            }
-
-            guard let windowId = params["windowId"]?.value as? String,
-                  let windowID = UInt32(windowId) else {
-                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Missing windowId")))
-                return
-            }
-
-            Task {
-                let state = await StateManager.shared.getState()
-                let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
-
-                if let sticky = manipulator.mssClient.isWindowSticky(windowID) {
-                    completion(Response(id: request.id, result: AnyCodable(["windowId": windowId, "sticky": sticky])))
-                } else {
-                    completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to get window sticky status")))
-                }
-            }
-        }
+        // MARK: - Window Minimize Methods (Accessibility)
 
         // Minimize window
         register(method: "window.minimize") { request, completion in
@@ -838,7 +596,7 @@ class MessageHandler {
                 if await manipulator.minimizeWindow(context: context) {
                     completion(Response(id: request.id, result: AnyCodable(["success": true, "windowId": windowId])))
                 } else {
-                    completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to minimize window. MSS may not be available.")))
+                    completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to minimize window")))
                 }
             }
         }
@@ -870,7 +628,7 @@ class MessageHandler {
                 if await manipulator.unminimizeWindow(context: context) {
                     completion(Response(id: request.id, result: AnyCodable(["success": true, "windowId": windowId])))
                 } else {
-                    completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to unminimize window. MSS may not be available.")))
+                    completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to unminimize window")))
                 }
             }
         }
@@ -892,7 +650,12 @@ class MessageHandler {
                 let state = await StateManager.shared.getState()
                 let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
 
-                if let minimized = manipulator.mssClient.isWindowMinimized(windowID) {
+                guard let pid = state.windows[windowId]?.pid else {
+                    completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Unknown window")))
+                    return
+                }
+
+                if let minimized = manipulator.isWindowMinimized(pid: pid, windowID: windowID) {
                     completion(Response(id: request.id, result: AnyCodable(["windowId": windowId, "minimized": minimized])))
                 } else {
                     completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to get window minimized status")))
@@ -976,7 +739,12 @@ class MessageHandler {
             Task {
                 let state = await StateManager.shared.getState()
                 let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
-                if manipulator.mssClient.orderWindowToFront(windowID) {
+                guard let pid = state.windows[windowId]?.pid else {
+                    completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Unknown window")))
+                    return
+                }
+
+                if manipulator.raiseWindow(pid: pid, windowID: windowID) {
                     completion(Response(id: request.id, result: AnyCodable(["success": true, "windowId": windowId])))
                 } else {
                     completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to raise window")))
@@ -1043,83 +811,6 @@ class MessageHandler {
                         "id": request.id
                     ])
                     completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to focus window")))
-                }
-            }
-        }
-
-        // MARK: - Space Management Methods (MSS)
-
-        // Create space
-        register(method: "space.create") { request, completion in
-            guard let params = request.params else {
-                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
-                return
-            }
-
-            guard let spaceIdStr = params["displaySpaceId"]?.value as? String,
-                  let displaySpaceID = UInt64(spaceIdStr) else {
-                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Missing displaySpaceId")))
-                return
-            }
-
-            Task {
-                let state = await StateManager.shared.getState()
-                let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
-
-                if manipulator.mssClient.createSpace(on: displaySpaceID) {
-                    completion(Response(id: request.id, result: AnyCodable(["success": true, "displaySpaceId": spaceIdStr])))
-                } else {
-                    completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to create space. MSS may not be available.")))
-                }
-            }
-        }
-
-        // Destroy space
-        register(method: "space.destroy") { request, completion in
-            guard let params = request.params else {
-                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
-                return
-            }
-
-            guard let spaceIdStr = params["spaceId"]?.value as? String,
-                  let spaceID = UInt64(spaceIdStr) else {
-                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Missing spaceId")))
-                return
-            }
-
-            Task {
-                let state = await StateManager.shared.getState()
-                let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
-
-                if manipulator.mssClient.destroySpace(spaceID) {
-                    completion(Response(id: request.id, result: AnyCodable(["success": true, "spaceId": spaceIdStr])))
-                } else {
-                    completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to destroy space. MSS may not be available.")))
-                }
-            }
-        }
-
-        // Focus space
-        register(method: "space.focus") { request, completion in
-            guard let params = request.params else {
-                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Invalid params")))
-                return
-            }
-
-            guard let spaceIdStr = params["spaceId"]?.value as? String,
-                  let spaceID = UInt64(spaceIdStr) else {
-                completion(Response(id: request.id, error: ErrorInfo(code: -32602, message: "Missing spaceId")))
-                return
-            }
-
-            Task {
-                let state = await StateManager.shared.getState()
-                let manipulator = WindowManipulator(connectionID: state.metadata.connectionID)
-
-                if manipulator.mssClient.focusSpace(spaceID) {
-                    completion(Response(id: request.id, result: AnyCodable(["success": true, "spaceId": spaceIdStr])))
-                } else {
-                    completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to focus space. MSS may not be available.")))
                 }
             }
         }

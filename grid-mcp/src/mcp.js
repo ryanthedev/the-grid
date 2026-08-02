@@ -553,7 +553,7 @@ server.tool(
 );
 
 // ============================================================================
-// Window Tools (14)
+// Window Tools (8)
 // ============================================================================
 
 server.tool(
@@ -630,65 +630,8 @@ server.tool(
   makeRpcHandler("window.hide")
 );
 
-server.tool(
-  "window.setOpacity",
-  "Set window transparency. 0.0 = fully transparent, 1.0 = fully opaque.",
-  {
-    windowId: z.string().describe("Window ID"),
-    opacity: z.number().describe("Opacity value from 0.0 to 1.0"),
-  },
-  makeRpcHandler("window.setOpacity")
-);
-
-server.tool(
-  "window.getOpacity",
-  "Get the current opacity of a window.",
-  {
-    windowId: z.string().describe("Window ID"),
-  },
-  makeRpcHandler("window.getOpacity")
-);
-
-server.tool(
-  "window.setLayer",
-  "Set window stacking layer: 'above' stays on top, 'below' stays behind, 'normal' is default.",
-  {
-    windowId: z.string().describe("Window ID"),
-    layer: z.enum(["below", "normal", "above"]).describe("Window layer"),
-  },
-  makeRpcHandler("window.setLayer")
-);
-
-server.tool(
-  "window.getLayer",
-  "Get the current stacking layer of a window.",
-  {
-    windowId: z.string().describe("Window ID"),
-  },
-  makeRpcHandler("window.getLayer")
-);
-
-server.tool(
-  "window.setSticky",
-  "Make a window appear on all macOS spaces (sticky) or only its current space.",
-  {
-    windowId: z.string().describe("Window ID"),
-    sticky: z.boolean().describe("true = show on all spaces, false = current space only"),
-  },
-  makeRpcHandler("window.setSticky")
-);
-
-server.tool(
-  "window.isSticky",
-  "Check if a window appears on all macOS spaces.",
-  {
-    windowId: z.string().describe("Window ID"),
-  },
-  makeRpcHandler("window.isSticky")
-);
-
 // ============================================================================
-// Query Tools (9)
+// Query Tools (8)
 // ============================================================================
 
 server.tool(
@@ -734,15 +677,6 @@ server.tool(
   "Get the complete window manager state: all windows (with frame, app, title, spaces), all displays, all apps. Large response.",
   {},
   makeRpcHandler("dump")
-);
-
-server.tool(
-  "space.focus",
-  "Switch to a specific macOS space by its numeric ID.",
-  {
-    spaceId: z.string().describe("Space ID to switch to"),
-  },
-  makeRpcHandler("space.focus")
 );
 
 server.tool(

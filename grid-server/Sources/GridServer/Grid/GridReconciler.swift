@@ -1243,6 +1243,23 @@ class GridReconciler: StateEventHandler {
             jlog("reconcile.space.activated.no_display", data: ["space": spaceID])
             return
         }
+
+        // Reset AX orphan tracking on a plain desktop switch, for the same
+        // reason handleSpaceIDReassigned does it: windows on the space we just
+        // left stop appearing in their app's AX window list, which the
+        // validator's 2-cycle threshold reads as death rather than as a
+        // transition.
+        //
+        // Measured over 57.8h of logs: intervals within +/-120s of a space or
+        // active-display change cover only ~6.5% of the timeline but contain
+        // 93% of all ax_orphan prunes (14x lift). Those prunes were false
+        // positives — the pruned window was re-adopted moments later, which is
+        // the prune/re-adopt churn observed on Spotify, WhatsApp, Activity
+        // Monitor and Chrome. Clearing the counts here makes the validator
+        // re-observe a window for 2 fresh cycles after a switch before
+        // concluding anything.
+        await stateValidator?.resetAllOrphanCounts()
+
         await syncBordersForSpace(spaceID, displayUUID: displayUUID)
         jlog("reconcile.space.activated", data: ["space": spaceID, "display": displayUUID])
     }

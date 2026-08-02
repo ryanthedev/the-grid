@@ -40,15 +40,13 @@ struct ManipulationContext {
 }
 
 /// Helper class for window manipulation operations
-// @unchecked Sendable: connectionID and mssClient are write-once at init;
+// @unchecked Sendable: connectionID is write-once at init;
 // all AX/SkyLight calls are safe to issue from any thread.
 class WindowManipulator: @unchecked Sendable {
     private let connectionID: Int32
-    let mssClient: MSSClient
 
     init(connectionID: Int32) {
         self.connectionID = connectionID
-        self.mssClient = MSSClient()
     }
 
     // MARK: - AX Element Lookup
@@ -242,9 +240,88 @@ class WindowManipulator: @unchecked Sendable {
         return result
     }
 
+    /// Set the AX minimized attribute on a window.
+    ///
+    /// Replaces the previous MSS implementation. MSS required SIP to be
+    /// partially disabled and never completed a handshake in practice, so both
+    /// minimize and unminimize silently returned false with no fallback path.
+    /// kAXMinimizedAttribute is settable through plain Accessibility — no
+    /// private APIs, no SIP requirement.
+    func setWindowMinimized(pid: pid_t, windowID: UInt32, minimized: Bool) -> Bool {
+        guard let element = getAXElement(pid: pid, windowID: windowID) else {
+            JSONLogger.shared.log("ax.fail", data: [
+                "op": minimized ? "minimize" : "unminimize",
+                "reason": "no_ax_element",
+                "wid": windowID,
+            ])
+            return false
+        }
+
+        let result = AXUIElementSetAttributeValue(
+            element,
+            kAXMinimizedAttribute as CFString,
+            minimized as CFBoolean
+        )
+
+        if result != AXError.success {
+            JSONLogger.shared.log("ax.fail", data: [
+                "op": minimized ? "minimize" : "unminimize",
+                "err": result.rawValue,
+                "wid": windowID,
+            ])
+            return false
+        }
+
+        return true
+    }
+
+    /// Raise a window to the front of its app's window stack without moving
+    /// keyboard focus. Replaces the MSS orderWindowToFront primitive.
+    ///
+    /// Caveat worth knowing: kAXRaiseAction raises within the owning
+    /// application only. MSS could reorder across applications; AX cannot. If
+    /// cross-app ordering is needed it requires a SkyLight implementation
+    /// (SLSOrderWindow), not a scripting addition.
+    func raiseWindow(pid: pid_t, windowID: UInt32) -> Bool {
+        guard let element = getAXElement(pid: pid, windowID: windowID) else {
+            JSONLogger.shared.log("ax.fail", data: [
+                "op": "raise", "reason": "no_ax_element", "wid": windowID,
+            ])
+            return false
+        }
+
+        let result = AXUIElementPerformAction(element, kAXRaiseAction as CFString)
+        if result != AXError.success {
+            JSONLogger.shared.log("ax.fail", data: [
+                "op": "raise", "err": result.rawValue, "wid": windowID,
+            ])
+            return false
+        }
+        return true
+    }
+
+    /// Query the AX minimized attribute. Returns nil when the window has no
+    /// reachable AX element or does not expose the attribute.
+    func isWindowMinimized(pid: pid_t, windowID: UInt32) -> Bool? {
+        guard let element = getAXElement(pid: pid, windowID: windowID) else { return nil }
+
+        var value: CFTypeRef?
+        let result = AXUIElementCopyAttributeValue(
+            element,
+            kAXMinimizedAttribute as CFString,
+            &value
+        )
+        guard result == .success, let minimized = value as? Bool else { return nil }
+        return minimized
+    }
+
     /// Minimize window using context - updates state immediately on success
     func minimizeWindow(context: ManipulationContext) async -> Bool {
-        let result = mssClient.minimizeWindow(context.windowID)
+        let result = setWindowMinimized(
+            pid: context.pid,
+            windowID: context.windowID,
+            minimized: true
+        )
         if result {
             await context.stateManager.setWindowMinimized(context.windowID, minimized: true)
         }
@@ -253,7 +330,11 @@ class WindowManipulator: @unchecked Sendable {
 
     /// Unminimize window using context - updates state immediately on success
     func unminimizeWindow(context: ManipulationContext) async -> Bool {
-        let result = mssClient.unminimizeWindow(context.windowID)
+        let result = setWindowMinimized(
+            pid: context.pid,
+            windowID: context.windowID,
+            minimized: false
+        )
         if result {
             await context.stateManager.setWindowMinimized(context.windowID, minimized: false)
         }
@@ -378,65 +459,28 @@ class WindowManipulator: @unchecked Sendable {
 return true
         }
 
-        // Determine method based on macOS version and MSS availability
-        let needsWorkaround = needsCompatibilityWorkaround()
+        // Direct SkyLight move. This used to branch on macOS version and try the
+        // MSS scripting addition first, but that path required SIP to be
+        // partially disabled and never completed a handshake in practice, so
+        // every call already fell through to SkyLight. The branch is gone along
+        // with MSS; both arms did the same thing.
+        let success = moveWindowViaSkyLightAPI(windowID: windowID, spaceID: spaceID)
 
-        if needsWorkaround {
-            // macOS 12.7+, 13.6+, 14.5+, 15+ - try MSS first, then fail gracefully
-            if mssClient.isAvailable() {
-
-                // Use MSS to move window
-                let t2 = CFAbsoluteTimeGetCurrent()
-                let success = mssClient.moveWindowToSpace(windowID: windowID, spaceID: spaceID)
-                let t3 = CFAbsoluteTimeGetCurrent()
-
-                if !success {
-                    JSONLogger.shared.log("mss.fail", data: ["op": "move", "wid": windowID, "sid": spaceID])
-                    return false
-                }
-
-                // Verify the move
-                let newSpace = getWindowSpace(windowID: windowID)
-                let t4 = CFAbsoluteTimeGetCurrent()
-                let verified = newSpace == spaceID
-
-                JSONLogger.shared.log("win.space.timing", data: [
-                    "wid": windowID,
-                    "method": "mss",
-                    "check_space_ms": Int((t1 - t0) * 1000),
-                    "mss_move_ms": Int((t3 - t2) * 1000),
-                    "verify_ms": Int((t4 - t3) * 1000),
-                    "total_ms": Int((t4 - t0) * 1000),
-                ])
-
-                if verified {
-                    return true
-                } else {
-                    JSONLogger.shared.log("err.verify", data: ["wid": windowID, "expected": spaceID, "actual": newSpace as Any])
-                    return false
-                }
-
-            } else {
-                // MSS not available — fall back to direct SkyLight API
-                JSONLogger.shared.log("warn.mss", data: ["reason": "not_available", "fallback": "sls"])
-                let success = moveWindowViaSkyLightAPI(windowID: windowID, spaceID: spaceID)
-                if !success {
-                    return false
-                }
-                return confirmSLSMove(windowID: windowID, spaceID: spaceID)
-            }
-        } else {
-            // Older macOS - use direct API
-
-            let success = moveWindowViaSkyLightAPI(windowID: windowID, spaceID: spaceID)
-
-            if !success {
-                JSONLogger.shared.log("err.sls", data: ["op": "move"])
-                return false
-            }
-
-            return confirmSLSMove(windowID: windowID, spaceID: spaceID)
+        if !success {
+            JSONLogger.shared.log("err.sls", data: ["op": "move"])
+            return false
         }
+
+        let confirmed = confirmSLSMove(windowID: windowID, spaceID: spaceID)
+
+        JSONLogger.shared.log("win.space.timing", data: [
+            "wid": windowID,
+            "method": "sls",
+            "check_space_ms": Int((t1 - t0) * 1000),
+            "total_ms": Int((CFAbsoluteTimeGetCurrent() - t0) * 1000),
+        ])
+
+        return confirmed
     }
 
     /// Confirm a SkyLight-fallback space move.
@@ -548,12 +592,8 @@ return true
         ))
     }
 
-    /// Fallback focus method (MSS + NSRunningApplication + AX)
+    /// Fallback focus method (NSRunningApplication + AX)
     private func focusWindowFallback(pid: pid_t, windowID: UInt32) -> Bool {
-        if mssClient.isAvailable() {
-            _ = mssClient.orderWindowToFront(windowID)
-            _ = mssClient.focusWindow(windowID)
-        }
         if let app = NSRunningApplication(processIdentifier: pid) {
             app.activate(options: [.activateIgnoringOtherApps])
         }

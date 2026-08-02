@@ -101,19 +101,6 @@ enum ObserverSlotPolicy {
     }
 }
 
-// MARK: - #36  MSS re-probe
-
-/// When MSS real operations fail repeatedly, the cached-true verdict is stale
-/// (e.g. Dock restarted, killing the Dock-side socket). Re-probe after a small
-/// run of consecutive failures rather than failing every move until restart.
-enum MSSReprobePolicy {
-    static let failureThreshold = 3
-
-    static func shouldReprobe(consecutiveFailures: Int) -> Bool {
-        return consecutiveFailures >= failureThreshold
-    }
-}
-
 // MARK: - #37  BFD config watcher re-arm
 
 /// A DispatchSource on a renamed/deleted inode goes deaf. When the event

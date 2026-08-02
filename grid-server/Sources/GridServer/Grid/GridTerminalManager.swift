@@ -190,9 +190,9 @@ actor GridTerminalManager {
             }
         }
 
-        // Set opacity to 0 (cross-process via MSS)
-        _ = windowManipulator.mssClient.setWindowOpacity(windowID: wid, opacity: 0.0)
-
+        // The opacity fade was MSS-only and never ran (MSS required SIP off and
+        // never completed a handshake). Moving the window off-screen via AX is
+        // what actually hides it.
         // Move off-screen via AX API
         if let element = windowManipulator.getAXElement(pid: pid, windowID: wid) {
             _ = windowManipulator.setWindowPosition(element: element, point: Self.offScreenPoint)
@@ -246,11 +246,8 @@ actor GridTerminalManager {
         let state = await stateManager.getState()
         previousWindowID = state.metadata.focusedWindowID
 
-        // Set opacity to 1.0 (cross-process via MSS)
-        _ = windowManipulator.mssClient.setWindowOpacity(windowID: wid, opacity: 1.0)
-
-        // Bring to front and focus
-        _ = windowManipulator.mssClient.orderWindowToFront(wid)
+        // Bring to front and focus. The opacity restore and order-to-front were
+        // MSS-only and never ran; focusWindow already raises via AX.
         _ = windowManipulator.focusWindow(pid: pid, windowID: wid)
 
         isHidden = false
@@ -371,8 +368,9 @@ actor GridTerminalManager {
             _ = windowManipulator.setWindowFrame(element: element, frame: targetFrame)
         }
 
-        // Set layer to "above" so terminal floats over other windows
-        _ = windowManipulator.mssClient.setWindowLayer(windowID: wid, layer: .above)
+        // The "float above other windows" layer set was MSS-only and never ran.
+        // Restoring it needs a SkyLight implementation (SLSSetWindowLevel), not
+        // a scripting addition.
 
         // Focus the new window
         _ = windowManipulator.focusWindow(pid: pid, windowID: wid)

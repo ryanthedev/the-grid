@@ -35,9 +35,6 @@ actor StateManager: StateEventHandler, StateProvider {
     // Workspace observer (system-level events)
     private var workspaceObserver: WorkspaceObserver?
 
-    // MSS client for window manipulation and sticky detection
-    private let mssClient: MSSClient
-
     // Polling timer for periodic state refresh
     private var pollTimer: DispatchSourceTimer?
 
@@ -112,7 +109,6 @@ actor StateManager: StateEventHandler, StateProvider {
         self.connectionID = SLSMainConnectionID()
         self.state = WindowManagerState()
         self.state.metadata.connectionID = self.connectionID
-        self.mssClient = MSSClient()
 
         Task {
             JSONLogger.shared.log("state.init", data: ["cid": self.connectionID])
@@ -1052,11 +1048,12 @@ actor StateManager: StateEventHandler, StateProvider {
     /// Falls back to original macOS-reported spaces if geometric detection fails
     /// IMPORTANT: Must be called AFTER computeDisplayUUID() sets window.displayUUID
     private func deriveSpaceFromDisplay(for window: inout WindowState, originalSpaces: [UInt64]) {
-        // Don't derive for sticky windows - they should be on all spaces
-        if let isSticky = mssClient.isWindowSticky(window.id), isSticky {
-            window.spaces = getAllUserSpaceIDs()
-            return
-        }
+        // NOTE: this used to exempt sticky windows (which belong on all spaces)
+        // from derivation, via an MSS stickiness query. That query always
+        // returned nil because MSS never completed a handshake, so the
+        // exemption never fired and the branch was dead. Removed with MSS.
+        // If sticky-window support is wanted again it needs a SkyLight-based
+        // implementation (window tags), not a scripting addition.
 
         if let displayUUID = window.displayUUID,
            let display = state.displays.first(where: { $0.uuid == displayUUID }),
@@ -1226,30 +1223,29 @@ var windows: [String: WindowState] = [:]
                 windowState.isHidden = true
             }
 
-            // Get spaces for this window - check sticky first, then use SkyLight API
-            // 1. Check if window is sticky (visible on all spaces) using MSS
-            if let isSticky = mssClient.isWindowSticky(windowID), isSticky {
-                // Sticky windows are on all user spaces
-                windowState.spaces = getAllUserSpaceIDs()
-            } else {
-                // 2. Not sticky - try to get spaces using SkyLight API with properly typed CFArray
-                let windowArray = createWindowIDArray([windowID])
-                if let spacesArray = SLSCopySpacesForWindows(connectionID, 0x7, windowArray) {
-                    // Result is flat array of space IDs (CFNumbers)
-                    let spaceNumbers: [NSNumber] = cfArrayToSwiftArray(spacesArray)
-                    if !spaceNumbers.isEmpty {
-                        // Success - we know the actual spaces
-                        windowState.spaces = spaceNumbers.map { $0.uint64Value }
-                    } else {
-                        // API returned empty - we don't know which spaces this window is on
-                        // Leave as empty array, will be updated via events when we get definitive info
-                        windowState.spaces = []
-                    }
+            // Get spaces for this window via the SkyLight API.
+            //
+            // This used to check MSS for stickiness first and short-circuit to
+            // "on all user spaces". That check is gone with MSS: it required SIP
+            // to be partially disabled, never completed a handshake in practice,
+            // and so always returned nil — the sticky branch was dead code and
+            // every window already took the SkyLight path below.
+            let windowArray = createWindowIDArray([windowID])
+            if let spacesArray = SLSCopySpacesForWindows(connectionID, 0x7, windowArray) {
+                // Result is flat array of space IDs (CFNumbers)
+                let spaceNumbers: [NSNumber] = cfArrayToSwiftArray(spacesArray)
+                if !spaceNumbers.isEmpty {
+                    // Success - we know the actual spaces
+                    windowState.spaces = spaceNumbers.map { $0.uint64Value }
                 } else {
-                    // API call failed - we don't know which spaces this window is on
+                    // API returned empty - we don't know which spaces this window is on
                     // Leave as empty array, will be updated via events when we get definitive info
                     windowState.spaces = []
                 }
+            } else {
+                // API call failed - we don't know which spaces this window is on
+                // Leave as empty array, will be updated via events when we get definitive info
+                windowState.spaces = []
             }
 
             // Compute displayUUID geometrically and derive space from display
@@ -1556,19 +1552,23 @@ var windows: [String: WindowState] = [:]
             window.title = name
         }
 
-        // #61s (instrumentation only, no behavior change): a window with a real
-        // role but a transient "AXUnknown" subrole (cached at creation during
-        // app startup) is never re-queried — the role!=nil guard below skips it,
-        // and isTileable rejects the stale subrole forever. Trace these so UAT
-        // can confirm whether a requery is warranted. Confirm-or-drop in UAT (no
-        // requery behavior added).
-        if window.role != nil && (window.subrole == nil || window.subrole == "AXUnknown") {
-            jlog("warn.subrole.unknown", data: [
-                "wid": Int(windowID),
-                "role": window.role ?? "nil",
-                "subrole": window.subrole ?? "nil",
-            ])
-        }
+        // #61s CONFIRMED and instrumentation dropped (DW-4.9). The trace here
+        // fired 3.7M times over 8 days — 96% of all log lines — and confirmed
+        // the hypothesis: a window with a real role but a transient "AXUnknown"
+        // subrole (cached at creation during app startup) is never re-queried,
+        // because the role!=nil guard below skips it, so isTileable rejects the
+        // stale subrole forever. 245 windows with real dimensions were bailed as
+        // not_tileable on that basis.
+        //
+        // The requery is NOT added here. getAXProperties costs ~11 blocking IPC
+        // messages per window and this runs synchronously on the StateManager
+        // actor every poll, so a per-window requery is an actor-stall vector.
+        // It also would not be purely additive: isTileable accepts a nil/empty
+        // subrole, so resolving one to AXDialog/AXSheet drops a window that
+        // tiles correctly today. A fix needs per-pid batching (as
+        // StateValidator.pruneAXOrphanedWindows already does), a subrole-only
+        // write, and AXError surfaced so transient failures don't burn a retry
+        // budget. Tracked separately.
 
         // Re-query AX properties when role is nil (phantom windows that
         // started with no AX data may now have real properties).
@@ -2382,12 +2382,6 @@ return
         // Without this delay, SkyLight/AX queries return stale or incomplete data.
         // BFD uses a similar 1s delay for event tap recovery.
         try? await Task.sleep(nanoseconds: 2_000_000_000)
-
-        // #36: re-probe MSS availability after wake. The Dock-side scripting
-        // addition may have been torn down across sleep; without this the
-        // cached verdict is permanent and every space move stays degraded.
-        mssClient.resetAvailabilityCache()
-        jlog("mss.reset", msg: "wake re-probe")
 
         await refreshCompleteState()
 

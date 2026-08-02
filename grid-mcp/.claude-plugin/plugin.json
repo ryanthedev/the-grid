@@ -1,7 +1,7 @@
 {
   "name": "grid-mcp",
   "version": "0.2.0",
-  "description": "MCP server for theGrid window manager — 48 tools for full grid control",
+  "description": "MCP server for theGrid window manager — 41 tools for full grid control",
   "keywords": [
     "grid",
     "window-manager",

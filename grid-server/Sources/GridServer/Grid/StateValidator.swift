@@ -282,6 +282,24 @@ actor StateValidator {
         }
     }
 
+    // axFailureMeansNoWindows -- classify a failed kAXWindows query.
+    //
+    // Extracted as a pure static (mirroring StateManager.shouldUseSoleWindowFallback)
+    // so the distinction can be unit-tested off the AX boundary. It is the only
+    // thing separating "this process genuinely owns no windows, an empty set is
+    // accurate" from "the app is busy or unreachable, we know nothing" — and
+    // getting it backwards makes every window of an unresponsive app look
+    // orphaned, which prunes all of them after two cycles.
+    //
+    // true  => report an empty set; callers may treat the app's windows as absent.
+    // false => report nil; callers must skip this pid and prune nothing.
+    static func axFailureMeansNoWindows(_ result: AXError) -> Bool {
+        // .attributeUnsupported = non-windowed process (agent/daemon), definitive.
+        // .cannotComplete / .notImplemented / anything else = app busy or
+        // unusual, and absence of evidence is not evidence of absence.
+        return result == .attributeUnsupported
+    }
+
     // Get all window IDs visible via AX for a given pid.
     // Returns nil if the AX query fails (app unresponsive, no permission).
     private func getAXWindowIDs(pid: pid_t) -> Set<UInt32>? {
@@ -293,12 +311,7 @@ actor StateValidator {
             &windowsValue
         )
         guard result == .success, let windows = windowsValue as? [AXUIElement] else {
-            // .cannotComplete / .notImplemented = app busy or unusual — skip, don't prune
-            // .attributeUnsupported = non-windowed process — safe to report empty
-            if result == .attributeUnsupported {
-                return Set()
-            }
-            return nil
+            return Self.axFailureMeansNoWindows(result) ? Set() : nil
         }
 
         var ids = Set<UInt32>()

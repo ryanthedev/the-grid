@@ -101,15 +101,6 @@ final class Phase7PolicyTests: XCTestCase {
         XCTAssertNotNil(element as AnyObject)
     }
 
-    // MARK: - DW-7.8 (#36) MSS re-probe
-
-    func test_DW_7_8_reprobe_policy_on_repeated_fail() {
-        XCTAssertFalse(MSSReprobePolicy.shouldReprobe(consecutiveFailures: 0))
-        XCTAssertFalse(MSSReprobePolicy.shouldReprobe(consecutiveFailures: 2))
-        XCTAssertTrue(MSSReprobePolicy.shouldReprobe(consecutiveFailures: 3))
-        XCTAssertTrue(MSSReprobePolicy.shouldReprobe(consecutiveFailures: 9))
-    }
-
     // MARK: - DW-7.9 (#37) watcher re-arm
 
     func test_DW_7_9_watcher_rearms_on_rename_or_delete() {

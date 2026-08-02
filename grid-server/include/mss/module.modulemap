@@ -1,5 +1,0 @@
-module mss {
-    header "mss.h"
-    header "mss_types.h"
-    export *
-}
