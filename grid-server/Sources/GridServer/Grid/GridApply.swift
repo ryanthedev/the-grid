@@ -128,12 +128,16 @@ class GridApply {
     ) async throws {
         jlog("layout.apply.start", data: ["lid": layoutID, "sid": spaceID])
 
-        // DW-2.3 (#26): snapshot the reconciler action generation at entry. If
-        // a space-ID reassignment migrated this space away during the awaits
-        // below, the generation will have advanced and the space may no longer
-        // exist — writing layout/assignments back then resurrects a zombie
-        // space. We re-check before the write phase and abort.
-        let entryGeneration = gridReconciler?.generation
+        // DW-2.3 (#26): guard against a stale write. If a space-ID reassignment
+        // migrates this space away during the awaits below, writing layout and
+        // assignments back afterwards resurrects a zombie space. The check runs
+        // before the write phase (see shouldAbortStaleWrite below).
+        //
+        // It keys on whether the space still EXISTS, not on the reconciler's
+        // action generation. A generation-based version was tried and reverted:
+        // the counter advances for reasons unrelated to this space, so it
+        // aborted every first-time layout apply.
+        //
         // Snapshot whether this space already exists in GridState at apply entry.
         // The stale-write guard (#26) must distinguish a space migrated/closed away
         // mid-apply (existed at entry, gone at write) from a first-time apply that
