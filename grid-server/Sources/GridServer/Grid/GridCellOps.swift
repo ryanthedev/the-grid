@@ -163,41 +163,37 @@ class GridCellOps {
         // 3. Get current window index
         let currentIdx = max(0, min(spaceState.focusedWindow, cellWindows.count - 1))
 
-        // 4. Get effective stack mode for swap direction mapping
-        let stackMode = await getEffectiveStackMode(
-            spaceID: spaceID,
-            cellID: cellID,
-            layoutID: spaceState.currentLayoutId
-        )
-
-        // 5. Calculate swap target index
-        let targetIdx = calculateSwapTarget(
+        // 4. Calculate swap target index (mode-independent, see CellStackPolicy)
+        let targetIdx = CellStackPolicy.swapTargetIndex(
             currentIdx: currentIdx,
             windowCount: cellWindows.count,
-            direction: direction,
-            stackMode: stackMode
+            direction: direction
         )
 
-        // 6. Build new window order with swap applied
+        // 5. Build new window order with swap applied
         var newWindows = cellWindows
         newWindows.swapAt(currentIdx, targetIdx)
 
-        // 7. Get current split ratios and swap them too
-        var splitRatios = await gridState.getCellSplitRatios(spaceID: spaceID, cellID: cellID)
-        if splitRatios.count == cellWindows.count {
-            splitRatios.swapAt(currentIdx, targetIdx)
-            await gridState.setCellSplitRatios(spaceID: spaceID, cellID: cellID, ratios: splitRatios)
+        // 6. Get current split ratios and swap them too
+        let splitRatios = await gridState.getCellSplitRatios(spaceID: spaceID, cellID: cellID)
+        if let swapped = CellStackPolicy.swappedSplitRatios(
+            splitRatios,
+            windowCount: cellWindows.count,
+            currentIdx,
+            targetIdx
+        ) {
+            await gridState.setCellSplitRatios(spaceID: spaceID, cellID: cellID, ratios: swapped)
         }
 
-        // 8. Update state: set new window order
+        // 7. Update state: set new window order
         var allAssignments = await gridState.getWindowAssignments(spaceID: spaceID)
         allAssignments[cellID] = newWindows
         await gridState.setWindowAssignments(spaceID: spaceID, assignments: allAssignments)
 
-        // 9. Update focus to follow the window to its new position
+        // 8. Update focus to follow the window to its new position
         await gridState.setFocus(spaceID: spaceID, cellID: cellID, windowIndex: targetIdx)
 
-        // 10. Reapply layout with preserve strategy
+        // 9. Reapply layout with preserve strategy
         try await gridApply.reapplyLayout(spaceID: spaceID, strategy: .preserve)
     }
 
@@ -285,40 +281,17 @@ class GridCellOps {
 
         // 2-3. Check layout config (cell-level StackMode and cellModes map)
         let layoutDefOpt: GridLayoutDef? = try? await MainActor.run { try gridConfig.getLayout(id: layoutID) }
-        if let layoutDef = layoutDefOpt {
-            // Check per-cell StackMode
-            for cell in layoutDef.cells {
-                if cell.id == cellID && cell.stackMode != nil {
-                    return cell.stackMode!
-                }
-            }
-            // Check cellModes map
-            if let mode = layoutDef.cellModes[cellID] {
-                return mode
-            }
+        if let layoutDef = layoutDefOpt,
+           let mode = CellStackPolicy.stackModeFromLayout(
+               cellID: cellID,
+               cells: layoutDef.cells,
+               cellModes: layoutDef.cellModes
+           ) {
+            return mode
         }
 
         // 4. Fall back to settings default
         let defaultMode = await MainActor.run { gridConfig.settings.defaultStackMode }
         return defaultMode
-    }
-
-    // calculateSwapTarget: direction + stack mode -> target index (with wrap)
-    private func calculateSwapTarget(
-        currentIdx: Int,
-        windowCount: Int,
-        direction: GridDirection,
-        stackMode: GridStackMode
-    ) -> Int {
-        let delta: Int
-        switch stackMode {
-        case .vertical:
-            delta = (direction == .up || direction == .left) ? -1 : 1
-        case .horizontal:
-            delta = (direction == .left || direction == .up) ? -1 : 1
-        case .tabs:
-            delta = (direction == .left || direction == .up) ? -1 : 1
-        }
-        return (currentIdx + delta + windowCount) % windowCount
     }
 }
