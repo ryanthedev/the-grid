@@ -33,6 +33,21 @@ All logging goes to JSONL files in `~/.local/state/thegrid/`:
 | `tid` | no | Trace ID |
 | `sid` | no | Span ID |
 
+### Log Rotation (server)
+
+`thegrid-server.json` rotates by size. When a batch would push it past the
+ceiling, the archive chain shifts down (`.json` → `.json.1` → `.json.2` …),
+the oldest archive is dropped, and a `log.rotate` event is written at the head
+of the fresh file. Total usage is bounded at `maxBytes × (keep + 1)`.
+
+| Env var | Default | Description |
+|---------|---------|-------------|
+| `THEGRID_LOG_MAX_BYTES` | `33554432` (32 MB) | Per-file ceiling. `0` disables rotation. |
+| `THEGRID_LOG_KEEP` | `5` | Archives kept alongside the live file. `0` discards with no history. |
+
+Only the server rotates. The CLI and notify logs have no rotation — they are
+orders of magnitude smaller.
+
 ### Usage
 
 CLI (Go):

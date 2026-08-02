@@ -369,8 +369,14 @@ actor GridTerminalManager {
         }
 
         // The "float above other windows" layer set was MSS-only and never ran.
-        // Restoring it needs a SkyLight implementation (SLSSetWindowLevel), not
-        // a scripting addition.
+        // It is not recoverable without a scripting addition: the dropdown
+        // terminal is a Ghostty window in its own process, so setting its level
+        // is a cross-process call, and SLSSetWindowLevel only affects windows
+        // the calling process owns. Probed on macOS 26.2 — the call returns 0
+        // and even reads back the new level on the same connection, but a
+        // second process still reads the old level and nothing moves on screen.
+        // The transaction form (SLSTransactionSetWindowLevel + commit) fails
+        // outright. Don't retry this without an SA.
 
         // Focus the new window
         _ = windowManipulator.focusWindow(pid: pid, windowID: wid)

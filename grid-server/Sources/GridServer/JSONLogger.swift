@@ -15,12 +15,38 @@ final class JSONLogWriter {
     private let batchSize = 50
     private let flushInterval: TimeInterval = 0.1
 
-    private init() {
-        let homeDir = FileManager.default.homeDirectoryForCurrentUser.path
-        let logDir = "\(homeDir)/.local/state/thegrid"
-        self.filePath = "\(logDir)/thegrid-server.json"
+    // Rotation ceiling and archive count. Overridable via THEGRID_LOG_MAX_BYTES
+    // and THEGRID_LOG_KEEP; set THEGRID_LOG_MAX_BYTES=0 to disable rotation.
+    private let maxBytes: Int
+    private let keep: Int
+
+    private convenience init() {
+        let logDir = "\(XDG.stateHome)/thegrid"
+        let env = ProcessInfo.processInfo.environment
+        self.init(
+            filePath: "\(logDir)/thegrid-server.json",
+            maxBytes: LogRotationPolicy.envInt(
+                "THEGRID_LOG_MAX_BYTES",
+                default: LogRotationPolicy.defaultMaxBytes,
+                environment: env
+            ),
+            keep: LogRotationPolicy.envInt(
+                "THEGRID_LOG_KEEP",
+                default: LogRotationPolicy.defaultKeep,
+                environment: env
+            )
+        )
+    }
+
+    /// Designated init. Production goes through `shared`; tests use this to
+    /// drive a writer against a temp file without touching the real log.
+    init(filePath: String, maxBytes: Int, keep: Int) {
+        self.filePath = filePath
+        self.maxBytes = maxBytes
+        self.keep = keep
 
         // Ensure directory exists
+        let logDir = (filePath as NSString).deletingLastPathComponent
         try? FileManager.default.createDirectory(atPath: logDir, withIntermediateDirectories: true)
     }
 
@@ -62,6 +88,15 @@ final class JSONLogWriter {
     }
 
     private func writeBatch(_ lines: [String]) {
+        var payload = lines.joined(separator: "\n") + "\n"
+        let incoming = payload.utf8.count
+
+        // Rotate before writing so the ceiling is never exceeded on disk. The
+        // notice goes at the head of the fresh file, where it explains the gap.
+        if let rotated = rotateIfNeeded(incoming: incoming) {
+            payload = rotated + "\n" + payload
+        }
+
         // Ensure file exists
         if !FileManager.default.fileExists(atPath: filePath) {
             FileManager.default.createFile(atPath: filePath, contents: nil)
@@ -74,13 +109,36 @@ final class JSONLogWriter {
         // Seek to end and write
         do {
             try file.seekToEnd()
-            let data = lines.joined(separator: "\n") + "\n"
-            if let bytes = data.data(using: .utf8) {
+            if let bytes = payload.data(using: .utf8) {
                 try file.write(contentsOf: bytes)
             }
         } catch {
             // Silent fail - logging shouldn't crash the app
         }
+    }
+
+    /// Shift the archive chain down one slot when this batch would push the log
+    /// past its ceiling. Returns the `log.rotate` line to prepend to the fresh
+    /// file, or nil when no rotation happened.
+    ///
+    /// Called only from `queue`, so the rename sequence is serialized against
+    /// every other write.
+    private func rotateIfNeeded(incoming: Int) -> String? {
+        let fm = FileManager.default
+        let attrs = try? fm.attributesOfItem(atPath: filePath)
+        let currentBytes = (attrs?[.size] as? NSNumber)?.intValue ?? 0
+
+        guard LogRotationPolicy.shouldRotate(
+            currentBytes: currentBytes,
+            incomingBytes: incoming,
+            maxBytes: maxBytes
+        ) else { return nil }
+
+        LogRotationPolicy.performRotation(base: filePath, keep: keep, fileManager: fm)
+
+        let ts = Int64(Date().timeIntervalSince1970)
+        return "{\"ev\":\"log.rotate\",\"data\":{\"bytes\":\(currentBytes),\"keep\":\(keep),"
+            + "\"maxBytes\":\(maxBytes)},\"ts\":\(ts)}"
     }
 
     /// Get the log file path (for startup message)

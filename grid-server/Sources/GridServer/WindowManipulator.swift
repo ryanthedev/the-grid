@@ -279,9 +279,15 @@ class WindowManipulator: @unchecked Sendable {
     /// keyboard focus. Replaces the MSS orderWindowToFront primitive.
     ///
     /// Caveat worth knowing: kAXRaiseAction raises within the owning
-    /// application only. MSS could reorder across applications; AX cannot. If
-    /// cross-app ordering is needed it requires a SkyLight implementation
-    /// (SLSOrderWindow), not a scripting addition.
+    /// application only. MSS could reorder across applications; AX cannot.
+    ///
+    /// SLSOrderWindow is NOT the way back. Probed on macOS 26.2: it returns
+    /// error 1000 on every window owned by another process (and 0 only on our
+    /// own), so it refuses cross-app ordering outright rather than silently
+    /// no-op'ing. The transaction form fails too. If cross-app ordering is
+    /// wanted, the untested lead is the SLPS path already used by
+    /// `focusWindow` below — SLPSSetFrontProcessWithOptions plus a synthetic
+    /// activation event — not a scripting addition and not SLSOrderWindow.
     func raiseWindow(pid: pid_t, windowID: UInt32) -> Bool {
         guard let element = getAXElement(pid: pid, windowID: windowID) else {
             JSONLogger.shared.log("ax.fail", data: [
