@@ -117,7 +117,10 @@ struct GridWindowExclusion: Sendable {
             mergedRoles.append(r)
         }
 
-        var mergedSubroles = subroles
+        // NOTE: unlike roles and apps, subroles has no built-in defaults to
+        // merge — the user list is used as-is. Left as-is deliberately; if
+        // defaults are wanted here that is a behavior change, not a cleanup.
+        let mergedSubroles = subroles
 
         var mergedApps = defaultApps
         for a in apps where !mergedApps.contains(a) {

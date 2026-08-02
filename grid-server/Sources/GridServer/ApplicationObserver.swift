@@ -215,35 +215,35 @@ class ApplicationObserver {
 
         // Route to EventRouter based on notification type
         switch notifName {
-        case kAXCreatedNotification as String:
+        case kAXCreatedNotification:
             let event = StateEvent.windowCreated(windowID: windowID, pid: pid)
             await EventRouter.shared.route(event, from: source)
 
-        case kAXUIElementDestroyedNotification as String:
+        case kAXUIElementDestroyedNotification:
             let event = StateEvent.windowDestroyed(windowID: windowID)
             await EventRouter.shared.route(event, from: source)
 
-        case kAXWindowMovedNotification as String:
+        case kAXWindowMovedNotification:
             if let frame = getWindowFrame(from: element) {
                 let event = StateEvent.windowMoved(windowID: windowID, frame: frame)
                 await EventRouter.shared.route(event, from: source)
             }
 
-        case kAXWindowResizedNotification as String:
+        case kAXWindowResizedNotification:
             if let frame = getWindowFrame(from: element) {
                 let event = StateEvent.windowResized(windowID: windowID, frame: frame)
                 await EventRouter.shared.route(event, from: source)
             }
 
-        case kAXWindowMiniaturizedNotification as String:
+        case kAXWindowMiniaturizedNotification:
             let event = StateEvent.windowMinimized(windowID: windowID)
             await EventRouter.shared.route(event, from: source)
 
-        case kAXWindowDeminiaturizedNotification as String:
+        case kAXWindowDeminiaturizedNotification:
             let event = StateEvent.windowDeminimized(windowID: windowID)
             await EventRouter.shared.route(event, from: source)
 
-        case kAXTitleChangedNotification as String:
+        case kAXTitleChangedNotification:
             if let title = getWindowTitle(from: element) {
                 let event = StateEvent.windowTitleChanged(windowID: windowID, title: title)
                 await EventRouter.shared.route(event, from: source)
@@ -265,7 +265,17 @@ class ApplicationObserver {
             &focusedWindow
         )
         guard error == .success else { return (nil, error) }
-        return (focusedWindow as! AXUIElement, nil)
+        // Unwrap before downcasting: force-casting the Optional directly can
+        // never yield nil, so a non-AXUIElement payload would trap. Report a
+        // type mismatch as .failure rather than .success, so the caller's
+        // ax.fail event is not stamped with kAXErrorSuccess.
+        guard let value = focusedWindow,
+              CFGetTypeID(value) == AXUIElementGetTypeID() else {
+            return (nil, .failure)
+        }
+        // CFGetTypeID above is the check that licenses this; a conditional cast
+        // to a CF type here is what the compiler flags as never-nil.
+        return (unsafeBitCast(value, to: AXUIElement.self), nil)
     }
 
     // MARK: - Log Sampling

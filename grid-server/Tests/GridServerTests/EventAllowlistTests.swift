@@ -227,7 +227,7 @@ final class EventAllowlistTests: XCTestCase {
         // #29s/#60s instrumentation (confirm-or-drop in UAT).
         // #61s was confirmed and its trace ("warn.subrole.unknown") dropped —
         // it accounted for 96% of all log volume. See StateManager.updateWindowFromPoll.
-        "warn.space.derive_override",
+        "warn.space.derive_override", "warn.space.display_membership_unknown",
         "warn.poll.readd",
 
         // Phase 5 (geometry writes) — new events.

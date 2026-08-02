@@ -187,7 +187,7 @@ final class SpaceMigrationBehaviorTests: XCTestCase {
         do {
             try await apply.applyLayout(spaceID: "100", layoutID: "single-tabbed")
             XCTFail("applyLayout must throw noDisplayBounds on zero/degenerate bounds")
-        } catch let GridApplyError.noDisplayBounds {
+        } catch GridApplyError.noDisplayBounds {
             // expected: skip + err.layout.zero_bounds logged
         } catch {
             XCTFail("expected noDisplayBounds, got \(error)")

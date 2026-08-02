@@ -205,7 +205,7 @@ final class WindowAdoptionIntegrationTests: XCTestCase {
         )
 
         // Run a suppressed action; the pending claim happens at depth 0.
-        _ = try? await reconciler.executeAction(label: "apply") {
+        _ = await reconciler.executeAction(label: "apply") {
             // no-op body; suppression is active here
         }
         await reconciler._test_handlePendingLaunchWindow(windowID: 900, pid: 11)
