@@ -955,8 +955,12 @@ actor StateManager: StateEventHandler, StateProvider {
         // fire continuously), so only a genuine display crossing gets a fresh
         // space query. Anything skipped here is corrected by
         // updateWindowFromPoll, which re-queries SkyLight every poll tick.
-        if window.displayUUID != previousDisplay {
-            deriveSpaceFromDisplay(for: &window, originalSpaces: querySLSSpaces(for: windowID))
+        if window.displayUUID != previousDisplay, let spaces = querySLSSpaces(for: windowID) {
+            deriveSpaceFromDisplay(
+                for: &window,
+                originalSpaces: spaces,
+                isOnScreen: queryWindowOnScreen(windowID)
+            )
         }
         window.lastUpdated = Date()
         state.windows[String(windowID)] = window
@@ -991,7 +995,11 @@ actor StateManager: StateEventHandler, StateProvider {
 
         // Use geometric derivation, falling back to API-reported spaces
         let originalSpaces = apiSpaces.isEmpty ? window.spaces : apiSpaces
-        deriveSpaceFromDisplay(for: &window, originalSpaces: originalSpaces)
+        deriveSpaceFromDisplay(
+            for: &window,
+            originalSpaces: originalSpaces,
+            isOnScreen: queryWindowOnScreen(windowID)
+        )
         state.windows[String(windowID)] = window
     }
 
@@ -1063,7 +1071,19 @@ actor StateManager: StateEventHandler, StateProvider {
     /// Derive window's space from its geometric displayUUID
     /// Falls back to original macOS-reported spaces if geometric detection fails
     /// IMPORTANT: Must be called AFTER computeDisplayUUID() sets window.displayUUID
-    private func deriveSpaceFromDisplay(for window: inout WindowState, originalSpaces: [UInt64]) {
+    ///
+    /// `isOnScreen` must be a *freshly sampled* visibility signal. It is
+    /// deliberately NOT read off `window.isHidden`: that field is written only
+    /// at window discovery, minimize/unminimize and app hide/unhide, so it
+    /// latches at creation and the poll never refreshes it. It also cannot be
+    /// made live, because `GridAssignment` treats `isMinimized || isHidden` as
+    /// "not eligible for a cell" — tracking `kCGWindowIsOnscreen` in that field
+    /// would drop every window on an inactive space out of its grid.
+    private func deriveSpaceFromDisplay(
+        for window: inout WindowState,
+        originalSpaces: [UInt64],
+        isOnScreen: Bool
+    ) {
         // NOTE: this used to exempt sticky windows (which belong on all spaces)
         // from derivation, via an MSS stickiness query. That query always
         // returned nil because MSS never completed a handshake, so the
@@ -1081,20 +1101,27 @@ actor StateManager: StateEventHandler, StateProvider {
         let decision = SpaceDerivationPolicy.derive(
             displayUUID: window.displayUUID,
             originalSpaces: originalSpaces,
-            isOnScreen: !window.isHidden && !window.isMinimized,
+            isOnScreen: isOnScreen && !window.isMinimized,
             displays: state.displays
         )
 
+        let previousSpaces = window.spaces
         window.spaces = decision.spaces
 
         switch decision.warning {
         case .override(let from, let to):
-            jlog("warn.space.derive_override", data: [
-                "wid": window.id,
-                "from": from.map { String($0) },
-                "to": String(to),
-                "app": window.appName ?? "unknown",
-            ])
+            // Only when the override actually moved the window. The poll now
+            // feeds a fresh SkyLight read every tick, so a window whose report
+            // permanently disagrees with geometry would otherwise emit this
+            // every 3s forever and swamp the (size-capped) log.
+            if decision.spaces != previousSpaces {
+                jlog("warn.space.derive_override", data: [
+                    "wid": window.id,
+                    "from": from.map { String($0) },
+                    "to": String(to),
+                    "app": window.appName ?? "unknown",
+                ])
+            }
 
         case .membershipUnknown(let displayUUID):
             jlog("warn.space.display_membership_unknown", data: [
@@ -1135,17 +1162,35 @@ actor StateManager: StateEventHandler, StateProvider {
 
     /// Fresh SkyLight space query for a single window.
     ///
-    /// Returns an empty array on failure or on an empty result — both mean "we
-    /// do not know", which `SpaceDerivationPolicy` treats as "fall back to
-    /// geometry". Synchronous C call with no suspension point, so it adds no
-    /// interleaving to this actor.
-    private func querySLSSpaces(for windowID: UInt32) -> [UInt64] {
+    /// Returns nil when the call itself failed, which is NOT the same as an
+    /// empty result: an empty list means "SkyLight knows nothing about this
+    /// window" (fall back to geometry), while a failure means "we learned
+    /// nothing at all" and callers must leave the existing assignment alone. If
+    /// both collapsed to `[]`, one transient hiccup would yank a parked window
+    /// onto its display's current space.
+    ///
+    /// Synchronous C call with no suspension point, so it adds no interleaving
+    /// to this actor.
+    private func querySLSSpaces(for windowID: UInt32) -> [UInt64]? {
         let windowArray = createWindowIDArray([windowID])
         guard let spacesArray = SLSCopySpacesForWindows(connectionID, 0x7, windowArray) else {
-            return []
+            return nil
         }
         let spaceNumbers: [NSNumber] = cfArrayToSwiftArray(spacesArray)
         return spaceNumbers.map { $0.uint64Value }
+    }
+
+    /// Freshly sample whether a window is currently on screen.
+    ///
+    /// Used on the paths that have no CGWindowList snapshot in hand. The poll
+    /// path reads `kCGWindowIsOnscreen` out of the snapshot it already has
+    /// instead of paying for this.
+    private func queryWindowOnScreen(_ windowID: UInt32) -> Bool {
+        guard let infoList = CGWindowListCopyWindowInfo(
+            [.optionIncludingWindow], windowID
+        ) as? [[String: Any]],
+              let info = infoList.first else { return false }
+        return (info["kCGWindowIsOnscreen"] as? Int) == 1
     }
 
     /// Re-query AX properties for windows on the active space whose role is nil
@@ -1299,7 +1344,11 @@ var windows: [String: WindowState] = [:]
             // Compute displayUUID geometrically and derive space from display
             let originalSpaces = windowState.spaces
             windowState.displayUUID = computeDisplayUUID(for: windowState)
-            deriveSpaceFromDisplay(for: &windowState, originalSpaces: originalSpaces)
+            deriveSpaceFromDisplay(
+                for: &windowState,
+                originalSpaces: originalSpaces,
+                isOnScreen: (windowInfo["kCGWindowIsOnscreen"] as? Int) == 1
+            )
 
             // Populate zOrder from map (or leave as Int32.max if not on screen)
             windowState.zOrder = zOrderMap[windowID] ?? Int32.max
@@ -1643,8 +1692,18 @@ var windows: [String: WindowState] = [:]
         // programmatic SLSMoveWindowsToManagedSpace), converges here within one
         // tick. It must never be handed window.spaces — that is the derived
         // value, and feeding it back is what made the override self-confirming.
+        //
+        // The on-screen signal comes straight out of this tick's CGWindowList
+        // snapshot — the one field the poll must sample fresh, since
+        // window.isHidden latches at discovery and is never updated here.
         window.displayUUID = computeDisplayUUID(for: window)
-        deriveSpaceFromDisplay(for: &window, originalSpaces: querySLSSpaces(for: windowID))
+        if let spaces = querySLSSpaces(for: windowID) {
+            deriveSpaceFromDisplay(
+                for: &window,
+                originalSpaces: spaces,
+                isOnScreen: (windowInfo["kCGWindowIsOnscreen"] as? Int) == 1
+            )
+        }
 
         window.lastUpdated = timestamp
         state.windows[String(windowID)] = window
@@ -1717,7 +1776,13 @@ var windows: [String: WindowState] = [:]
         // If the window is too new for SkyLight to know it yet the result is
         // empty and we fall back to geometry, and the poll corrects it.
         window.displayUUID = computeDisplayUUID(for: window)
-        deriveSpaceFromDisplay(for: &window, originalSpaces: querySLSSpaces(for: windowID))
+        if let spaces = querySLSSpaces(for: windowID) {
+            deriveSpaceFromDisplay(
+                for: &window,
+                originalSpaces: spaces,
+                isOnScreen: queryWindowOnScreen(windowID)
+            )
+        }
 
         state.windows[String(windowID)] = window
     }
@@ -1785,7 +1850,13 @@ var windows: [String: WindowState] = [:]
         // If the window is too new for SkyLight to know it yet the result is
         // empty and we fall back to geometry, and the poll corrects it.
         window.displayUUID = computeDisplayUUID(for: window)
-        deriveSpaceFromDisplay(for: &window, originalSpaces: querySLSSpaces(for: windowID))
+        if let spaces = querySLSSpaces(for: windowID) {
+            deriveSpaceFromDisplay(
+                for: &window,
+                originalSpaces: spaces,
+                isOnScreen: queryWindowOnScreen(windowID)
+            )
+        }
 
         state.windows[String(windowID)] = window
 
@@ -1857,8 +1928,12 @@ var windows: [String: WindowState] = [:]
         // setWindowFrame for why the same-display case is skipped.
         let previousDisplay = window.displayUUID
         window.displayUUID = computeDisplayUUID(for: window)
-        if window.displayUUID != previousDisplay {
-            deriveSpaceFromDisplay(for: &window, originalSpaces: querySLSSpaces(for: windowID))
+        if window.displayUUID != previousDisplay, let spaces = querySLSSpaces(for: windowID) {
+            deriveSpaceFromDisplay(
+                for: &window,
+                originalSpaces: spaces,
+                isOnScreen: queryWindowOnScreen(windowID)
+            )
         }
         window.lastUpdated = Date()
         state.windows[String(windowID)] = window
@@ -1873,8 +1948,12 @@ var windows: [String: WindowState] = [:]
         // setWindowFrame for why the same-display case is skipped.
         let previousDisplay = window.displayUUID
         window.displayUUID = computeDisplayUUID(for: window)
-        if window.displayUUID != previousDisplay {
-            deriveSpaceFromDisplay(for: &window, originalSpaces: querySLSSpaces(for: windowID))
+        if window.displayUUID != previousDisplay, let spaces = querySLSSpaces(for: windowID) {
+            deriveSpaceFromDisplay(
+                for: &window,
+                originalSpaces: spaces,
+                isOnScreen: queryWindowOnScreen(windowID)
+            )
         }
         window.lastUpdated = Date()
         state.windows[String(windowID)] = window

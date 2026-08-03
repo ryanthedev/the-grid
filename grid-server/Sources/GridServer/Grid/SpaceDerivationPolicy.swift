@@ -70,12 +70,16 @@ enum SpaceDerivationPolicy {
         isOnScreen: Bool,
         displays: [DisplayState]
     ) -> SpaceDerivation {
-        // Rule 1: no usable display ⇒ keep whatever was reported.
+        // Rule 1: no usable display ⇒ keep whatever was reported, narrowed to
+        // one space. Callers now pass raw SkyLight lists (they used to pass a
+        // previously derived value, which was single by induction), and
+        // everything downstream — grid membership, pickBestSpace,
+        // activeSpaceID — reads at most one space per window.
         guard let displayUUID,
               let display = displays.first(where: { $0.uuid == displayUUID }),
               display.currentSpaceID != 0 else {
             return SpaceDerivation(
-                spaces: originalSpaces,
+                spaces: originalSpaces.min().map { [$0] } ?? [],
                 source: .reported,
                 warning: originalSpaces.isEmpty ? .bothFailed : nil
             )

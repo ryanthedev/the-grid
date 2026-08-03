@@ -125,7 +125,37 @@ final class SpaceDerivationPolicyTests: XCTestCase {
             displays: [twoSpaceDisplay()]
         )
         XCTAssertEqual(result.spaces, [3])
+        XCTAssertEqual(result.source, .geometric, "must come from rule 4, not rule 5")
         XCTAssertNil(result.warning)
+    }
+
+    func testOnScreenAndOffScreenDivergeOnTheSameInput() {
+        // Guards the rule 4 / rule 5 split itself: same reported space, same
+        // display, opposite visibility, opposite answers. If rule 4 were
+        // deleted both would fall through to rule 5 and this would fail.
+        let display = twoSpaceDisplay(current: 3)
+        let visible = SpaceDerivationPolicy.derive(
+            displayUUID: "DISPLAY-A", originalSpaces: [4],
+            isOnScreen: true, displays: [display]
+        )
+        let parked = SpaceDerivationPolicy.derive(
+            displayUUID: "DISPLAY-A", originalSpaces: [4],
+            isOnScreen: false, displays: [display]
+        )
+        XCTAssertEqual(visible.spaces, [3], "a visible window is on the current space")
+        XCTAssertEqual(parked.spaces, [4], "a parked window keeps its own space")
+    }
+
+    // MARK: - Rule 1 post-condition
+
+    func testNoDisplayNarrowsAMultiElementReportToOne() {
+        let result = SpaceDerivationPolicy.derive(
+            displayUUID: nil,
+            originalSpaces: [9, 7],
+            isOnScreen: false,
+            displays: [twoSpaceDisplay()]
+        )
+        XCTAssertEqual(result.spaces, [7])
     }
 
     // MARK: - Rule 5: the parked-window regression (this change)
@@ -203,20 +233,25 @@ final class SpaceDerivationPolicyTests: XCTestCase {
 
     // MARK: - Post-condition
 
-    func testResultIsAlwaysAtMostOneSpaceWhenADisplayIsKnown() {
+    func testResultIsAlwaysAtMostOneSpace() {
         let display = twoSpaceDisplay()
         for original in [[], [3], [4], [3, 4], [64], [3, 64], [4, 64]] as [[UInt64]] {
             for onScreen in [true, false] {
+                // nil covers rule 1, which callers now reach with raw
+                // SkyLight lists rather than an already-narrowed value.
+                for uuid in ["DISPLAY-A", "UNKNOWN", nil] {
                 let result = SpaceDerivationPolicy.derive(
-                    displayUUID: "DISPLAY-A",
+                    displayUUID: uuid,
                     originalSpaces: original,
                     isOnScreen: onScreen,
                     displays: [display]
                 )
                 XCTAssertLessThanOrEqual(
                     result.spaces.count, 1,
-                    "original=\(original) onScreen=\(onScreen) produced \(result.spaces)"
+                    "original=\(original) onScreen=\(onScreen) uuid=\(uuid ?? "nil") "
+                        + "produced \(result.spaces)"
                 )
+                }
             }
         }
     }
