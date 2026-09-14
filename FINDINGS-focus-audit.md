@@ -1,3 +1,29 @@
+# theGrid — focus & state integrity audit
+
+**Status: fixed on branch `fix/focus-state-integrity` (7 commits, 461 tests green).**
+
+| # | Finding | Commit |
+|---|---------|--------|
+| E | `make run` deleted state.json + the log on every rebuild | `5f87a04` |
+| D | Every cell insert stole the cell's focus pointer | `5c0f8b3` |
+| A | Adoption and pruning used different oracles -> 154-cycle zombie loop | `9189882` |
+| C | `appActivated` focus applied despite the reconciler declining it | `614ee76` |
+| B | Windows lost forever to a latched transient `AXUnknown` subrole | `fade218` |
+| — | Failed actions left an unmatched `action.start` in the log | `c45a1b7` |
+| — | 3 regressions found in review (picker/terminal focus, AX timeout, ghost backoff) | `8a5ac83` |
+
+**Not fixed — ranked by likely user impact:**
+1. `window.move` 32% failure; 48/48 `sls.move` emit `warn.move.sls_unverified`. Never investigated.
+2. `role` still latches (`StateManager.swift:1672`). Phase 3 routes around it rather than unlatching it.
+3. A `beginAction` token that never reaches `endAction` wedges suppression on, with no watchdog.
+4. Residual `sweep.correct` from the ~53% of `appActivated` events outside an action.
+5. `displaySpaces: {"display-1": ["5","999"]}` stale state, never validated; now survives rebuilds.
+6. Rebuilt binary loses Accessibility (TCC); the server degrades silently instead of halting.
+
+Raw evidence below, as gathered during the investigation.
+
+---
+
 # theGrid — log evidence (from thegrid-server.json + .json.1)
 
 ## Impact (both logs, per-action failure rate)
