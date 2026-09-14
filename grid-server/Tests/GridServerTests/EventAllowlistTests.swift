@@ -123,6 +123,10 @@ final class EventAllowlistTests: XCTestCase {
         // action owned focus; its wid is derived from a lagged app-level API.
         "focus.appactivated.declined",
 
+        // A window recovered after its latched transient AXUnknown subrole was
+        // re-queried and came back standard.
+        "sweep.subrole.recovered",
+
         // Admission gating: a window that reads tileable from cached AX
         // properties but is absent from its app's live AX window list. One
         // aggregate line per validator pass, one per skipped unreject.

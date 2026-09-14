@@ -32,6 +32,11 @@ class GridReconciler: StateEventHandler {
         AXWindowOracle.windowIDs(pid: $0)
     }
 
+    // Per-window budget for the stale-subrole requery (StaleSubrolePolicy).
+    // Bounds the cost so a genuinely-AXUnknown window is not re-queried on
+    // every 300ms sweep for the life of the process.
+    private var subroleRequeryAttempts: [UInt32: Int] = [:]
+
     private weak var gridState: GridState?
     private weak var gridConfig: GridConfig?
     private weak var stateProvider: (any StateProvider)?
@@ -613,16 +618,44 @@ class GridReconciler: StateEventHandler {
         // 300ms timer and rejectedWindows has held ~900 entries, so a per-window
         // query would be hundreds of blocking AX IPCs per tick on this actor.
         var candidates: [(wid: UInt32, state: WindowState)] = []
+        // Windows rejected on a cached subrole that may since have settled.
+        var staleSubrole: [(wid: UInt32, state: WindowState)] = []
         for wid in rejected {
             guard let windowState = wmState.windows[String(wid)] else { continue }
-            guard isTileable(window: windowState) else { continue }
-            candidates.append((wid, windowState))
+            if isTileable(window: windowState) {
+                candidates.append((wid, windowState))
+            } else if StaleSubrolePolicy.looksStale(
+                role: windowState.role,
+                subrole: windowState.subrole,
+                width: windowState.frame.width,
+                height: windowState.frame.height,
+                minDimension: minTileableDimension
+            ), StaleSubrolePolicy.shouldRetry(attempts: subroleRequeryAttempts[wid] ?? 0) {
+                staleSubrole.append((wid, windowState))
+            }
         }
-        guard !candidates.isEmpty else { return }
+        guard !candidates.isEmpty || !staleSubrole.isEmpty else { return }
 
         var axByPID: [pid_t: AXLookup] = [:]
-        for candidate in candidates where axByPID[candidate.state.pid] == nil {
+        for candidate in candidates + staleSubrole where axByPID[candidate.state.pid] == nil {
             axByPID[candidate.state.pid] = AXLookup(self.axWindowIDs(candidate.state.pid))
+        }
+
+        // Re-query the latched subrole for windows AX still exposes. Safe to do
+        // here and nowhere else: these windows are already rejected, so a
+        // refresh can only add one back, never drop one that tiles today.
+        var recovered: [Int] = []
+        for (wid, windowState) in staleSubrole {
+            guard axByPID[windowState.pid]?.exposes(wid) == true else { continue }
+            subroleRequeryAttempts[wid, default: 0] += 1
+            guard let fresh = await stateProvider.refreshWindowAXProperties(wid),
+                  isTileable(window: fresh) else { continue }
+            subroleRequeryAttempts.removeValue(forKey: wid)
+            recovered.append(Int(wid))
+            candidates.append((wid, fresh))
+        }
+        if !recovered.isEmpty {
+            jlog("sweep.subrole.recovered", data: ["count": recovered.count, "wids": recovered.sorted()])
         }
 
         var skipped: [Int] = []

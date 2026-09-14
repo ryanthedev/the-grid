@@ -5,7 +5,7 @@ import CoreGraphics
 
 /// Minimum width/height for a window to be considered tileable.
 /// Filters out toolbars (30px), tab bars, and other UI chrome.
-private let minTileableDimension: Double = 100.0
+let minTileableDimension: Double = 100.0
 
 // MARK: - Window Category
 
