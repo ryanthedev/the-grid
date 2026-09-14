@@ -417,8 +417,19 @@ actor GridState {
 
         let insertionIndex = cell.windows.count
         cell.windows.append(windowID)
-        cell.lastFocusedIdx = insertionIndex
-        cell.lastFocusedWid = windowID
+        // Claim the focus pointer only for a cell that has none. Reconciler
+        // bookkeeping (adoption, locked-cell create, lift migration, sweep)
+        // reaches here too, and must not displace the user's focus target.
+        if CellFocusPointerPolicy.shouldClaimOnInsert(currentLastFocusedWid: cell.lastFocusedWid) {
+            cell.lastFocusedIdx = insertionIndex
+            cell.lastFocusedWid = windowID
+        } else {
+            cell.lastFocusedIdx = CellFocusPointerPolicy.resolveIndex(
+                windows: cell.windows,
+                lastFocusedWid: cell.lastFocusedWid,
+                lastFocusedIdx: cell.lastFocusedIdx
+            )
+        }
         // Recalculate ratios to preserve existing proportions (not equalize)
         cell.splitRatios = GridLayout.recalculateSplitsAfterAddition(
             ratios: cell.splitRatios,
@@ -447,8 +458,18 @@ actor GridState {
             newIndex: 0
         )
         cell.windows.insert(windowID, at: 0)
-        cell.lastFocusedIdx = 0
-        cell.lastFocusedWid = windowID
+        if CellFocusPointerPolicy.shouldClaimOnInsert(currentLastFocusedWid: cell.lastFocusedWid) {
+            cell.lastFocusedIdx = 0
+            cell.lastFocusedWid = windowID
+        } else {
+            // A prepend shifts every existing element right; resolve the
+            // incumbent's index rather than leaving it pointing one short.
+            cell.lastFocusedIdx = CellFocusPointerPolicy.resolveIndex(
+                windows: cell.windows,
+                lastFocusedWid: cell.lastFocusedWid,
+                lastFocusedIdx: cell.lastFocusedIdx
+            )
+        }
         cell.splitRatios = newRatios
         space.cells[cellID] = cell
         spaces[spaceID] = space
@@ -468,8 +489,16 @@ actor GridState {
             newIndex: clampedIndex
         )
         cell.windows.insert(windowID, at: clampedIndex)
-        cell.lastFocusedIdx = clampedIndex
-        cell.lastFocusedWid = windowID
+        if CellFocusPointerPolicy.shouldClaimOnInsert(currentLastFocusedWid: cell.lastFocusedWid) {
+            cell.lastFocusedIdx = clampedIndex
+            cell.lastFocusedWid = windowID
+        } else {
+            cell.lastFocusedIdx = CellFocusPointerPolicy.resolveIndex(
+                windows: cell.windows,
+                lastFocusedWid: cell.lastFocusedWid,
+                lastFocusedIdx: cell.lastFocusedIdx
+            )
+        }
         cell.splitRatios = newRatios
         space.cells[cellID] = cell
         spaces[spaceID] = space
@@ -496,25 +525,25 @@ actor GridState {
                 cell.lastFocusedWid = 0
                 cell.prevFocusedWid = 0
             } else {
-                if cell.lastFocusedIdx >= cell.windows.count {
-                    cell.lastFocusedIdx = cell.windows.count - 1
-                }
                 if cell.lastFocusedWid == windowID {
+                    // The focused window itself left: fall back to the cell's
+                    // previous occupant when it is still here.
                     cell.lastFocusedWid = 0
-                    if cell.prevFocusedWid != 0 {
-                        for (j, wid) in cell.windows.enumerated() {
-                            if wid == cell.prevFocusedWid {
-                                cell.lastFocusedWid = cell.prevFocusedWid
-                                cell.lastFocusedIdx = j
-                                break
-                            }
-                        }
+                    if cell.prevFocusedWid != 0,
+                       cell.windows.contains(cell.prevFocusedWid) {
+                        cell.lastFocusedWid = cell.prevFocusedWid
                     }
                     cell.prevFocusedWid = 0
                 }
                 if cell.prevFocusedWid == windowID {
                     cell.prevFocusedWid = 0
                 }
+                // Resolve the index against whatever wid survived the above.
+                cell.lastFocusedIdx = CellFocusPointerPolicy.resolveIndex(
+                    windows: cell.windows,
+                    lastFocusedWid: cell.lastFocusedWid,
+                    lastFocusedIdx: cell.lastFocusedIdx
+                )
             }
 
             if cell.windows.isEmpty {
@@ -582,25 +611,25 @@ actor GridState {
                 cell.lastFocusedWid = 0
                 cell.prevFocusedWid = 0
             } else {
-                if cell.lastFocusedIdx >= cell.windows.count {
-                    cell.lastFocusedIdx = cell.windows.count - 1
-                }
                 if cell.lastFocusedWid == windowID {
+                    // The focused window itself left: fall back to the cell's
+                    // previous occupant when it is still here.
                     cell.lastFocusedWid = 0
-                    if cell.prevFocusedWid != 0 {
-                        for (j, wid) in cell.windows.enumerated() {
-                            if wid == cell.prevFocusedWid {
-                                cell.lastFocusedWid = cell.prevFocusedWid
-                                cell.lastFocusedIdx = j
-                                break
-                            }
-                        }
+                    if cell.prevFocusedWid != 0,
+                       cell.windows.contains(cell.prevFocusedWid) {
+                        cell.lastFocusedWid = cell.prevFocusedWid
                     }
                     cell.prevFocusedWid = 0
                 }
                 if cell.prevFocusedWid == windowID {
                     cell.prevFocusedWid = 0
                 }
+                // Resolve the index against whatever wid survived the above.
+                cell.lastFocusedIdx = CellFocusPointerPolicy.resolveIndex(
+                    windows: cell.windows,
+                    lastFocusedWid: cell.lastFocusedWid,
+                    lastFocusedIdx: cell.lastFocusedIdx
+                )
             }
 
             if cell.windows.isEmpty {

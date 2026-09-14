@@ -117,6 +117,7 @@ final class EventAllowlistTests: XCTestCase {
         "focus.cycle.race", "focus.cycle.skip",
         "focus.init", "focus.mismatch", "focus.mismatch.accept",
         "focus.move", "focus.prune", "focus.restore.stale",
+        "focus.restore.byidx",
         "focus.seq.reject", "focus.skip_empty",
         "grid.cfg.borders.bridge", "grid.cfg.merge", "grid.cfg.ready",
         "grid.cfg.reload.ok", "grid.cfg.reload.start",

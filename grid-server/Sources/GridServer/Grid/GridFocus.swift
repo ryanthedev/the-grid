@@ -462,8 +462,19 @@ class GridFocus {
                     idx = max(0, min(cellState.lastFocusedIdx, cellWindows.count - 1))
                 }
             } else {
-                // No lastFocusedWid recorded -- use lastFocusedIdx
+                // No lastFocusedWid recorded -- use lastFocusedIdx. This is the
+                // one restore path that used to resolve silently, which is why
+                // a desynced index focused an arbitrary window with nothing in
+                // the log to show for it. Its sibling focus.restore.stale was
+                // the most useful signal available here; give this branch one
+                // too.
                 idx = max(0, min(cellState.lastFocusedIdx, cellWindows.count - 1))
+                jlog("focus.restore.byidx", data: [
+                    "idx": idx,
+                    "cell": cellID,
+                    "spaceID": spaceID,
+                    "count": cellWindows.count,
+                ])
             }
         }
 
