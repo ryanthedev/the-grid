@@ -86,7 +86,13 @@ class GridReconciler: StateEventHandler {
     // Ref-counted suppression for bulk operations (layout apply, picker, terminal, focus).
     // Managed exclusively via executeAction/beginAction/endAction -- no direct access.
     // Multiple callers can nest suppress/unsuppress without interfering.
-    private var suppressionDepth: Int = 0
+    // Mirrored to FocusOwnership on every change so StateManager -- the other
+    // consumer of a focus event, and the one that writes state.metadata -- can
+    // decline an external focus assertion while an action owns focus. Kept as a
+    // didSet rather than mirrored at each mutation site so the two cannot drift.
+    private var suppressionDepth: Int = 0 {
+        didSet { FocusOwnership.shared.set(depth: suppressionDepth) }
+    }
     private var suppressReconciliation: Bool { suppressionDepth > 0 }
 
     // Per-window fencing: OS focus events for fenced windows are dropped
@@ -312,6 +318,18 @@ class GridReconciler: StateEventHandler {
             }
             for candidate in candidates {
                 guard axWindowIDs.contains(candidate.wid) else {
+                    // Reject rather than merely skip. Candidacy already
+                    // excludes rejected wids, so this makes the AX query a
+                    // one-time cost instead of one per pass per ghost --
+                    // adoptUntrackedTileables runs on every action.end at
+                    // depth 0 (peak 8/second), not on a slow timer, and a
+                    // beachballing app would otherwise block this actor for
+                    // the AX timeout on a user-facing path.
+                    //
+                    // Safe because rejectedWindowSweep gates un-rejection on
+                    // the same oracle: if AX ever exposes the window again it
+                    // comes straight back. The two gates interlock.
+                    await gridState.rejectWindow(candidate.wid)
                     absent.append(Int(candidate.wid))
                     continue
                 }
@@ -591,15 +609,28 @@ class GridReconciler: StateEventHandler {
 
         let wmState = await stateProvider.getState()
 
+        // Batch the live AX check per pid, not per window. This sweep runs on a
+        // 300ms timer and rejectedWindows has held ~900 entries, so a per-window
+        // query would be hundreds of blocking AX IPCs per tick on this actor.
+        var candidates: [(wid: UInt32, state: WindowState)] = []
         for wid in rejected {
             guard let windowState = wmState.windows[String(wid)] else { continue }
             guard isTileable(window: windowState) else { continue }
+            candidates.append((wid, windowState))
+        }
+        guard !candidates.isEmpty else { return }
 
+        var axByPID: [pid_t: AXLookup] = [:]
+        for candidate in candidates where axByPID[candidate.state.pid] == nil {
+            axByPID[candidate.state.pid] = AXLookup(self.axWindowIDs(candidate.state.pid))
+        }
+
+        var skipped: [Int] = []
+        for (wid, windowState) in candidates {
             // Same cached-role hazard as adoption: un-rejecting on the cache
             // is a second door into the adopt/prune loop.
-            guard let axWindowIDs = self.axWindowIDs(windowState.pid),
-                  axWindowIDs.contains(wid) else {
-                jlog("sweep.unreject.skip", data: ["wid": Int(wid), "reason": "ax_absent"])
+            guard axByPID[windowState.pid]?.exposes(wid) == true else {
+                skipped.append(Int(wid))
                 continue
             }
 
@@ -615,6 +646,15 @@ class GridReconciler: StateEventHandler {
             } else {
                 await handleWindowCreated(wid, windowState.pid)
             }
+        }
+
+        // One line per tick, not one per window: this fires every 300ms.
+        if !skipped.isEmpty {
+            jlog("sweep.unreject.skip", data: [
+                "reason": "ax_absent",
+                "count": skipped.count,
+                "wids": skipped.sorted().prefix(20).map { $0 },
+            ])
         }
     }
 
@@ -1464,7 +1504,9 @@ class GridReconciler: StateEventHandler {
         if let trackedSpaceID = await gridState.findSpaceContaining(windowID: windowID) {
             await gridState.removeWindow(windowID, fromSpace: trackedSpaceID)
         } else {
-            await gridState.removeWindowFromAllSpaces(windowID)
+            // Minimizing is not a death either -- the wid stays valid and the
+            // window comes back. Keep any rejection, same rule as ax_orphan.
+            await gridState.removeWindowFromAllSpaces(windowID, forgetRejection: false)
         }
         await syncBordersForCurrentSpace()
 
@@ -1980,6 +2022,19 @@ class GridReconciler: StateEventHandler {
     // (the zombie case).
     func _test_setAXWindowIDs(_ lookup: @escaping @Sendable (pid_t) -> Set<UInt32>?) {
         self.axWindowIDs = lookup
+    }
+
+    // _test_rejectedWindowSweep: drive the 300ms un-rejection sweep. This is the
+    // door that first admitted zombie 1130 into a cell (sweep.unrejected @
+    // ts 1788835610), so its AX gate needs cover of its own.
+    func _test_rejectedWindowSweep() async {
+        await rejectedWindowSweep()
+    }
+
+    // _test_handleWindowMovedUnreject: drive the move-triggered re-evaluation of
+    // a rejected window -- the third admission door.
+    func _test_handleWindowMovedUnreject(windowID: UInt32, frame: CGRect) async {
+        await handleWindowMoved(windowID, frame)
     }
 
     // _test_adoptUntrackedTileables: drive the depth-0 adoption scan (DW-4.8).

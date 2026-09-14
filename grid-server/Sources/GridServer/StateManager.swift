@@ -277,7 +277,37 @@ actor StateManager: StateEventHandler, StateProvider {
 
         case .focusChanged(let state):
             if let windowID = state.windowID {
-                await handleWindowFocused(windowID, seq: state.seq)
+                // An .appActivated wid is derived from kAXFocusedWindow on the
+                // *application* element (WorkspaceObserver.getFocusedWindowID),
+                // read asynchronously inside a Task. That is a single per-app
+                // value which lags the actual activation, so for a multi-window
+                // app mid-transition it names the previously focused window --
+                // often on the wrong display and space. The authoritative
+                // .windowActivated event, whose wid comes from the AX element
+                // itself, arrives right behind it and names the real one.
+                //
+                // GridReconciler already declines these while an action owns
+                // focus (reconcile.focus.suppressed). StateManager did not, so
+                // the focus the reconciler had rejected still reached
+                // state.metadata -- focusedWindowID, activeDisplayUUID,
+                // activeSpaceID -- and was persisted as the space's
+                // lastFocusedWindowID. The 300ms focusSweep then read that
+                // poisoned metadata and rewrote GridState cell focus to match,
+                // which is how a wrong focus became a wrong cell assignment.
+                //
+                // Scoped deliberately: only .appActivated, and only while an
+                // action owns focus. 47% of appActivated events arrive in that
+                // window; the other 53% are genuine app activations (cmd-tab,
+                // Dock click) with no .windowActivated behind them, and still
+                // apply exactly as before.
+                if state.trigger == .appActivated, FocusOwnership.shared.isOwned {
+                    JSONLogger.shared.log("focus.appactivated.declined", data: [
+                        "wid": windowID,
+                        "seq": state.seq,
+                    ])
+                } else {
+                    await handleWindowFocused(windowID, seq: state.seq)
+                }
             }
             switch state.trigger {
             case .spaceSwitched:

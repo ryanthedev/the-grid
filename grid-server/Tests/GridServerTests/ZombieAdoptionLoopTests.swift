@@ -100,6 +100,73 @@ final class ZombieAdoptionLoopTests: XCTestCase {
         XCTAssertEqual(space, "100", "a window AX still exposes must be adopted as before")
     }
 
+    // The sweep gate. sweep.unrejected wid:1130 at ts 1788835610 is what first
+    // admitted the zombie into a cell, so this is the historically-proven entry
+    // door -- it must stay shut for a window AX no longer exposes.
+    func testRejectedSweepDoesNotUnrejectAGhost() async {
+        let (reconciler, gridState, mock) = await wire(ghostState())
+        withExtendedLifetime(mock) {}
+        await gridState.rejectWindow(1130)
+        reconciler._test_setAXWindowIDs { _ in [] }   // alive, zero AX windows
+
+        await reconciler._test_rejectedWindowSweep()
+
+        let stillRejected = await gridState.isWindowRejected(1130)
+        XCTAssertTrue(stillRejected, "a ghost must not be un-rejected by the sweep")
+        let space = await gridState.findSpaceContaining(windowID: 1130)
+        XCTAssertNil(space, "and must not reach a cell through that door")
+    }
+
+    // The same gate must still let a real window back in, or rejection becomes
+    // a one-way trip for anything transiently unreachable.
+    func testRejectedSweepStillRecoversALiveWindow() async {
+        let (reconciler, gridState, mock) = await wire(ghostState())
+        withExtendedLifetime(mock) {}
+        await gridState.rejectWindow(1130)
+        reconciler._test_setAXWindowIDs { pid in pid == 39899 ? [1130] : [] }
+
+        await reconciler._test_rejectedWindowSweep()
+
+        let stillRejected = await gridState.isWindowRejected(1130)
+        XCTAssertFalse(stillRejected, "AX exposes it again -- recovery must work")
+        let space = await gridState.findSpaceContaining(windowID: 1130)
+        XCTAssertEqual(space, "100", "and it returns to a cell")
+    }
+
+    // The third door: a move event re-evaluating a rejected window.
+    func testMoveDoesNotUnrejectAGhost() async {
+        let (reconciler, gridState, mock) = await wire(ghostState())
+        withExtendedLifetime(mock) {}
+        await gridState.rejectWindow(1130)
+        reconciler._test_setAXWindowIDs { _ in [] }
+
+        await reconciler._test_handleWindowMovedUnreject(
+            windowID: 1130,
+            frame: CGRect(x: 0, y: 0, width: 800, height: 600)
+        )
+
+        let stillRejected = await gridState.isWindowRejected(1130)
+        XCTAssertTrue(stillRejected, "a ghost must not be un-rejected by a move event")
+    }
+
+    // A skipped ghost is rejected, not merely passed over: adoption runs on
+    // every action.end (peak 8/second), so leaving it a permanent candidate
+    // means a blocking AX query per burst, forever.
+    func testGhostLeavesCandidacyRatherThanBeingRequeriedForever() async {
+        let (reconciler, gridState, mock) = await wire(ghostState())
+        withExtendedLifetime(mock) {}
+        var queries = 0
+        reconciler._test_setAXWindowIDs { _ in queries += 1; return [] }
+
+        await reconciler._test_adoptUntrackedTileables()
+        let afterFirst = queries
+        await reconciler._test_adoptUntrackedTileables()
+
+        let rejected = await gridState.isWindowRejected(1130)
+        XCTAssertTrue(rejected, "ghost is rejected, not re-listed")
+        XCTAssertEqual(queries, afterFirst, "second pass must not re-query the ghost's app")
+    }
+
     // An ax_orphan prune is not a death: SkyLight still reports bounds and the
     // process is alive. Clearing the wid's rejection there made a pruned ghost
     // *more* adoptable next pass, which is what closed the loop.

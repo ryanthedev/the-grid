@@ -119,6 +119,10 @@ final class EventAllowlistTests: XCTestCase {
         "focus.move", "focus.prune", "focus.restore.stale",
         "focus.restore.byidx",
 
+        // An external app-activation focus assertion declined because a grid
+        // action owned focus; its wid is derived from a lagged app-level API.
+        "focus.appactivated.declined",
+
         // Admission gating: a window that reads tileable from cached AX
         // properties but is absent from its app's live AX window list. One
         // aggregate line per validator pass, one per skipped unreject.

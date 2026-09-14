@@ -81,3 +81,27 @@ enum AXWindowOracle {
         return ids
     }
 }
+
+/// A memoized `AXWindowOracle.windowIDs` answer.
+///
+/// Spelling the "we could not find out" case as its own case rather than a
+/// nested optional: memoizing `Set<UInt32>?` in a dictionary yields
+/// `Set<UInt32>??`, where correctness depends on which optional layer each
+/// operator happens to touch.
+enum AXLookup {
+    /// The query failed in a way that carries no information.
+    case unknown
+    /// The window ids the app exposes (possibly empty, which is a real answer).
+    case ids(Set<UInt32>)
+
+    init(_ result: Set<UInt32>?) {
+        self = result.map { AXLookup.ids($0) } ?? .unknown
+    }
+
+    /// True only when AX positively reports this window. `unknown` is never a
+    /// yes -- callers must abstain on it, not assume presence.
+    func exposes(_ windowID: UInt32) -> Bool {
+        guard case .ids(let ids) = self else { return false }
+        return ids.contains(windowID)
+    }
+}
