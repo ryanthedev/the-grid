@@ -402,7 +402,18 @@ actor GridState {
 
     // MARK: - Window Assignment
 
-    func assignWindow(_ windowID: UInt32, toCellID cellID: String, inSpace spaceID: String) {
+    /// - Parameter makeFocused: whether this insert should make `windowID` the
+    ///   cell's focus target. False for reconciler bookkeeping (adoption,
+    ///   locked-cell create, lift migration, rejected sweep): those must leave
+    ///   the user's target alone. Deliberate placement paths call `setFocus`
+    ///   immediately after and so do not need it either -- the default is the
+    ///   safe answer for every current caller.
+    func assignWindow(
+        _ windowID: UInt32,
+        toCellID cellID: String,
+        inSpace spaceID: String,
+        makeFocused: Bool = false
+    ) {
         var space = getSpace(spaceID)
         var cell = space.cells[cellID] ?? GridCellStateData(cellId: cellID)
 
@@ -420,7 +431,11 @@ actor GridState {
         // Claim the focus pointer only for a cell that has none. Reconciler
         // bookkeeping (adoption, locked-cell create, lift migration, sweep)
         // reaches here too, and must not displace the user's focus target.
-        if CellFocusPointerPolicy.shouldClaimOnInsert(currentLastFocusedWid: cell.lastFocusedWid) {
+        if CellFocusPointerPolicy.shouldClaimOnInsert(
+            makeFocused: makeFocused,
+            currentLastFocusedWid: cell.lastFocusedWid,
+            cellIsEmpty: cell.windows.count == 1
+        ) {
             cell.lastFocusedIdx = insertionIndex
             cell.lastFocusedWid = windowID
         } else {
@@ -440,7 +455,13 @@ actor GridState {
         markDirty()
     }
 
-    func prependWindow(_ windowID: UInt32, toCellID cellID: String, inSpace spaceID: String) {
+    /// - Parameter makeFocused: see `assignWindow(_:toCellID:inSpace:makeFocused:)`.
+    func prependWindow(
+        _ windowID: UInt32,
+        toCellID cellID: String,
+        inSpace spaceID: String,
+        makeFocused: Bool = false
+    ) {
         var space = getSpace(spaceID)
         var cell = space.cells[cellID] ?? GridCellStateData(cellId: cellID)
 
@@ -458,7 +479,11 @@ actor GridState {
             newIndex: 0
         )
         cell.windows.insert(windowID, at: 0)
-        if CellFocusPointerPolicy.shouldClaimOnInsert(currentLastFocusedWid: cell.lastFocusedWid) {
+        if CellFocusPointerPolicy.shouldClaimOnInsert(
+            makeFocused: makeFocused,
+            currentLastFocusedWid: cell.lastFocusedWid,
+            cellIsEmpty: cell.windows.count == 1
+        ) {
             cell.lastFocusedIdx = 0
             cell.lastFocusedWid = windowID
         } else {
@@ -476,7 +501,14 @@ actor GridState {
         markDirty()
     }
 
-    func insertWindow(_ windowID: UInt32, atIndex index: Int, inCellID cellID: String, inSpace spaceID: String) {
+    /// - Parameter makeFocused: see `assignWindow(_:toCellID:inSpace:makeFocused:)`.
+    func insertWindow(
+        _ windowID: UInt32,
+        atIndex index: Int,
+        inCellID cellID: String,
+        inSpace spaceID: String,
+        makeFocused: Bool = false
+    ) {
         var space = getSpace(spaceID)
 
         removeWindowInternal(windowID, from: &space)
@@ -489,7 +521,11 @@ actor GridState {
             newIndex: clampedIndex
         )
         cell.windows.insert(windowID, at: clampedIndex)
-        if CellFocusPointerPolicy.shouldClaimOnInsert(currentLastFocusedWid: cell.lastFocusedWid) {
+        if CellFocusPointerPolicy.shouldClaimOnInsert(
+            makeFocused: makeFocused,
+            currentLastFocusedWid: cell.lastFocusedWid,
+            cellIsEmpty: cell.windows.count == 1
+        ) {
             cell.lastFocusedIdx = clampedIndex
             cell.lastFocusedWid = windowID
         } else {
@@ -569,11 +605,21 @@ actor GridState {
         }
     }
 
-    func removeWindowFromAllSpaces(_ windowID: UInt32) {
+    /// Remove a window from every space.
+    ///
+    /// - Parameter forgetRejection: whether to also drop the wid from the
+    ///   rejected set. True for a genuine death (destroyed, or SkyLight no
+    ///   longer knows it) where the id may be reused by a different window.
+    ///   False when the window is merely unreachable -- an `ax_orphan` prune
+    ///   leaves a live process owning a live wid, and clearing its rejection
+    ///   there is what let the next adoption pass pick it straight back up.
+    func removeWindowFromAllSpaces(_ windowID: UInt32, forgetRejection: Bool = true) {
         for spaceID in spaces.keys {
             removeWindow(windowID, fromSpace: spaceID)
         }
-        rejectedWindows.remove(windowID)
+        if forgetRejection {
+            rejectedWindows.remove(windowID)
+        }
     }
 
     // MARK: - Rejected Windows

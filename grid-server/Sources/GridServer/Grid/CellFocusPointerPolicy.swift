@@ -35,11 +35,25 @@ import Foundation
 enum CellFocusPointerPolicy {
 
     /// Whether a window arriving in a cell should claim that cell's focus
-    /// pointer. Only a cell with no pointer at all (empty, or every prior
-    /// occupant gone) has one to give: otherwise the incumbent stands and the
-    /// caller must go through `setFocus` to move it deliberately.
-    static func shouldClaimOnInsert(currentLastFocusedWid: UInt32) -> Bool {
-        return currentLastFocusedWid == 0
+    /// pointer.
+    ///
+    /// Intent comes first: a caller that says `makeFocused` means it. Otherwise
+    /// only a cell that was *empty before this insert* has a pointer to give --
+    /// it needs some target or focusing it lands nowhere.
+    ///
+    /// `lastFocusedWid == 0` is deliberately **not** sufficient on its own. A
+    /// populated cell reaches that state legitimately: removal clears the wid
+    /// when the focused window leaves and `prevFocusedWid` is gone too, leaving
+    /// real windows behind with no named target. Treating that as "free to
+    /// claim" is the original bug in miniature -- the next window the
+    /// reconciler happens to add, zombie or not, would take the cell.
+    static func shouldClaimOnInsert(
+        makeFocused: Bool,
+        currentLastFocusedWid: UInt32,
+        cellIsEmpty: Bool
+    ) -> Bool {
+        if makeFocused { return true }
+        return cellIsEmpty && currentLastFocusedWid == 0
     }
 
     /// The index the pointer should hold for `windows`, given the wid it names.

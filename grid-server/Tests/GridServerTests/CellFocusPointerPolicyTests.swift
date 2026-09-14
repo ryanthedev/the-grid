@@ -11,12 +11,33 @@ final class CellFocusPointerPolicyTests: XCTestCase {
     // An incumbent focus target must survive a later arrival -- the exact
     // sequence that made a re-adopted window win a cell it never earned.
     func testInsertDoesNotDisplaceAnExistingPointer() {
-        XCTAssertFalse(CellFocusPointerPolicy.shouldClaimOnInsert(currentLastFocusedWid: 328))
+        XCTAssertFalse(CellFocusPointerPolicy.shouldClaimOnInsert(
+            makeFocused: false, currentLastFocusedWid: 328, cellIsEmpty: false
+        ))
     }
 
-    // A cell with no pointer has one to give, or focusing it has no target.
-    func testInsertClaimsPointerWhenCellHasNone() {
-        XCTAssertTrue(CellFocusPointerPolicy.shouldClaimOnInsert(currentLastFocusedWid: 0))
+    // A cell that was empty needs some target, or focusing it lands nowhere.
+    func testInsertClaimsPointerForAPreviouslyEmptyCell() {
+        XCTAssertTrue(CellFocusPointerPolicy.shouldClaimOnInsert(
+            makeFocused: false, currentLastFocusedWid: 0, cellIsEmpty: true
+        ))
+    }
+
+    // A populated cell can legitimately hold wid 0: removal clears it when the
+    // focused window leaves and prevFocusedWid is gone too. Claiming there is
+    // the original bug in miniature -- the next reconciler insert takes a cell
+    // that still holds real windows.
+    func testPopulatedCellWithNoPointerIsStillNotFreeToClaim() {
+        XCTAssertFalse(CellFocusPointerPolicy.shouldClaimOnInsert(
+            makeFocused: false, currentLastFocusedWid: 0, cellIsEmpty: false
+        ))
+    }
+
+    // Deliberate placement still wins outright.
+    func testExplicitIntentClaimsRegardlessOfIncumbent() {
+        XCTAssertTrue(CellFocusPointerPolicy.shouldClaimOnInsert(
+            makeFocused: true, currentLastFocusedWid: 328, cellIsEmpty: false
+        ))
     }
 
     // Removing a window ahead of the pointer used to leave the index pointing

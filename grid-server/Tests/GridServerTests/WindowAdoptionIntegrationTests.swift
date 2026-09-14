@@ -234,6 +234,8 @@ final class WindowAdoptionIntegrationTests: XCTestCase {
 
         let reconciler = GridReconciler()
         reconciler._test_setup(stateProvider: mock, gridState: gridState)
+        // The window is genuinely present over AX; adoption is gated on that.
+        reconciler._test_setAXWindowIDs { pid in pid == 21 ? [1000] : [] }
 
         // Precondition: window is NOT tracked.
         let before = await gridState.findSpaceContaining(windowID: 1000)

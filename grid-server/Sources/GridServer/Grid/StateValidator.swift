@@ -10,8 +10,6 @@ import Foundation
 import CoreGraphics
 import ApplicationServices
 
-@_silgen_name("_AXUIElementGetWindow")
-private func _AXUIElementGetWindow(_ element: AXUIElement, _ windowID: UnsafeMutablePointer<UInt32>) -> AXError
 
 actor StateValidator {
 
@@ -272,7 +270,12 @@ actor StateValidator {
 
         // Prune windows that exceeded the threshold
         for (windowID, count) in axOrphanCounts where count >= axOrphanThreshold {
-            await gridState.removeWindowFromAllSpaces(windowID)
+            // An ax_orphan is not a death: SkyLight still reports bounds, the
+            // owning process is alive, only AX has stopped exposing it. Keep
+            // any rejection on the wid -- clearing it here is what made a
+            // pruned zombie *more* adoptable on the next pass and closed the
+            // adopt/prune loop.
+            await gridState.removeWindowFromAllSpaces(windowID, forgetRejection: false)
             axOrphanCounts.removeValue(forKey: windowID)
             jlog("validate.win.prune", data: [
                 "wid": windowID,
@@ -294,34 +297,13 @@ actor StateValidator {
     // true  => report an empty set; callers may treat the app's windows as absent.
     // false => report nil; callers must skip this pid and prune nothing.
     static func axFailureMeansNoWindows(_ result: AXError) -> Bool {
-        // .attributeUnsupported = non-windowed process (agent/daemon), definitive.
-        // .cannotComplete / .notImplemented / anything else = app busy or
-        // unusual, and absence of evidence is not evidence of absence.
-        return result == .attributeUnsupported
+        return AXWindowOracle.axFailureMeansNoWindows(result)
     }
 
     // Get all window IDs visible via AX for a given pid.
     // Returns nil if the AX query fails (app unresponsive, no permission).
     private func getAXWindowIDs(pid: pid_t) -> Set<UInt32>? {
-        let app = AXUIElementCreateApplication(pid)
-        var windowsValue: CFTypeRef?
-        let result = AXUIElementCopyAttributeValue(
-            app,
-            kAXWindowsAttribute as CFString,
-            &windowsValue
-        )
-        guard result == .success, let windows = windowsValue as? [AXUIElement] else {
-            return Self.axFailureMeansNoWindows(result) ? Set() : nil
-        }
-
-        var ids = Set<UInt32>()
-        for window in windows {
-            var windowID: UInt32 = 0
-            if _AXUIElementGetWindow(window, &windowID) == .success {
-                ids.insert(windowID)
-            }
-        }
-        return ids
+        return AXWindowOracle.windowIDs(pid: pid)
     }
 
     // deduplicateWindows -- remove windows from all-but-one space when a window

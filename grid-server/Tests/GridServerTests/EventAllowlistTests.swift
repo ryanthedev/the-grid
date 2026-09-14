@@ -118,6 +118,13 @@ final class EventAllowlistTests: XCTestCase {
         "focus.init", "focus.mismatch", "focus.mismatch.accept",
         "focus.move", "focus.prune", "focus.restore.stale",
         "focus.restore.byidx",
+
+        // Admission gating: a window that reads tileable from cached AX
+        // properties but is absent from its app's live AX window list. One
+        // aggregate line per validator pass, one per skipped unreject.
+        "validate.adopt.skip",
+        "sweep.unreject.skip",
+        "reconcile.unreject.skip",
         "focus.seq.reject", "focus.skip_empty",
         "grid.cfg.borders.bridge", "grid.cfg.merge", "grid.cfg.ready",
         "grid.cfg.reload.ok", "grid.cfg.reload.start",

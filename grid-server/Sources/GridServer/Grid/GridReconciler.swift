@@ -24,6 +24,14 @@ struct PendingLaunchTarget {
 class GridReconciler: StateEventHandler {
 
     // Dependencies (set via setup)
+    // Live AX window lookup, injected so the admission gate can be driven in
+    // tests without a real accessibility boundary. Production wiring is
+    // AXWindowOracle; see its doc comment for why adoption and pruning must
+    // share one oracle.
+    private var axWindowIDs: @Sendable (pid_t) -> Set<UInt32>? = {
+        AXWindowOracle.windowIDs(pid: $0)
+    }
+
     private weak var gridState: GridState?
     private weak var gridConfig: GridConfig?
     private weak var stateProvider: (any StateProvider)?
@@ -273,6 +281,9 @@ class GridReconciler: StateEventHandler {
         let wmState = await stateProvider.getState()
         let trackedWids = Set(await gridState.getAllWindowIDs())
 
+        // Collect candidates grouped by pid first, so the live AX check below
+        // costs one query per app rather than one per window.
+        var candidatesByPID: [pid_t: [(wid: UInt32, state: WindowState)]] = [:]
         for (widStr, windowState) in wmState.windows {
             guard let wid = UInt32(widStr) else { continue }
             var assignedAnywhere = trackedWids.contains(wid)
@@ -283,12 +294,43 @@ class GridReconciler: StateEventHandler {
                 isTileable: isTileable(window: windowState),
                 isAssignedAnywhere: assignedAnywhere
             ) else { continue }
+            candidatesByPID[windowState.pid, default: []].append((wid, windowState))
+        }
 
-            jlog("validate.win.untracked", data: [
-                "wid": Int(wid),
-                "app": windowState.appName ?? "unknown",
+        // isTileable() above answers from cached AX properties, and role
+        // latches at discovery: a window whose AX element is long gone still
+        // reads as tileable forever. StateValidator prunes exactly those as
+        // ax_orphan, off a *live* query -- so adopting on the cache meant the
+        // two halves contradicted each other every pass. Ask the same oracle
+        // the pruner asks, and abstain on the same unknowns.
+        var absent: [Int] = []
+        for (pid, candidates) in candidatesByPID {
+            guard let axWindowIDs = self.axWindowIDs(pid) else {
+                // Unknown, not empty: the app is busy or unreachable. Adopt
+                // nothing this pass rather than guess.
+                continue
+            }
+            for candidate in candidates {
+                guard axWindowIDs.contains(candidate.wid) else {
+                    absent.append(Int(candidate.wid))
+                    continue
+                }
+                jlog("validate.win.untracked", data: [
+                    "wid": Int(candidate.wid),
+                    "app": candidate.state.appName ?? "unknown",
+                ])
+                await handleWindowCreated(candidate.wid, candidate.state.pid)
+            }
+        }
+
+        // One aggregate line per pass; these repeat every tick for as long as a
+        // ghost persists, and used to be 154 adopt/prune round trips instead.
+        if !absent.isEmpty {
+            jlog("validate.adopt.skip", data: [
+                "reason": "ax_absent",
+                "count": absent.count,
+                "wids": absent.sorted(),
             ])
-            await handleWindowCreated(wid, windowState.pid)
         }
     }
 
@@ -552,6 +594,14 @@ class GridReconciler: StateEventHandler {
         for wid in rejected {
             guard let windowState = wmState.windows[String(wid)] else { continue }
             guard isTileable(window: windowState) else { continue }
+
+            // Same cached-role hazard as adoption: un-rejecting on the cache
+            // is a second door into the adopt/prune loop.
+            guard let axWindowIDs = self.axWindowIDs(windowState.pid),
+                  axWindowIDs.contains(wid) else {
+                jlog("sweep.unreject.skip", data: ["wid": Int(wid), "reason": "ax_absent"])
+                continue
+            }
 
             await gridState.unrejectWindow(wid)
             jlog("sweep.unrejected", data: [
@@ -1386,6 +1436,13 @@ class GridReconciler: StateEventHandler {
         // (e.g. Chrome AXUnknown dropdowns).
         guard isTileable(window: windowState) else { return }
 
+        // Third admission door -- gate it on the same live oracle.
+        guard let axWindowIDs = self.axWindowIDs(windowState.pid),
+              axWindowIDs.contains(windowID) else {
+            jlog("reconcile.unreject.skip", data: ["wid": Int(windowID), "reason": "ax_absent"])
+            return
+        }
+
         await gridState.unrejectWindow(windowID)
         jlog("reconcile.win.unrejected", data: ["wid": windowID, "w": frame.width, "h": frame.height])
 
@@ -1915,6 +1972,14 @@ class GridReconciler: StateEventHandler {
     // _test_notStandardGraceSweep: drive the grace re-evaluation sweep (DW-4.6).
     func _test_notStandardGraceSweep() async {
         await notStandardGraceSweep()
+    }
+
+    // _test_setAXWindowIDs: stub the live AX window lookup that gates adoption
+    // and un-rejection. Passing a closure that returns nil models an app we
+    // could not reach; an empty set models a live process exposing no windows
+    // (the zombie case).
+    func _test_setAXWindowIDs(_ lookup: @escaping @Sendable (pid_t) -> Set<UInt32>?) {
+        self.axWindowIDs = lookup
     }
 
     // _test_adoptUntrackedTileables: drive the depth-0 adoption scan (DW-4.8).
