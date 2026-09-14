@@ -210,6 +210,12 @@ class GridReconciler: StateEventHandler {
             }
 
             jlog("action.err", data: ["label": label, "err": "\(error)"])
+            // Pair the action.start even on the failure path. Without this a
+            // throwing action leaves an unmatched start, so no log analysis can
+            // tell "still in flight" from "failed and exited" -- 24 unmatched
+            // starts across one archived log, which is exactly the ambiguity
+            // that made the focus investigation harder than it needed to be.
+            jlog("action.end", data: ["label": label, "err": true])
             throw error
         }
     }
