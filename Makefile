@@ -1,4 +1,4 @@
-.PHONY: help build server cli viewer test clean server-test server-clean run-server install dist dev reset-accessibility setup-signing server-universal cli-universal viewer-universal dist-universal notify notify-dev notify-universal notify-app-bundle notify-test notify-clean mcp mcp-dev mcp-install
+.PHONY: run run-clean install-dev help build server cli viewer test clean server-test server-clean run-server install dist dev reset-accessibility setup-signing server-universal cli-universal viewer-universal dist-universal notify notify-dev notify-universal notify-app-bundle notify-test notify-clean mcp mcp-dev mcp-install
 
 # Version from VERSION file
 VERSION := $(shell cat VERSION)
@@ -288,13 +288,46 @@ dev: server viewer notify-dev
 	@cp -R $(APP_BUNDLE) $(DEPLOY_LOCATION)
 	@echo "✓ Server deployed to $(DEPLOY_LOCATION)"
 
-# Build and restart thegrid service
-run: dev install-dev
+# Kill a running server/notify pair and verify they are actually gone.
+# pkill's exit status is deliberately NOT swallowed with `|| true`: a survivor
+# holding /tmp/grid-server.sock is what leaves the next instance bound to an
+# orphaned inode (server alive, `thegrid ping` refused), so a failed kill must
+# stop the run rather than hand us a split-brain pair.
+define kill-grid
 	@echo "Killing any stray grid-server processes..."
-	@pkill -9 -f grid-server 2>/dev/null || true
+	@pkill -9 -f grid-server 2>/dev/null; true
 	@echo "Killing any stray grid-notify processes..."
-	@pkill -9 -f grid-notify 2>/dev/null || true
+	@pkill -9 -f grid-notify 2>/dev/null; true
 	@sleep 0.5
+	@if pgrep -f grid-server >/dev/null 2>&1; then \
+		echo "✗ grid-server survived pkill -9 (pid $$(pgrep -f grid-server | tr '\n' ' '))"; \
+		echo "  It still owns /tmp/grid-server.sock; starting a second instance would"; \
+		echo "  unlink that socket and leave the CLI unable to connect. Kill it first."; \
+		exit 1; \
+	fi
+endef
+
+# Build and restart thegrid service.
+#
+# This target does NOT delete ~/.local/state/thegrid/*.json. state.json is the
+# saved grid layout (every window-to-cell assignment) and thegrid-server.json is
+# the diagnostic log -- wiping both on every rebuild destroyed the user's layout
+# and the evidence needed to debug why. Use `make run-clean` for a deliberate
+# reset. Only the derived config cache is cleared here.
+run: dev install-dev
+	$(call kill-grid)
+	@echo "Clearing config cache..."
+	@rm -f ~/.cache/thegrid/config.merged.yaml
+	@echo "Restarting thegrid-dev service..."
+	@services restart thegrid-dev
+	@echo "Launching GridNotify..."
+	@open $(NOTIFY_DEPLOY_LOCATION)
+	@echo "✓ Service restarted (state and logs preserved)"
+
+# Rebuild and restart from a clean slate. Discards the saved grid layout and
+# every log in the state dir -- opt in explicitly when that is what you want.
+run-clean: dev install-dev
+	$(call kill-grid)
 	@echo "Clearing state, logs, and config cache..."
 	@rm -f ~/.local/state/thegrid/*.json
 	@rm -f ~/.cache/thegrid/config.merged.yaml
@@ -302,7 +335,7 @@ run: dev install-dev
 	@services restart thegrid-dev
 	@echo "Launching GridNotify..."
 	@open $(NOTIFY_DEPLOY_LOCATION)
-	@echo "✓ Service restarted"
+	@echo "✓ Service restarted (state and logs cleared)"
 
 # Install dev build to ~/.local/bin
 install-dev: cli viewer
