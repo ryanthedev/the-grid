@@ -204,6 +204,7 @@ actor GridTerminalManager {
             let key = String(prevWID)
             if let window = state.windows[key] {
                 _ = windowManipulator.focusWindow(pid: window.pid, windowID: prevWID)
+                await stateManager.setFocusedWindow(prevWID)
             }
             previousWindowID = nil
         }
@@ -249,6 +250,7 @@ actor GridTerminalManager {
         // Bring to front and focus. The opacity restore and order-to-front were
         // MSS-only and never ran; focusWindow already raises via AX.
         _ = windowManipulator.focusWindow(pid: pid, windowID: wid)
+        await stateManager.setFocusedWindow(wid)
 
         isHidden = false
         return true
@@ -380,6 +382,7 @@ actor GridTerminalManager {
 
         // Focus the new window
         _ = windowManipulator.focusWindow(pid: pid, windowID: wid)
+        await stateManager.setFocusedWindow(wid)
 
         // Save initial frame for this display
         if let uuid = displayUUID {

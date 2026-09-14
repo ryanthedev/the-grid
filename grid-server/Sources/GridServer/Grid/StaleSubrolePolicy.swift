@@ -58,3 +58,28 @@ enum StaleSubrolePolicy {
         return attempts < maxAttempts
     }
 }
+
+/// Backoff for rejected windows the accessibility API will not expose.
+///
+/// A ghost -- a window whose process is alive but which AX no longer lists --
+/// has no natural exit from `rejectedWindows`: SkyLight still reports its
+/// bounds so `pruneDeadWindows` declines to remove it, and its cached `role`
+/// stays latched tileable, so it re-enters the sweep's candidate list on every
+/// tick. At the sweep's 300ms cadence that is a blocking AX round trip and a
+/// log line roughly three times a second, indefinitely.
+///
+/// Exponential backoff capped at ~30s keeps the steady-state cost negligible
+/// while still re-checking often enough that a window which genuinely comes
+/// back is picked up promptly.
+enum SweepBackoffPolicy {
+
+    /// Sweep ticks to wait before re-querying, given consecutive absences.
+    /// ~300ms per tick, so the cap is about 30 seconds.
+    static let maxDelayTicks: UInt64 = 100
+
+    static func delayTicks(streak: Int) -> UInt64 {
+        guard streak > 0 else { return 0 }
+        guard streak < 64 else { return maxDelayTicks }
+        return min(UInt64(1) << UInt64(streak), maxDelayTicks)
+    }
+}

@@ -37,6 +37,15 @@ class GridReconciler: StateEventHandler {
     // every 300ms sweep for the life of the process.
     private var subroleRequeryAttempts: [UInt32: Int] = [:]
 
+    // Backoff for rejected windows AX will not expose. A ghost never leaves
+    // rejectedWindows on its own, so without backoff it costs an AX round trip
+    // per 300ms tick forever; with it, one per ~30s at steady state, which
+    // still recovers a window that genuinely returns.
+    private var sweepTick: UInt64 = 0
+    private var axAbsentStreak: [UInt32: Int] = [:]
+    private var axAbsentRetryAt: [UInt32: UInt64] = [:]
+    private var lastAXAbsentSkipped: Set<UInt32> = []
+
     private weak var gridState: GridState?
     private weak var gridConfig: GridConfig?
     private weak var stateProvider: (any StateProvider)?
@@ -626,8 +635,15 @@ class GridReconciler: StateEventHandler {
         var candidates: [(wid: UInt32, state: WindowState)] = []
         // Windows rejected on a cached subrole that may since have settled.
         var staleSubrole: [(wid: UInt32, state: WindowState)] = []
+        sweepTick &+= 1
         for wid in rejected {
             guard let windowState = wmState.windows[String(wid)] else { continue }
+            // A window AX has repeatedly refused to expose is in backoff. Without
+            // this a ghost never leaves rejectedWindows -- SLS still reports its
+            // bounds so it is never pruned as dead, and its cached role is
+            // latched tileable -- so it would cost an AX query and a log line on
+            // every 300ms tick for the life of the process.
+            if let retryAt = axAbsentRetryAt[wid], sweepTick < retryAt { continue }
             if isTileable(window: windowState) {
                 candidates.append((wid, windowState))
             } else if StaleSubrolePolicy.looksStale(
@@ -664,14 +680,19 @@ class GridReconciler: StateEventHandler {
             jlog("sweep.subrole.recovered", data: ["count": recovered.count, "wids": recovered.sorted()])
         }
 
-        var skipped: [Int] = []
+        var skipped: Set<UInt32> = []
         for (wid, windowState) in candidates {
             // Same cached-role hazard as adoption: un-rejecting on the cache
             // is a second door into the adopt/prune loop.
             guard axByPID[windowState.pid]?.exposes(wid) == true else {
-                skipped.append(Int(wid))
+                skipped.insert(wid)
+                let streak = (axAbsentStreak[wid] ?? 0) + 1
+                axAbsentStreak[wid] = streak
+                axAbsentRetryAt[wid] = sweepTick &+ SweepBackoffPolicy.delayTicks(streak: streak)
                 continue
             }
+            axAbsentStreak.removeValue(forKey: wid)
+            axAbsentRetryAt.removeValue(forKey: wid)
 
             await gridState.unrejectWindow(wid)
             jlog("sweep.unrejected", data: [
@@ -687,13 +708,19 @@ class GridReconciler: StateEventHandler {
             }
         }
 
-        // One line per tick, not one per window: this fires every 300ms.
-        if !skipped.isEmpty {
-            jlog("sweep.unreject.skip", data: [
-                "reason": "ax_absent",
-                "count": skipped.count,
-                "wids": skipped.sorted().prefix(20).map { $0 },
-            ])
+        // Log the transition, not the state. This runs every 300ms and a ghost
+        // persists indefinitely, so a per-tick line would emit ~33MB/day and
+        // blow through the log's 32MB rotation ceiling daily -- undoing the
+        // diagnostics that preserving the log was meant to buy.
+        if skipped != lastAXAbsentSkipped {
+            if !skipped.isEmpty {
+                jlog("sweep.unreject.skip", data: [
+                    "reason": "ax_absent",
+                    "count": skipped.count,
+                    "wids": skipped.sorted().prefix(20).map { Int($0) },
+                ])
+            }
+            lastAXAbsentSkipped = skipped
         }
     }
 
@@ -887,6 +914,13 @@ class GridReconciler: StateEventHandler {
     }
 
     private func handleWindowDestroyed(_ windowID: UInt32) async {
+        // Drop per-window sweep bookkeeping so these maps cannot grow without
+        // bound across a long-lived server with heavy window churn.
+        subroleRequeryAttempts.removeValue(forKey: windowID)
+        axAbsentStreak.removeValue(forKey: windowID)
+        axAbsentRetryAt.removeValue(forKey: windowID)
+        lastAXAbsentSkipped.remove(windowID)
+
         // Remove window from GridState (all spaces)
         await gridState?.removeWindowFromAllSpaces(windowID)
 

@@ -60,7 +60,13 @@ enum AXWindowOracle {
     ///   information (see `axFailureMeansNoWindows`). Callers must treat nil as
     ///   "unknown" and change nothing, never as "no windows".
     static func windowIDs(pid: pid_t) -> Set<UInt32>? {
-        let app = AXUIElementCreateApplication(pid)
+        // makeAppElement, never AXUIElementCreateApplication directly (#34): it
+        // applies a bounded messaging timeout so a beachballing app degrades to
+        // a fast kAXErrorCannotComplete instead of freezing this actor for the
+        // ~6s default. That matters far more here than it did at the ancestor
+        // call site in StateValidator, which ran once per 30s -- this runs on
+        // the 300ms sweep and on every action.end.
+        let app = makeAppElement(pid: pid)
         var windowsValue: CFTypeRef?
         let result = AXUIElementCopyAttributeValue(
             app,

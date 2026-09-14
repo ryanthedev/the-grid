@@ -38,9 +38,15 @@ final class FocusOwnership: @unchecked Sendable {
     ///
     /// Set from a single `didSet` on `GridReconciler.suppressionDepth` rather
     /// than incremented at each of its five mutation sites, so the two counts
-    /// cannot drift. Clamped at zero: the action path has logged more
-    /// `action.start` than `action.end` (24 unmatched across one archived log),
-    /// and a negative count would wedge the flag permanently off.
+    /// cannot drift.
+    ///
+    /// Clamped at zero purely as defence. Suppression is balanced in practice --
+    /// over one archived log, 1031 `action.start` + 18 `action.begin` increments
+    /// against 1007 `action.end` + 42 `action.err` decrements, exactly equal.
+    /// (The apparent 24-event gap is a logging asymmetry: `executeAction`'s
+    /// catch branch decrements and logs `action.err`, not `action.end`.) The
+    /// real hazard is a `beginAction` token that never reaches `endAction`,
+    /// which leaves the depth elevated with no watchdog to recover it.
     func set(depth newDepth: Int) {
         lock.lock()
         depth = max(0, newDepth)

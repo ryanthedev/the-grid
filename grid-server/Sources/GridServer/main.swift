@@ -200,7 +200,7 @@ struct GridServerCommand: ParsableCommand {
             let windowManipulator = WindowManipulator(connectionID: connectionID)
 
             // Configure PickerManager with window manipulator for focus restoration
-            PickerManager.shared.configure(with: gridConfig, windowManipulator: windowManipulator, gridReconciler: gridReconciler, gridState: gridState)
+            PickerManager.shared.configure(with: gridConfig, windowManipulator: windowManipulator, gridReconciler: gridReconciler, gridState: gridState, stateManager: StateManager.shared)
 
             let gridRecorder = GridRecorder(
                 gridState: gridState,

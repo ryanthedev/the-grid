@@ -167,6 +167,54 @@ final class ZombieAdoptionLoopTests: XCTestCase {
         XCTAssertEqual(queries, afterFirst, "second pass must not re-query the ghost's app")
     }
 
+    // A ghost has no natural exit from rejectedWindows: SLS still reports its
+    // bounds so it is never pruned as dead, and its cached role stays latched
+    // tileable. Without backoff that is a blocking AX round trip and a log line
+    // ~3x/second forever -- which would blow the log's rotation ceiling daily
+    // and undo the whole point of preserving it.
+    func testGhostFallsIntoBackoffRatherThanBeingQueriedEveryTick() async {
+        let (reconciler, gridState, mock) = await wire(ghostState())
+        withExtendedLifetime(mock) {}
+        await gridState.rejectWindow(1130)
+        var queries = 0
+        reconciler._test_setAXWindowIDs { _ in queries += 1; return [] }
+
+        for _ in 0..<20 { await reconciler._test_rejectedWindowSweep() }
+
+        XCTAssertLessThan(queries, 6, "backoff must throttle a persistent ghost")
+        let rejected = await gridState.isWindowRejected(1130)
+        XCTAssertTrue(rejected, "and it stays rejected throughout")
+    }
+
+    // Backoff must not become a one-way trip: a window that genuinely returns
+    // has to be picked up once its delay elapses.
+    func testBackoffStillRecoversAWindowThatComesBack() async {
+        let (reconciler, gridState, mock) = await wire(ghostState())
+        withExtendedLifetime(mock) {}
+        await gridState.rejectWindow(1130)
+        var present = false
+        reconciler._test_setAXWindowIDs { _ in present ? [1130] : [] }
+
+        for _ in 0..<3 { await reconciler._test_rejectedWindowSweep() }
+        present = true
+        // Run past the longest backoff delay.
+        for _ in 0..<Int(SweepBackoffPolicy.maxDelayTicks + 2) {
+            await reconciler._test_rejectedWindowSweep()
+        }
+
+        let rejected = await gridState.isWindowRejected(1130)
+        XCTAssertFalse(rejected, "AX exposes it again -- backoff must still let it back in")
+    }
+
+    // Backoff grows and caps, so a long-lived ghost settles at ~one query per
+    // 30s rather than compounding forever.
+    func testBackoffGrowsAndCaps() {
+        XCTAssertEqual(SweepBackoffPolicy.delayTicks(streak: 1), 2)
+        XCTAssertEqual(SweepBackoffPolicy.delayTicks(streak: 3), 8)
+        XCTAssertEqual(SweepBackoffPolicy.delayTicks(streak: 40), SweepBackoffPolicy.maxDelayTicks)
+        XCTAssertEqual(SweepBackoffPolicy.delayTicks(streak: 99), SweepBackoffPolicy.maxDelayTicks)
+    }
+
     // An ax_orphan prune is not a death: SkyLight still reports bounds and the
     // process is alive. Clearing the wid's rejection there made a pruned ghost
     // *more* adoptable next pass, which is what closed the loop.

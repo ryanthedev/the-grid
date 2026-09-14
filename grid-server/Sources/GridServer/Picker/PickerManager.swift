@@ -35,6 +35,13 @@ class PickerManager {
     private var windowManipulator: WindowManipulator?
     private var gridReconciler: GridReconciler?
     private var gridState: GridState?
+    // Needed so the picker records its own focus in StateManager metadata.
+    // It used to get that for free from the .appActivated event StateManager
+    // applied unconditionally -- but the picker suppresses reconciliation for
+    // exactly that event, and an action path must not depend on an OS
+    // notification that structurally may not fire (focusing a window that is
+    // already its app's focused window changes nothing for AX to report).
+    private var stateManager: StateManager?
     private var isHandlingResult: Bool = false
 
     // Optional callback invoked when a launch-type action is selected
@@ -51,7 +58,7 @@ class PickerManager {
     }
 
     /// Configure with grid config and window manipulator (called after server startup)
-    func configure(with config: GridConfig, windowManipulator: WindowManipulator? = nil, gridReconciler: GridReconciler? = nil, gridState: GridState? = nil) {
+    func configure(with config: GridConfig, windowManipulator: WindowManipulator? = nil, gridReconciler: GridReconciler? = nil, gridState: GridState? = nil, stateManager: StateManager? = nil) {
         dispatchPrecondition(condition: .onQueue(.main))
         self.gridConfig = config
         if let wm = windowManipulator {
@@ -62,6 +69,9 @@ class PickerManager {
         }
         if let gs = gridState {
             self.gridState = gs
+        }
+        if let sm = stateManager {
+            self.stateManager = sm
         }
     }
 
@@ -81,6 +91,10 @@ class PickerManager {
             return
         }
         _ = wm.focusWindow(pid: pid, windowID: wid)
+        // Record the restore as well, for the same reason as updateGridStateFocus.
+        if let sm = stateManager {
+            Task { await sm.setFocusedWindow(wid) }
+        }
         previousWindowID = nil
         previousWindowPID = nil
     }
@@ -298,6 +312,10 @@ class PickerManager {
 
     /// Update GridState focus tracking to match the window we just focused via picker
     private func updateGridStateFocus(_ windowID: UInt32) async {
+        // Authoritative for our own focus: the picker runs inside a suppression
+        // session that exists to drop the OS focus events for this very change.
+        await stateManager?.setFocusedWindow(windowID)
+
         guard let gridState else { return }
         guard let spaceID = await gridState.findSpaceContaining(windowID: windowID) else {
             jlog("pick.focus.nostate", data: ["wid": windowID])
