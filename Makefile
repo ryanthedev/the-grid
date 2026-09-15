@@ -314,6 +314,17 @@ define kill-grid
 	fi
 endef
 
+# launchd returns before the server is listening, so a command issued right
+# after `make run` fails with "Cannot connect to /tmp/grid-server.sock".
+# Poll ping for up to 5s so the target only returns once the socket answers.
+define wait-for-server
+	@for i in $$(seq 1 25); do \
+		if ~/.local/bin/thegrid ping >/dev/null 2>&1; then exit 0; fi; \
+		sleep 0.2; \
+	done; \
+	echo "✗ server did not answer ping within 5s"; exit 1
+endef
+
 # Build and restart thegrid service.
 #
 # This target does NOT delete ~/.local/state/thegrid/*.json. state.json is the
@@ -329,6 +340,7 @@ run: dev install-dev
 	@services restart thegrid-dev
 	@echo "Launching GridNotify..."
 	@open $(NOTIFY_DEPLOY_LOCATION)
+	$(call wait-for-server)
 	@echo "✓ Service restarted (state and logs preserved)"
 
 # Rebuild and restart from a clean slate. Discards the saved grid layout and

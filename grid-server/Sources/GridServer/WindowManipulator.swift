@@ -477,7 +477,7 @@ return true
             return false
         }
 
-        let confirmed = confirmSLSMove(windowID: windowID, spaceID: spaceID)
+        verifySLSMoveAsync(windowID: windowID, spaceID: spaceID)
 
         JSONLogger.shared.log("win.space.timing", data: [
             "wid": windowID,
@@ -486,33 +486,63 @@ return true
             "total_ms": Int((CFAbsoluteTimeGetCurrent() - t0) * 1000),
         ])
 
-        return confirmed
+        return true
     }
 
-    /// Confirm a SkyLight-fallback space move.
+    /// Verify a SkyLight space move without blocking the caller.
     ///
     /// `SLSMoveWindowsToManagedSpace` is asynchronous and exposes no synchronous
-    /// success signal, so an immediate `getWindowSpace` re-query races the move and
-    /// reports the old space. Retry the verification briefly; if the window reflects
-    /// the target space, the move is confirmed. If it still has not reflected after
-    /// the retry window, treat the issued move as best-effort success (the SLS path
-    /// gives us nothing better to decide on, and callers must not block a move that
-    /// the OS likely honored) and surface the uncertainty via a warning. Only the
-    /// MSS path — which has a real success Bool — reports a hard move failure.
-    private func confirmSLSMove(windowID: UInt32, spaceID: UInt64) -> Bool {
-        var newSpace = getWindowSpace(windowID: windowID)
-        var attempts = 0
-        // ~100ms worst case; resolves in 1–2 iterations for an honored move.
-        while newSpace != spaceID && attempts < 5 {
-            usleep(20_000)
-            newSpace = getWindowSpace(windowID: windowID)
-            attempts += 1
+    /// success signal. The old confirm loop polled `SLSCopySpacesForWindows`
+    /// with `usleep` for 100ms and logged every cross-space move in the history
+    /// (48/48) as "unverified" -- while the window's next reported frame showed
+    /// it on the target display every time. Probing showed why: with the
+    /// calling thread blocked, neither the window's space list nor its managed
+    /// display flipped within ~780ms, yet two seconds later both had. The move
+    /// is only observable once this thread yields, so a synchronous wait can
+    /// never confirm it and only delays the action.
+    ///
+    /// Verification therefore runs on a detached task: the caller returns
+    /// immediately (the SLS path gives it nothing better to decide on, and it
+    /// must not block a move the OS will honor), and the task logs
+    /// `sls.move.confirmed` with which signal flipped first and when, or
+    /// `warn.move.sls_unverified` if neither did inside the budget.
+    private static let verifyStepNanos: UInt64 = 25_000_000
+    private static let verifyMaxAttempts = 24
+
+    private func verifySLSMoveAsync(windowID: UInt32, spaceID: UInt64) {
+        Task.detached(priority: .utility) { [self] in
+            let t0 = CFAbsoluteTimeGetCurrent()
+            for attempt in 1...Self.verifyMaxAttempts {
+                try? await Task.sleep(nanoseconds: Self.verifyStepNanos)
+                let ms = Int((CFAbsoluteTimeGetCurrent() - t0) * 1000)
+                if windowSpaceList(windowID: windowID).contains(spaceID) {
+                    JSONLogger.shared.log("sls.move.confirmed", data: ["wid": windowID, "sid": spaceID, "signal": "space", "attempts": attempt, "confirm_ms": ms])
+                    return
+                }
+                if let d = SLSCopyManagedDisplayForWindow(connectionID, windowID),
+                   SLSManagedDisplayGetCurrentSpace(connectionID, d) == spaceID {
+                    JSONLogger.shared.log("sls.move.confirmed", data: ["wid": windowID, "sid": spaceID, "signal": "display", "attempts": attempt, "confirm_ms": ms])
+                    return
+                }
+            }
+            let actual = getWindowSpace(windowID: windowID)
+            JSONLogger.shared.log("warn.move.sls_unverified", data: ["wid": windowID, "expected": spaceID, "actual": actual as Any, "attempts": Self.verifyMaxAttempts, "confirm_ms": Int((CFAbsoluteTimeGetCurrent() - t0) * 1000)])
         }
-        if newSpace == spaceID {
-            return true
+    }
+
+    /// Every space SkyLight currently lists for the window. Verification must
+    /// not look only at index 0: a window mid-move can be listed on both.
+    private func windowSpaceList(windowID: UInt32) -> [UInt64] {
+        let windowArray = createWindowArray(windowIDs: [windowID])
+        guard let spaceArray = SLSCopySpacesForWindows(connectionID, 0x7, windowArray) else { return [] }
+        var out: [UInt64] = []
+        for i in 0..<CFArrayGetCount(spaceArray) {
+            let num = Unmanaged<CFNumber>.fromOpaque(CFArrayGetValueAtIndex(spaceArray, i)!).takeUnretainedValue()
+            var v: UInt64 = 0
+            CFNumberGetValue(num, .sInt64Type, &v)
+            out.append(v)
         }
-        JSONLogger.shared.log("warn.move.sls_unverified", data: ["wid": windowID, "expected": spaceID, "actual": newSpace as Any])
-        return true
+        return out
     }
 
     // MARK: - Window Focus

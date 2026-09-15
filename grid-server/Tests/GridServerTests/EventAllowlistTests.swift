@@ -190,7 +190,7 @@ final class EventAllowlistTests: XCTestCase {
         "resize.ratios_reset.done", "resize.split.done",
         "resize.splits_reset.done", "resize.start", "resize.stop",
         "router.err", "router.init", "router.register", "router.unregister",
-        "sls.compat", "sls.move",
+        "sls.compat", "sls.move", "sls.move.confirmed",
         "sock.connect", "sock.disconnect", "sock.err", "sock.start", "sock.stop",
         "spc.changed", "spc.create", "spc.created",
         "spc.destroy", "spc.destroyed", "spc.focus", "spc.move", "spc.refresh",
