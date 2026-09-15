@@ -5,8 +5,11 @@
 // Pure decision logic for "which space is this window on?".
 //
 // Two sources disagree. SkyLight (`SLSCopySpacesForWindows`) reports a space
-// list per window, but it lags an async cross-space move by up to one poll
-// interval (~3s) and, on some virtual displays, reports a space that belongs to
+// list per window, but StateManager's cached copy of it (`window.spaces`) is
+// refreshed only on the ~3s poll or a display-crossing frame write, so it can
+// trail an async cross-space move by that long (a *fresh* query reflects the
+// move within ~30ms once the caller yields), and, on some virtual displays, it
+// reports a space that belongs to
 // no display we can see (the `0b7edd6` case: a window geometrically on the
 // space-41 display reported as space 64). Geometric derivation — "the window's
 // frame is on this display, so it is on that display's current space" — has the

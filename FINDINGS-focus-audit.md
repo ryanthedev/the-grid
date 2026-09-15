@@ -1,6 +1,6 @@
 # theGrid — focus & state integrity audit
 
-**Status: fixed on branch `fix/focus-state-integrity` (7 commits, 461 tests green).**
+**Status: merged to `main` and deployed 2026-09-15 (461 tests green). Follow-ups below.**
 
 | # | Finding | Commit |
 |---|---------|--------|
@@ -11,9 +11,18 @@
 | B | Windows lost forever to a latched transient `AXUnknown` subrole | `fade218` |
 | — | Failed actions left an unmatched `action.start` in the log | `c45a1b7` |
 | — | 3 regressions found in review (picker/terminal focus, AX timeout, ghost backoff) | `8a5ac83` |
+| — | `make run` aborted on launchd's KeepAlive respawn, misread as a survivor | `f3e562d` |
+| — | SkyLight space-move confirm polled synchronously and could never observe the move | `364d09c` |
 
 **Not fixed — ranked by likely user impact:**
-1. `window.move` 32% failure; 48/48 `sls.move` emit `warn.move.sls_unverified`. Never investigated.
+1. ~~`window.move` 32% failure; 48/48 `sls.move` emit `warn.move.sls_unverified`.~~ **Resolved, and
+   the number was wrong.** The 32% counted `action.start` without `action.end`, which was the
+   `action.err` logging asymmetry fixed in `c45a1b7`; against `action.err` the real rate is 4/115
+   (3.5%), all legitimate (`noDisplayInDirection` x2, `noFocusedWindow`, `focusFailed`). The 48/48
+   unverified moves all landed: checked against each window's next reported frame, 49/50 were on
+   the target display (the 50th had no frame event within 5s). The confirm loop polled
+   `SLSCopySpacesForWindows` with `usleep` and the move is not observable until the calling thread
+   yields -- a 780ms synchronous probe saw nothing, an async check sees it at ~27ms. `364d09c`.
 2. `role` still latches (`StateManager.swift:1672`). Phase 3 routes around it rather than unlatching it.
 3. A `beginAction` token that never reaches `endAction` wedges suppression on, with no watchdog.
 4. Residual `sweep.correct` from the ~53% of `appActivated` events outside an action.

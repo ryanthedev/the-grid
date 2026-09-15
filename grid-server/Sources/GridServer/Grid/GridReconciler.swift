@@ -80,17 +80,19 @@ class GridReconciler: StateEventHandler {
     private var notStandardGrace: [UInt32: CFAbsoluteTime] = [:]
 
     // FIX 1 / DW-D2: windows deliberately moved across spaces, with the move
-    // timestamp. On a machine where MSS is unavailable the SLS space query
-    // (wmState.windows[wid].spaces) lags the async move by up to a poll
-    // interval (~3s), so sweepDisplacedWindows would otherwise see the
-    // just-moved window as "displaced" and migrate its GridState assignment
-    // back — bouncing the move. A window within this grace is exempt from
-    // displaced-sweep correction until SLS catches up. Lives on the
+    // timestamp. StateManager's cached space list (wmState.windows[wid].spaces)
+    // is refreshed only on the ~3s poll or a display-crossing frame write, so
+    // it lags the async move by up to that long (a fresh SkyLight query flips
+    // in ~30ms; the cache is what is slow). sweepDisplacedWindows would
+    // otherwise see the just-moved window as "displaced" and migrate its
+    // GridState assignment back — bouncing the move. A window within this
+    // grace is exempt from displaced-sweep correction until the cache catches
+    // up. Lives on the
     // single-threaded reconciler event path (same threading class as
     // notStandardGrace) — no new shared concurrency state.
     private var crossMoveGrace: [UInt32: CFAbsoluteTime] = [:]
 
-    // Grace span for crossMoveGrace. 5s covers the ~3s SLS poll lag with
+    // Grace span for crossMoveGrace. 5s covers the ~3s cache poll lag with
     // margin (matches the fence-timeout magnitude).
     private let crossMoveGraceSeconds: CFAbsoluteTime = 5.0
 

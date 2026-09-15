@@ -470,6 +470,10 @@ return true
         // partially disabled and never completed a handshake in practice, so
         // every call already fell through to SkyLight. The branch is gone along
         // with MSS; both arms did the same thing.
+        // Captured before the move so the async check can tell "the window
+        // changed display" from "the target already is this display's current
+        // space" (a window parked on an inactive space of the same display).
+        let displayBefore = SLSCopyManagedDisplayForWindow(connectionID, windowID)
         let success = moveWindowViaSkyLightAPI(windowID: windowID, spaceID: spaceID)
 
         if !success {
@@ -477,7 +481,7 @@ return true
             return false
         }
 
-        verifySLSMoveAsync(windowID: windowID, spaceID: spaceID)
+        verifySLSMoveAsync(windowID: windowID, spaceID: spaceID, displayBefore: displayBefore)
 
         JSONLogger.shared.log("win.space.timing", data: [
             "wid": windowID,
@@ -506,10 +510,18 @@ return true
     /// must not block a move the OS will honor), and the task logs
     /// `sls.move.confirmed` with which signal flipped first and when, or
     /// `warn.move.sls_unverified` if neither did inside the budget.
+    ///
+    /// Two signals: the window's space list containing the target, or the
+    /// window's managed display having *changed* to one whose current space is
+    /// the target. The display signal is only trusted on a change: before the
+    /// move lands the query still returns the old display, and if the target
+    /// happens to be that display's current space (window parked on an
+    /// inactive space, moved to the active one) the test would pass without
+    /// the move having happened.
     private static let verifyStepNanos: UInt64 = 25_000_000
     private static let verifyMaxAttempts = 24
 
-    private func verifySLSMoveAsync(windowID: UInt32, spaceID: UInt64) {
+    private func verifySLSMoveAsync(windowID: UInt32, spaceID: UInt64, displayBefore: CFString?) {
         Task.detached(priority: .utility) { [self] in
             let t0 = CFAbsoluteTimeGetCurrent()
             for attempt in 1...Self.verifyMaxAttempts {
@@ -520,6 +532,7 @@ return true
                     return
                 }
                 if let d = SLSCopyManagedDisplayForWindow(connectionID, windowID),
+                   displayBefore.map({ CFStringCompare($0, d, []) != .compareEqualTo }) ?? true,
                    SLSManagedDisplayGetCurrentSpace(connectionID, d) == spaceID {
                     JSONLogger.shared.log("sls.move.confirmed", data: ["wid": windowID, "sid": spaceID, "signal": "display", "attempts": attempt, "confirm_ms": ms])
                     return

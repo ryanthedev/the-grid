@@ -316,7 +316,7 @@ endef
 
 # launchd returns before the server is listening, so a command issued right
 # after `make run` fails with "Cannot connect to /tmp/grid-server.sock".
-# Poll ping for up to 5s so the target only returns once the socket answers.
+# Poll ping for ~5s so the target only returns once the socket answers.
 define wait-for-server
 	@for i in $$(seq 1 25); do \
 		if ~/.local/bin/thegrid ping >/dev/null 2>&1; then exit 0; fi; \
@@ -354,6 +354,7 @@ run-clean: dev install-dev
 	@services restart thegrid-dev
 	@echo "Launching GridNotify..."
 	@open $(NOTIFY_DEPLOY_LOCATION)
+	$(call wait-for-server)
 	@echo "✓ Service restarted (state and logs cleared)"
 
 # Install dev build to ~/.local/bin

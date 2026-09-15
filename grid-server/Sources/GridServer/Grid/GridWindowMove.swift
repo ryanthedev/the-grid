@@ -457,8 +457,9 @@ class GridWindowMove {
             throw GridWindowMoveError.windowMoveFailed(windowID)
         }
 
-        // FIX 1 / DW-D2: the SLS-fallback space query lags this async move by up
-        // to a poll interval (~3s). Record the move so the displaced sweep
+        // FIX 1 / DW-D2: StateManager's cached `window.spaces` lags this async
+        // move by up to a poll interval (~3s) -- a fresh SkyLight query flips in
+        // ~30ms, but the sweep reads the cache. Record the move so the displaced sweep
         // exempts this window until SLS catches up — otherwise the sweep sees
         // the just-moved window as displaced and bounces it back to its origin
         // space. Recorded immediately after the move is confirmed (#16 abort
