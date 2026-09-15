@@ -289,18 +289,25 @@ dev: server viewer notify-dev
 	@echo "✓ Server deployed to $(DEPLOY_LOCATION)"
 
 # Kill a running server/notify pair and verify they are actually gone.
-# pkill's exit status is deliberately NOT swallowed with `|| true`: a survivor
-# holding /tmp/grid-server.sock is what leaves the next instance bound to an
-# orphaned inode (server alive, `thegrid ping` refused), so a failed kill must
+#
+# The server runs under launchd (com.r.thegrid-dev) with KeepAlive, so a bare
+# `pkill` is answered by an immediate respawn -- which the old survivor check
+# then misread as "grid-server survived pkill -9" and aborted the run. Boot the
+# service out first so launchd stops supervising it, then kill any stray
+# instance that was started outside launchd. A real survivor after both steps
+# still holds /tmp/grid-server.sock and would leave the next instance bound to
+# an orphaned inode (server alive, `thegrid ping` refused), so that case must
 # stop the run rather than hand us a split-brain pair.
 define kill-grid
+	@echo "Stopping thegrid-dev service..."
+	@launchctl bootout gui/$$(id -u)/com.r.thegrid-dev 2>/dev/null; true
 	@echo "Killing any stray grid-server processes..."
 	@pkill -9 -f grid-server 2>/dev/null; true
 	@echo "Killing any stray grid-notify processes..."
 	@pkill -9 -f grid-notify 2>/dev/null; true
 	@sleep 0.5
 	@if pgrep -f grid-server >/dev/null 2>&1; then \
-		echo "✗ grid-server survived pkill -9 (pid $$(pgrep -f grid-server | tr '\n' ' '))"; \
+		echo "✗ grid-server survived bootout + pkill -9 (pid $$(pgrep -f grid-server | tr '\n' ' '))"; \
 		echo "  It still owns /tmp/grid-server.sock; starting a second instance would"; \
 		echo "  unlink that socket and leave the CLI unable to connect. Kill it first."; \
 		exit 1; \
