@@ -53,5 +53,14 @@ final class WakeDeferralTests: XCTestCase {
         await reconciler._test_handle(.screenLocked)
         await reconciler._test_handle(.screenUnlocked)
         XCTAssertEqual(stubApply.callCount, 1, "plain lock/unlock refreshes nothing")
+
+        // An unlock that lands while a hotkey action owns focus must still be
+        // processed, or the lock flag sticks and defers every later wake.
+        await reconciler._test_handle(.screenLocked)
+        await reconciler._test_handle(.systemWoke)
+        let token = reconciler.beginAction(label: "test")
+        await reconciler._test_handle(.screenUnlocked)
+        reconciler.endAction(token, syncBorders: false)
+        XCTAssertEqual(stubApply.callCount, 2, "unlock during an action still refreshes")
     }
 }
