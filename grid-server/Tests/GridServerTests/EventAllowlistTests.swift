@@ -55,8 +55,13 @@ final class EventAllowlistTests: XCTestCase {
         "reconcile.dsp.geometry",
         "reconcile.space.activated",
         "reconcile.space.activated.no_display",
-        "reconcile.wake.validator.deferred",
         "state.space_migrate.snapshot",
+
+        // Wake work held until the screen unlocks (WakeDeferral).
+        "reconcile.display.connect.deferred",
+        "reconcile.dsp.geometry.deferred",
+        "reconcile.wake.deferred",
+        "state.wake.deferred",
         "warn.layout.stale_space",
         "warn.reconcile.dsp.geometry.errors",
         "warn.space.migrate.count_mismatch",

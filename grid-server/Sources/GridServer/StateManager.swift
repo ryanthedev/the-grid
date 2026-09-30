@@ -70,6 +70,9 @@ actor StateManager: StateEventHandler, StateProvider {
     // later rediscovery (different window, reused id) does not false-positive.
     private let resurrectionGraceSeconds: CFAbsoluteTime = 3.5
 
+    // Holds the wake rescan until the screen unlocks (see WakeDeferral).
+    private var wakeDeferral = WakeDeferral()
+
     // CLI path (used for ResizeManager)
     private var cliPath: String = "thegrid"
 
@@ -331,11 +334,27 @@ actor StateManager: StateEventHandler, StateProvider {
             await handleApplicationUnhidden(app)
 
         case .systemWoke:
-            await handleSystemWoke()
+            // A rescan at the login screen caches every window as hidden (and
+            // AX answers there are unreliable), and the poll never corrects
+            // either, so nothing tiles until restart. Rescan on unlock instead.
+            // Registered ahead of GridReconciler, so this finishes before its
+            // own deferred wake reconcile runs.
+            if wakeDeferral.wake() {
+                await handleSystemWoke()
+            } else {
+                jlog("state.wake.deferred")
+            }
 
-        case .systemWillSleep, .screenLocked, .screenUnlocked:
-            // Handled by GridReconciler (validator pause/resume).
-            // StateManager itself does not need to react to sleep/lock state.
+        case .screenLocked:
+            wakeDeferral.lock()
+
+        case .screenUnlocked:
+            if wakeDeferral.unlock() {
+                await handleSystemWoke()
+            }
+
+        case .systemWillSleep:
+            // Handled by GridReconciler (validator pause).
             break
 
         case .displayReconfigured(_):

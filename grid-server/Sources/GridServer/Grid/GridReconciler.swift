@@ -134,15 +134,20 @@ class GridReconciler: StateEventHandler {
 
     // Lock-state tracking (DW-2.5, #23). The reconciler is the single
     // serialized consumer of screenLocked/screenUnlocked/systemWoke events, so
-    // a plain Bool is sufficient (no new actor; §8 satisfied). On wake the
-    // validator is resumed ONLY when the screen is not locked — resuming at the
-    // login screen lets AX's reduced window list false-positive ax_orphan
-    // prunes against real tiled windows.
-    private var screenLocked: Bool = false
+    // a plain struct is sufficient (no new actor; §8 satisfied). Wake and
+    // display refreshes that arrive while locked are held until unlock: at the
+    // login screen the window list is reduced, so validating against it
+    // false-positive prunes real windows (DW-2.5), and refreshing layouts from
+    // it saves every cell empty.
+    private var wakeDeferral = WakeDeferral()
 
     // _test_setScreenLocked: drive the lock flag directly in tests.
     func _test_setScreenLocked(_ locked: Bool) {
-        screenLocked = locked
+        if locked {
+            wakeDeferral.lock()
+        } else {
+            _ = wakeDeferral.unlock()
+        }
     }
 
     // Consume-once action tokens (DW-1.4, #4). A long-lived session token is
@@ -829,12 +834,17 @@ class GridReconciler: StateEventHandler {
             await stateValidator?.pause()
 
         case .screenLocked:
-            screenLocked = true
+            wakeDeferral.lock()
             await stateValidator?.pause()
 
         case .screenUnlocked:
-            screenLocked = false
-            await stateValidator?.resume()
+            if wakeDeferral.unlock() {
+                // Runs the wake reconcile held back while locked; it resumes
+                // the validator itself.
+                await handleSystemWake()
+            } else {
+                await stateValidator?.resume()
+            }
 
         case .spaceActivated(let spaceID, let displayUUID):
             await handleSpaceActivated(spaceID: spaceID, displayUUID: displayUUID)
@@ -1439,6 +1449,12 @@ class GridReconciler: StateEventHandler {
     private func handleDisplayGeometryChanged(_ displayUUID: String) async {
         jlog("reconcile.dsp.geometry", data: ["display": displayUUID])
 
+        // Locked: the unlock reconcile refreshes every display instead.
+        if !wakeDeferral.wake() {
+            jlog("reconcile.dsp.geometry.deferred", data: ["display": displayUUID])
+            return
+        }
+
         geometryReapplyTask?.cancel()
         geometryReapplyTask = Task { [weak self] in
             guard let self else { return }
@@ -1455,6 +1471,14 @@ class GridReconciler: StateEventHandler {
     private func handleSystemWake() async {
         guard let stateProvider, let gridState else { return }
 
+        // Locked: hold the whole reconcile (migrate, validate, refresh) until
+        // unlock. Refreshing from the login screen's window list is what
+        // emptied every cell.
+        if !wakeDeferral.wake() {
+            jlog("reconcile.wake.deferred")
+            return
+        }
+
         jlog("reconcile.wake.start")
 
         // Capture wmState once for consistency across all steps
@@ -1465,16 +1489,9 @@ class GridReconciler: StateEventHandler {
         let task = Task { [weak self] in
             guard let self else { return }
 
-            // Step 0: Resume the validator ONLY when the screen is unlocked
-            // (DW-2.5, #23). At the login screen AX returns reduced window
-            // lists that false-positive ax_orphan-prune real tiled windows.
-            // If still locked, the validator stays paused; the later
-            // screenUnlocked event resumes it.
-            if self.screenLocked {
-                jlog("reconcile.wake.validator.deferred")
-            } else {
-                await self.stateValidator?.resume()
-            }
+            // Step 0: Resume the validator. Only reached unlocked (DW-2.5,
+            // #23): a locked wake is deferred above.
+            await self.stateValidator?.resume()
 
             // Step 1: Migrate space IDs (macOS may reassign after sleep)
             var displaySpaces: [String: [String]] = [:]
@@ -1607,6 +1624,13 @@ class GridReconciler: StateEventHandler {
     // Re-syncs borders and reapplies layouts for the reconnected display.
     private func handleDisplayConnected(_ displayUUID: String) async {
         jlog("reconcile.display.connect", data: ["display": displayUUID])
+
+        // Locked: the unlock reconcile refreshes every display, after space-ID
+        // migration, instead of this refresh running ahead of it.
+        if !wakeDeferral.wake() {
+            jlog("reconcile.display.connect.deferred", data: ["display": displayUUID])
+            return
+        }
 
         // Short delay allows macOS to stabilize space/window state after reconnect
         // before we query it. Without this, wmState may not yet reflect new spaces.
