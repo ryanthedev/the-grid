@@ -2584,6 +2584,12 @@ return
         // BFD uses a similar 1s delay for event tap recovery.
         try? await Task.sleep(nanoseconds: 2_000_000_000)
 
+        // The screen may have locked during the delay; rescan on unlock instead.
+        if !wakeDeferral.wake() {
+            jlog("state.wake.deferred")
+            return
+        }
+
         await refreshCompleteState()
 
         // Rebuild AX observers — existing observers may have stale connections

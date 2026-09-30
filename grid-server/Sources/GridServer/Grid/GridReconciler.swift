@@ -132,9 +132,8 @@ class GridReconciler: StateEventHandler {
     // arrival order when suppressionDepth returns to 0.
     private var suppressedEvents = SuppressedEventQueue()
 
-    // Lock-state tracking (DW-2.5, #23). The reconciler is the single
-    // serialized consumer of screenLocked/screenUnlocked/systemWoke events, so
-    // a plain struct is sufficient (no new actor; §8 satisfied). Wake and
+    // Lock-state tracking (DW-2.5, #23). StateManager keeps its own copy for its
+    // wake rescan; this one gates the reconciler's refreshes. Wake and
     // display refreshes that arrive while locked are held until unlock: at the
     // login screen the window list is reduced, so validating against it
     // false-positive prunes real windows (DW-2.5), and refreshing layouts from
@@ -798,6 +797,30 @@ class GridReconciler: StateEventHandler {
             return
         }
 
+        // Lock, unlock and wake must always be processed. Dropping one during
+        // an action would leave the lock flag stuck and defer every later
+        // wake and display refresh until the next unlock.
+        switch event {
+        case .systemWoke:
+            await handleSystemWake()
+            return
+        case .screenLocked:
+            wakeDeferral.lock()
+            await stateValidator?.pause()
+            return
+        case .screenUnlocked:
+            if wakeDeferral.unlock() {
+                // Runs the wake reconcile held back while locked; it resumes
+                // the validator itself.
+                await handleSystemWake()
+            } else {
+                await stateValidator?.resume()
+            }
+            return
+        default:
+            break
+        }
+
         // Queue (don't drop) window create/destroy that arrive during suppression
         // (DW-1.6, #12). They are replayed in arrival order when depth returns to 0.
         // Other events (move/resize/minimize/etc.) are still skipped — the active
@@ -827,24 +850,8 @@ class GridReconciler: StateEventHandler {
         case .windowCreated(let windowID, let pid):
             await handleWindowCreated(windowID, pid)
 
-        case .systemWoke:
-            await handleSystemWake()
-
         case .systemWillSleep:
             await stateValidator?.pause()
-
-        case .screenLocked:
-            wakeDeferral.lock()
-            await stateValidator?.pause()
-
-        case .screenUnlocked:
-            if wakeDeferral.unlock() {
-                // Runs the wake reconcile held back while locked; it resumes
-                // the validator itself.
-                await handleSystemWake()
-            } else {
-                await stateValidator?.resume()
-            }
 
         case .spaceActivated(let spaceID, let displayUUID):
             await handleSpaceActivated(spaceID: spaceID, displayUUID: displayUUID)
@@ -1489,8 +1496,8 @@ class GridReconciler: StateEventHandler {
         let task = Task { [weak self] in
             guard let self else { return }
 
-            // Step 0: Resume the validator. Only reached unlocked (DW-2.5,
-            // #23): a locked wake is deferred above.
+            // Step 0: Resume the validator. A wake that arrives while locked
+            // is deferred above and replayed on unlock (DW-2.5, #23).
             await self.stateValidator?.resume()
 
             // Step 1: Migrate space IDs (macOS may reassign after sleep)
