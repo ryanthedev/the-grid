@@ -2031,7 +2031,18 @@ class GridReconciler: StateEventHandler {
 
             // Record the source cell before state mutation
             let sourceCell = await gridState.getWindowCell(windowID: wid, inSpace: trackedSpaceID) ?? ""
-            let targetCell = await gridState.getFocusedCell(spaceID: targetSpaceID) ?? "left"
+            // Pick a cell the target layout actually has, the same way window
+            // creation does. A hardcoded "left" put windows into a cell that
+            // single-tabs layouts lack, so they were never placed (vana: 16h).
+            let targetCell = GridReconciler.pickTargetCell(
+                focusedCell: await gridState.getFocusedCell(spaceID: targetSpaceID),
+                assignments: await gridState.getWindowAssignments(spaceID: targetSpaceID),
+                locked: []
+            )
+            guard !targetCell.isEmpty else {
+                jlog("reconcile.lift.skip", data: ["reason": "no_cells", "wid": Int(wid), "to": targetSpaceID])
+                continue
+            }
 
             await gridState.removeWindow(wid, fromSpace: trackedSpaceID)
             await gridState.assignWindow(wid, toCellID: targetCell, inSpace: targetSpaceID)

@@ -311,6 +311,40 @@ final class GeometryWritesTests: XCTestCase {
             "applyCellLayout must be called for vacated source space after displacement")
     }
 
+    // vana: a window lifted into an emptied single-tabs space went to a
+    // hardcoded "left" cell that layout lacks, and was never placed for 16h.
+    func test_sweep_lifts_window_into_a_cell_the_target_space_has() async {
+        var wmState = WindowManagerState()
+        var win = WindowState(id: 100)
+        win.spaces = [UInt64(2)]
+        win.role = "AXWindow"
+        win.subrole = "AXStandardWindow"
+        win.frame = CGRect(x: 0, y: 0, width: 800, height: 600)
+        wmState.windows["100"] = win
+        wmState.spaces["1"] = SpaceState(id: 1, uuid: "u1", type: "user", displayUUID: "d1")
+        wmState.spaces["2"] = SpaceState(id: 2, uuid: "u2", type: "user", displayUUID: "d2")
+
+        let stateProvider = MockStateProvider(state: wmState)
+        let gridState = GridState()
+        await gridState._test_setLayout(spaceID: "1", layoutID: "test")
+        await gridState._test_setCells(spaceID: "1", cellIDs: ["main"])
+        await gridState._test_assignWindow(spaceID: "1", cellID: "main", windowID: 100)
+        // Target: single-tabs style space with only "main" and no focused cell.
+        await gridState._test_setLayout(spaceID: "2", layoutID: "single-tabs")
+        await gridState._test_setCells(spaceID: "2", cellIDs: ["main"])
+
+        let reconciler = GridReconciler()
+        reconciler._test_setup(stateProvider: stateProvider, gridState: gridState)
+        reconciler._test_setGridApply(GridApply())
+
+        await reconciler._test_sweepDisplacedWindows()
+
+        let assignments = await gridState.getWindowAssignments(spaceID: "2")
+        XCTAssertEqual(assignments["main"], [100])
+        XCTAssertNil(assignments["left"], "no phantom cell")
+        withExtendedLifetime(stateProvider) {}
+    }
+
     // MARK: - DW-5.4: Cross-display move abort predicate + err.verify log
 
     // Pure predicate tests: shouldAbortCrossDisplayMove.
