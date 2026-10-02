@@ -787,6 +787,13 @@ actor GridState {
 
             if let existingCell = existingCells[cellID] {
                 cell.stackMode = existingCell.stackMode
+                // Keep focus history by wid; it was zeroed on every apply.
+                if windowIDs.contains(existingCell.lastFocusedWid) {
+                    cell.lastFocusedWid = existingCell.lastFocusedWid
+                }
+                if windowIDs.contains(existingCell.prevFocusedWid) {
+                    cell.prevFocusedWid = existingCell.prevFocusedWid
+                }
 
                 if existingCell.lastFocusedIdx >= 0 && existingCell.lastFocusedIdx < existingCell.windows.count {
                     let focusedWID = existingCell.windows[existingCell.lastFocusedIdx]
@@ -815,6 +822,15 @@ actor GridState {
             }
 
             space.cells[cellID] = cell
+        }
+
+        // Re-point the space's focused index at the same window. An apply can
+        // reorder a cell (position strategy sorts by z-order), and the stale
+        // index made borders and focus next/prev act on a different window.
+        if let oldCell = existingCells[space.focusedCell],
+           oldCell.windows.indices.contains(space.focusedWindow),
+           let newIndex = space.cells[space.focusedCell]?.windows.firstIndex(of: oldCell.windows[space.focusedWindow]) {
+            space.focusedWindow = newIndex
         }
 
         spaces[spaceID] = space
