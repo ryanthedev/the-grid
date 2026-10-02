@@ -187,15 +187,15 @@ class GridApply {
         // 5. Filter tileable windows from StateManager
         let exclusions = await MainActor.run { gridConfig.getWindowExclusions() }
         let rejected = await gridState.getRejectedWindows()
+        // 6. Get previous assignments from GridState
+        let previousAssignments = await gridState.getWindowAssignments(spaceID: spaceID)
         let tileableWindows = filterTileableFromState(
             wmState: wmState,
             spaceID: spaceID,
             exclusions: exclusions,
-            rejectedWindows: rejected
+            rejectedWindows: rejected,
+            alreadyAssigned: Set(previousAssignments.values.joined())
         )
-
-        // 6. Get previous assignments from GridState
-        let previousAssignments = await gridState.getWindowAssignments(spaceID: spaceID)
 
         // 7. Assign windows to cells
         let appRules = await MainActor.run { gridConfig.appRules }
@@ -590,11 +590,12 @@ class GridApply {
     }
 
     // filterTileableFromState: get tileable windows for a space from StateManager
-    private func filterTileableFromState(
+    func filterTileableFromState(
         wmState: WindowManagerState,
         spaceID: String,
         exclusions: GridWindowExclusion,
-        rejectedWindows: Set<UInt32> = []
+        rejectedWindows: Set<UInt32> = [],
+        alreadyAssigned: Set<UInt32> = []
     ) -> [WindowState] {
         var tileable: [WindowState] = []
 
@@ -611,8 +612,15 @@ class GridApply {
             // Check tileable
             guard isTileable(window: windowState) else { continue }
 
-            // Check exclusions
+            // Only take windows the reconciler would adopt (standard), or that
+            // are already in this space's cells. Without this an apply swallowed
+            // popups into tabs (vana: a 270x113 Zoom popup became the focused
+            // tab) and floating windows such as the @terminal scratch.
             let appName = windowState.appName ?? ""
+            guard alreadyAssigned.contains(windowState.id)
+                    || classifyWindow(window: windowState, appName: appName) == .standard else { continue }
+
+            // Check exclusions
             if isExcluded(window: windowState, appName: appName, exclusions: exclusions) {
                 continue
             }
