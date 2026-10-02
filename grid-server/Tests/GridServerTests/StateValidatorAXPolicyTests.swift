@@ -66,4 +66,14 @@ final class StateValidatorAXPolicyTests: XCTestCase {
     func test_success_isNotTreatedAsNoWindows() {
         XCTAssertFalse(StateValidator.axFailureMeansNoWindows(.success))
     }
+
+    // Studio: kitty windows on space 3 were pruned as ax_orphan while a
+    // fullscreen Chrome space (2261) was showing on their display.
+    func test_isOnVisibleSpace_only_trusts_ax_absence_on_a_showing_space() {
+        let showing: Set<UInt64> = [2261, 7]
+        XCTAssertFalse(StateValidator.isOnVisibleSpace(windowSpaces: [3], visibleSpaces: showing))
+        XCTAssertTrue(StateValidator.isOnVisibleSpace(windowSpaces: [7], visibleSpaces: showing))
+        XCTAssertTrue(StateValidator.isOnVisibleSpace(windowSpaces: [], visibleSpaces: showing),
+            "unknown membership still allows pruning ghosts")
+    }
 }
