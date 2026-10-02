@@ -231,4 +231,27 @@ final class ZombieAdoptionLoopTests: XCTestCase {
         let clearedOnDestroy = await gridState.isWindowRejected(1130)
         XCTAssertFalse(clearedOnDestroy, "a real destroy must release the wid")
     }
+
+    // vana: a floating Ghostty cycled validate.win.untracked -> not_standard
+    // bail -> not_standard.expired 163 times in 8 hours, because each action.end
+    // re-adopted it and restarted the grace. Once expired, adoption skips it.
+    func testExpiredNotStandardWindowIsNotReadopted() async throws {
+        var wmState = ghostState()
+        // Modal: classifies as floating, not standard.
+        wmState.windows["1130"]?.isModal = true
+        let (reconciler, gridState, mock) = await wire(wmState)
+        defer { withExtendedLifetime((gridState, mock)) {} }
+        reconciler._test_setAXWindowIDs { pid in pid == 39899 ? [1130] : [] }
+
+        await reconciler._test_adoptUntrackedTileables()
+        XCTAssertEqual(reconciler._test_notStandardGraceCount, 1, "precondition: grace started")
+
+        try await Task.sleep(for: .milliseconds(3200))
+        await reconciler._test_notStandardGraceSweep()
+        XCTAssertEqual(reconciler._test_notStandardGraceCount, 0, "precondition: grace expired")
+
+        await reconciler._test_adoptUntrackedTileables()
+        XCTAssertEqual(reconciler._test_notStandardGraceCount, 0,
+            "an expired floating window must not restart the grace on every action")
+    }
 }

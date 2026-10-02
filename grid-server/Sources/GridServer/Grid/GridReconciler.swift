@@ -79,6 +79,12 @@ class GridReconciler: StateEventHandler {
     // window buttons slightly after creation then tile without a manual reopen.
     private var notStandardGrace: [UInt32: CFAbsoluteTime] = [:]
 
+    // Windows whose not_standard grace expired. Adoption skips them; otherwise
+    // every action.end re-ran the create path, which restarted the grace, and a
+    // floating window cycled untracked -> bail -> expired forever (163 times
+    // over 8 hours for one window). A genuine windowCreated still re-checks.
+    private var notStandardExpired: Set<UInt32> = []
+
     // FIX 1 / DW-D2: windows deliberately moved across spaces, with the move
     // timestamp. StateManager's cached space list (wmState.windows[wid].spaces)
     // is refreshed only on the ~3s poll or a display-crossing frame write, so
@@ -317,7 +323,7 @@ class GridReconciler: StateEventHandler {
         // costs one query per app rather than one per window.
         var candidatesByPID: [pid_t: [(wid: UInt32, state: WindowState)]] = [:]
         for (widStr, windowState) in wmState.windows {
-            guard let wid = UInt32(widStr) else { continue }
+            guard let wid = UInt32(widStr), !notStandardExpired.contains(wid) else { continue }
             var assignedAnywhere = trackedWids.contains(wid)
             if !assignedAnywhere {
                 assignedAnywhere = await gridState.isWindowRejected(wid)
@@ -699,6 +705,7 @@ class GridReconciler: StateEventHandler {
             }
             axAbsentStreak.removeValue(forKey: wid)
             axAbsentRetryAt.removeValue(forKey: wid)
+            lastAXAbsentSkipped.remove(wid)
 
             await gridState.unrejectWindow(wid)
             jlog("sweep.unrejected", data: [
@@ -714,19 +721,20 @@ class GridReconciler: StateEventHandler {
             }
         }
 
-        // Log the transition, not the state. This runs every 300ms and a ghost
-        // persists indefinitely, so a per-tick line would emit ~33MB/day and
-        // blow through the log's 32MB rotation ceiling daily -- undoing the
-        // diagnostics that preserving the log was meant to buy.
-        if skipped != lastAXAbsentSkipped {
-            if !skipped.isEmpty {
-                jlog("sweep.unreject.skip", data: [
-                    "reason": "ax_absent",
-                    "count": skipped.count,
-                    "wids": skipped.sorted().prefix(20).map { Int($0) },
-                ])
-            }
-            lastAXAbsentSkipped = skipped
+        // Log a window once when it becomes AX-absent, not per tick. This runs
+        // every 300ms and a ghost persists indefinitely. Comparing each tick's
+        // skipped set was not enough: ghosts on different backoff schedules are
+        // skipped on different ticks, so the set alternated and logged every
+        // time (52k lines, a quarter of one machine's log). A wid stays in the
+        // logged set until it recovers above or is destroyed.
+        let newlyAbsent = skipped.subtracting(lastAXAbsentSkipped)
+        lastAXAbsentSkipped.formUnion(skipped)
+        if !newlyAbsent.isEmpty {
+            jlog("sweep.unreject.skip", data: [
+                "reason": "ax_absent",
+                "count": lastAXAbsentSkipped.count,
+                "wids": newlyAbsent.sorted().prefix(20).map { Int($0) },
+            ])
         }
     }
 
@@ -744,6 +752,7 @@ class GridReconciler: StateEventHandler {
         for (wid, firstSeen) in notStandardGrace {
             if !NotStandardGracePolicy.shouldReevaluate(now: now, firstSeen: firstSeen) {
                 notStandardGrace[wid] = nil
+                notStandardExpired.insert(wid)
                 jlog("reconcile.not_standard.expired", data: ["wid": Int(wid)])
                 continue
             }
@@ -939,6 +948,7 @@ class GridReconciler: StateEventHandler {
         axAbsentStreak.removeValue(forKey: windowID)
         axAbsentRetryAt.removeValue(forKey: windowID)
         lastAXAbsentSkipped.remove(windowID)
+        notStandardExpired.remove(windowID)
 
         // Remove window from GridState (all spaces)
         await gridState?.removeWindowFromAllSpaces(windowID)
