@@ -253,6 +253,13 @@ final class ZombieAdoptionLoopTests: XCTestCase {
         await reconciler._test_adoptUntrackedTileables()
         XCTAssertEqual(reconciler._test_notStandardGraceCount, 0,
             "an expired floating window must not restart the grace on every action")
+
+        // It later becomes a normal window (e.g. the app is unhidden or a
+        // rescan corrects it): adoption must take it again.
+        mock.state.windows["1130"]?.isModal = false
+        await reconciler._test_adoptUntrackedTileables()
+        let space = await gridState.findSpaceContaining(windowID: 1130)
+        XCTAssertEqual(space, "100", "a window that becomes standard is adopted")
     }
 
     // ska: adopted windows were assigned to a cell but left at their own size

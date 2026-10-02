@@ -264,6 +264,11 @@ final class GridConfig {
     // MARK: - Load
 
     func load() async throws {
+        // Watch the config files first. Any throw below (missing file during an
+        // editor's atomic save, parse error, validation error) used to skip
+        // this, leaving hot reload off for the life of the server.
+        startConfigWatchers()
+
         let files = await XDG.findConfigFiles(app: "thegrid", filename: "config.yaml")
 
         JSONLogger.shared.log("grid.cfg.resolve", data: [
@@ -326,13 +331,11 @@ final class GridConfig {
             JSONLogger.shared.log("grid.cfg.borders.bridge")
         }
 
-        // Expand paths and watch the files before validating. A validation
-        // error used to throw first, so one bad reference (vana: "space 4
-        // references unknown layout") left config hot reload off and `~`
-        // unexpanded for the life of the server. The parsed config is in
-        // effect either way; watching means fixing the file reloads it.
+        // Expand paths before validating. A validation error used to throw
+        // first, so one bad reference (vana: "space 4 references unknown
+        // layout") left `~` unexpanded. The parsed config is in effect either
+        // way.
         expandPaths()
-        startConfigWatchers()
 
         // Validate
         try validate()

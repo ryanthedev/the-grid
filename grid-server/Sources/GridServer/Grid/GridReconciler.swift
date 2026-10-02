@@ -79,10 +79,10 @@ class GridReconciler: StateEventHandler {
     // window buttons slightly after creation then tile without a manual reopen.
     private var notStandardGrace: [UInt32: CFAbsoluteTime] = [:]
 
-    // Windows whose not_standard grace expired. Adoption skips them; otherwise
-    // every action.end re-ran the create path, which restarted the grace, and a
-    // floating window cycled untracked -> bail -> expired forever (163 times
-    // over 8 hours for one window). A genuine windowCreated still re-checks.
+    // Windows whose not_standard grace expired. Adoption skips them while they
+    // still classify non-standard; otherwise every action.end re-ran the create
+    // path, which restarted the grace, and a floating window cycled untracked ->
+    // bail -> expired forever (163 times over 8 hours for one window).
     private var notStandardExpired: Set<UInt32> = []
 
     // FIX 1 / DW-D2: windows deliberately moved across spaces, with the move
@@ -323,7 +323,15 @@ class GridReconciler: StateEventHandler {
         // costs one query per app rather than one per window.
         var candidatesByPID: [pid_t: [(wid: UInt32, state: WindowState)]] = [:]
         for (widStr, windowState) in wmState.windows {
-            guard let wid = UInt32(widStr), !notStandardExpired.contains(wid) else { continue }
+            guard let wid = UInt32(widStr) else { continue }
+            if notStandardExpired.contains(wid) {
+                // Skip only while it still classifies non-standard; once it
+                // changes (app unhidden, rescan, late buttons) it is adoptable.
+                if classifyWindow(window: windowState, appName: windowState.appName ?? "") != .standard {
+                    continue
+                }
+                notStandardExpired.remove(wid)
+            }
             var assignedAnywhere = trackedWids.contains(wid)
             if !assignedAnywhere {
                 assignedAnywhere = await gridState.isWindowRejected(wid)
@@ -1599,6 +1607,7 @@ class GridReconciler: StateEventHandler {
         }
 
         await gridState.unrejectWindow(windowID)
+        lastAXAbsentSkipped.remove(windowID)
         jlog("reconcile.win.unrejected", data: ["wid": windowID, "w": frame.width, "h": frame.height])
 
         if pendingLaunchTarget != nil {
