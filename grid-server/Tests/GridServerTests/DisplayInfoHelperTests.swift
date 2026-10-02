@@ -156,9 +156,14 @@ final class DisplayInfoHelperTests: XCTestCase {
 
     func test_matchScreenIndex_falls_back_only_to_an_unclaimed_screen() {
         let screens: [String?] = ["A", nil]
-        XCTAssertEqual(DisplayInfoHelper.matchScreenIndex(uuid: "Main", screenUUIDs: screens, fallbackIndex: 1), 1)
-        XCTAssertNil(DisplayInfoHelper.matchScreenIndex(uuid: "Main", screenUUIDs: screens, fallbackIndex: 0),
+        XCTAssertEqual(DisplayInfoHelper.matchScreenIndex(uuid: "X", screenUUIDs: screens, fallbackIndex: 1, claimedUUIDs: ["A", "X"]), 1)
+        XCTAssertNil(DisplayInfoHelper.matchScreenIndex(uuid: "X", screenUUIDs: screens, fallbackIndex: 0, claimedUUIDs: ["A", "X"]),
             "screen 0 is display A's; don't give it to a second display")
-        XCTAssertNil(DisplayInfoHelper.matchScreenIndex(uuid: "Main", screenUUIDs: screens, fallbackIndex: 5))
+        XCTAssertNil(DisplayInfoHelper.matchScreenIndex(uuid: "X", screenUUIDs: screens, fallbackIndex: 5, claimedUUIDs: ["A", "X"]))
+    }
+
+    // Separate Spaces off: SkyLight lists one display with an ID no screen has.
+    func test_matchScreenIndex_unlisted_uuid_still_gets_its_screen() {
+        XCTAssertEqual(DisplayInfoHelper.matchScreenIndex(uuid: "Main", screenUUIDs: ["A", "B"], fallbackIndex: 0, claimedUUIDs: ["Main"]), 0)
     }
 }

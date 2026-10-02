@@ -50,4 +50,29 @@ final class DisplayReconnectSpacesTests: XCTestCase {
         XCTAssertEqual(recorded, ["612"])
         withExtendedLifetime(mock) {}
     }
+
+    // Recorded [1,2,3]; the user deleted desktop 2 and added desktop 4.
+    // Positional pairing moved desktop 3's layout onto 4 while 3 still existed.
+    func test_migration_leaves_surviving_desktops_in_place() async {
+        let gridState = GridState()
+        await gridState._test_setLayout(spaceID: "3", layoutID: "two-col")
+        await gridState._test_seedDisplaySpaces("ext", ["1", "2", "3"])
+
+        _ = await gridState.migrateSpaceIDs(currentDisplaySpaces: ["ext": ["1", "3", "4"]])
+
+        let three = await gridState.getCurrentLayout(spaceID: "3")
+        let four = await gridState.getCurrentLayout(spaceID: "4")
+        XCTAssertEqual(three, "two-col")
+        XCTAssertEqual(four, "")
+    }
+
+    // A space ID now live on one display is dropped from another display's
+    // record, so the absent display can't take it back on reconnect.
+    func test_live_space_is_dropped_from_an_absent_displays_record() async {
+        let gridState = GridState()
+        await gridState._test_seedDisplaySpaces("ext", ["4", "5"])
+        _ = await gridState.migrateSpaceIDs(currentDisplaySpaces: ["laptop": ["1", "4"]])
+        let ext = await gridState.getSpaceIDsForDisplay("ext")
+        XCTAssertEqual(ext, ["5"])
+    }
 }

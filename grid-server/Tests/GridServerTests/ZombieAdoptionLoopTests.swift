@@ -279,4 +279,22 @@ final class ZombieAdoptionLoopTests: XCTestCase {
         XCTAssertNotNil(cell)
         XCTAssertEqual(placed, ["100/\(cell ?? "")"], "the adopted window's cell is laid out")
     }
+
+    // A window on another display's desktop that has no layout must stay out of
+    // the focused display's grid; with adoption laying cells out it would be
+    // pulled across displays.
+    func testWindowOnUnlaidOutSpaceIsNotBorrowedIntoFocusedSpace() async {
+        var wmState = ghostState()
+        wmState.windows["1130"]?.spaces = [200]
+        wmState.displays.append(makeDisplay(uuid: "display-2", space: 200))
+        wmState.spaces["200"] = SpaceState(id: 200, uuid: "v", type: "user", displayUUID: "display-2")
+        let (reconciler, gridState, mock) = await wire(wmState)
+        defer { withExtendedLifetime((gridState, mock)) {} }
+        reconciler._test_setAXWindowIDs { pid in pid == 39899 ? [1130] : [] }
+
+        await reconciler._test_adoptUntrackedTileables()
+
+        let space = await gridState.findSpaceContaining(windowID: 1130)
+        XCTAssertNil(space)
+    }
 }

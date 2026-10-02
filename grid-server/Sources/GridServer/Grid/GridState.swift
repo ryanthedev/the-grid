@@ -305,21 +305,29 @@ actor GridState {
             // Numeric pairing on both legs (#6): lexicographic order paired the
             // wrong spaces ("999" > "1001").
             let newSpaceList = SpaceMigrationPolicy.numericallySorted(rawNewSpaceList)
-            let oldSpaceList = SpaceMigrationPolicy.numericallySorted(displaySpaces[displayUUID] ?? [])
-            let limit = min(oldSpaceList.count, newSpaceList.count)
+            let recorded = displaySpaces[displayUUID] ?? []
+            // Pair only IDs that disappeared with IDs that appeared. Pairing the
+            // full lists by position moved a surviving desktop's layout onto a
+            // new desktop whenever the user had added or removed one since the
+            // list was recorded.
+            let newSet = Set(newSpaceList)
+            let recordedSet = Set(recorded)
+            let oldSpaceList = SpaceMigrationPolicy.numericallySorted(recorded.filter { !newSet.contains($0) })
+            let appearedList = newSpaceList.filter { !recordedSet.contains($0) }
+            let limit = min(oldSpaceList.count, appearedList.count)
 
-            if oldSpaceList.count != newSpaceList.count {
+            if oldSpaceList.count != appearedList.count {
                 jlog("warn.space.migrate.count_mismatch", data: [
                     "display": displayUUID,
                     "old": oldSpaceList.count,
-                    "new": newSpaceList.count,
+                    "new": appearedList.count,
                     "paired": limit,
                 ])
             }
 
             for i in 0..<limit {
                 let oldSpaceID = oldSpaceList[i]
-                let newSpaceID = newSpaceList[i]
+                let newSpaceID = appearedList[i]
 
                 if oldSpaceID.isEmpty || newSpaceID.isEmpty || oldSpaceID == newSpaceID {
                     continue
@@ -356,6 +364,11 @@ actor GridState {
             }
 
             displaySpaces[displayUUID] = newSpaceList
+            // A live ID belongs to this display now. Drop it from any other
+            // display's record so that display can't claim it on reconnect.
+            for (otherUUID, otherList) in displaySpaces where otherUUID != displayUUID {
+                displaySpaces[otherUUID] = otherList.filter { !newSet.contains($0) }
+            }
         }
 
         if migrated {

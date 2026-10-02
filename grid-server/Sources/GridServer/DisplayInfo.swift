@@ -63,7 +63,7 @@ class DisplayInfoHelper {
     }
 
     /// Enriches a display with comprehensive information from NSScreen and CGDisplay
-    static func enrichDisplayInfo(uuid: String, screenIndex: Int, currentSpaceID: UInt64, spaces: [UInt64]) -> DisplayState {
+    static func enrichDisplayInfo(uuid: String, screenIndex: Int, slsUUIDs: Set<String> = [], currentSpaceID: UInt64, spaces: [UInt64]) -> DisplayState {
         var display = DisplayState(uuid: uuid, currentSpaceID: currentSpaceID, spaces: spaces)
 
         // Find the NSScreen with this UUID. SkyLight and NSScreen list displays
@@ -72,7 +72,7 @@ class DisplayInfoHelper {
         // Index is only a fallback for a UUID no screen reports.
         let screens = NSScreen.screens
         let screenUUIDs = screens.map { getCGDisplayID(from: $0).flatMap(displayUUID(for:)) }
-        guard let matched = matchScreenIndex(uuid: uuid, screenUUIDs: screenUUIDs, fallbackIndex: screenIndex) else {
+        guard let matched = matchScreenIndex(uuid: uuid, screenUUIDs: screenUUIDs, fallbackIndex: screenIndex, claimedUUIDs: slsUUIDs) else {
             // If index is out of bounds, return basic info
             return display
         }
@@ -152,15 +152,18 @@ class DisplayInfoHelper {
         return display
     }
 
-    /// Index of the screen whose UUID matches (case-insensitive). Falls back to
-    /// `fallbackIndex` only when that screen's UUID is unknown: a screen that
-    /// reports a different UUID belongs to another display, and handing it out
-    /// would give two displays one frame. Otherwise nil.
-    static func matchScreenIndex(uuid: String, screenUUIDs: [String?], fallbackIndex: Int) -> Int? {
+    /// Index of the screen whose UUID matches (case-insensitive). Otherwise
+    /// falls back to `fallbackIndex`, unless that screen belongs to another
+    /// display SkyLight listed (`claimedUUIDs`): handing it out would give two
+    /// displays one frame. A UUID no screen has (e.g. one shared space list
+    /// when "Displays have separate Spaces" is off) still gets the fallback.
+    static func matchScreenIndex(uuid: String, screenUUIDs: [String?], fallbackIndex: Int, claimedUUIDs: Set<String> = []) -> Int? {
         if let i = screenUUIDs.firstIndex(where: { $0?.caseInsensitiveCompare(uuid) == .orderedSame }) {
             return i
         }
-        guard screenUUIDs.indices.contains(fallbackIndex), screenUUIDs[fallbackIndex] == nil else {
+        guard screenUUIDs.indices.contains(fallbackIndex) else { return nil }
+        let claimed = Set(claimedUUIDs.map { $0.uppercased() })
+        if let screenUUID = screenUUIDs[fallbackIndex], claimed.contains(screenUUID.uppercased()) {
             return nil
         }
         return fallbackIndex
