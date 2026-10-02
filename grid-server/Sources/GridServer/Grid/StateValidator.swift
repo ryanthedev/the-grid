@@ -366,9 +366,15 @@ actor StateValidator {
 
         let liveSpaceIDs = Set(wmState.spaces.keys)
         let trackedSpaceIDs = await gridState.getSpaceIDs()
+        // Keep an unplugged display's spaces; they migrate on reconnect.
+        // Pruning them lost the layout every time a display was unplugged
+        // while awake (ska: spaces 6 and 7).
+        let parked = await gridState.parkedSpaceIDs(
+            connectedDisplays: Set(wmState.displays.map(\.uuid))
+        )
 
         for spaceID in trackedSpaceIDs {
-            if !liveSpaceIDs.contains(spaceID) {
+            if !liveSpaceIDs.contains(spaceID) && !parked.contains(spaceID) {
                 await gridState.removeSpace(spaceID)
                 jlog("validate.space.prune", data: ["spaceID": spaceID])
             }

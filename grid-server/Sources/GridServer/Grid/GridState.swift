@@ -227,6 +227,16 @@ actor GridState {
         return displaySpaces[displayUUID] ?? []
     }
 
+    // Space IDs recorded for displays that are not connected now. Their grid
+    // state is kept so it can migrate when the display returns.
+    func parkedSpaceIDs(connectedDisplays: Set<String>) -> Set<String> {
+        var parked = Set<String>()
+        for (displayUUID, spaceIDs) in displaySpaces where !connectedDisplays.contains(displayUUID) {
+            parked.formUnion(spaceIDs)
+        }
+        return parked
+    }
+
     func removeSpace(_ spaceID: String) {
         spaces.removeValue(forKey: spaceID)
         markDirty()
