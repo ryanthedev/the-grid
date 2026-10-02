@@ -253,6 +253,9 @@ struct GridServerCommand: ParsableCommand {
             // StateManager finish its initial poll cycle.
             Task {
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
+                // Pair saved space IDs with the live ones (they change across
+                // reboots) and record the per-display lists for the next wake.
+                await gridReconciler.migrateSpaceIDs()
                 let errors = await gridApply.refreshAllDisplays()
                 if errors.isEmpty {
                     jlog("srv.layout.restore")

@@ -1546,20 +1546,9 @@ class GridReconciler: StateEventHandler {
             await self.stateValidator?.resume()
 
             // Step 1: Migrate space IDs (macOS may reassign after sleep)
-            var displaySpaces: [String: [String]] = [:]
-            for display in wmState.displays {
-                var spaceIDs: [String] = []
-                for (spaceKey, space) in wmState.spaces {
-                    if space.displayUUID == display.uuid {
-                        spaceIDs.append(spaceKey)
-                    }
-                }
-                // #6: numeric sort for positional matching ([String].sorted()
-                // is lexicographic, pairing "999" ahead of "1001").
-                displaySpaces[display.uuid] = SpaceMigrationPolicy.numericallySorted(spaceIDs)
-            }
-
-            let migrated = await gridState.migrateSpaceIDs(currentDisplaySpaces: displaySpaces)
+            let migrated = await gridState.migrateSpaceIDs(
+                currentDisplaySpaces: GridReconciler.displaySpaceMap(wmState)
+            )
             if migrated {
                 jlog("reconcile.wake.migrated")
             }
@@ -1671,6 +1660,36 @@ class GridReconciler: StateEventHandler {
         jlog("reconcile.win.unmin", data: ["wid": windowID])
     }
 
+    // Per-display space IDs from wmState, numerically sorted for positional
+    // pairing (#6: [String].sorted() is lexicographic, pairing "999" ahead of
+    // "1001").
+    static func displaySpaceMap(_ wmState: WindowManagerState, displayFilter: String? = nil) -> [String: [String]] {
+        var map: [String: [String]] = [:]
+        for display in wmState.displays where displayFilter == nil || display.uuid == displayFilter {
+            let spaceIDs = wmState.spaces.compactMap { key, space in
+                space.displayUUID == display.uuid ? key : nil
+            }
+            map[display.uuid] = SpaceMigrationPolicy.numericallySorted(spaceIDs)
+        }
+        return map
+    }
+
+    // Migrate saved space IDs to the current ones and record the current
+    // per-display lists (the "old" side of the next migration). Runs at
+    // startup, on display connect and on wake. It used to run only on wake,
+    // so the list was often empty and the next wake or re-dock had nothing to
+    // pair: vana logged old:0 and its external layouts were pruned.
+    func migrateSpaceIDs(displayFilter: String? = nil) async {
+        guard let gridState, let stateProvider else { return }
+        let wmState = await stateProvider.getState()
+        let migrated = await gridState.migrateSpaceIDs(
+            currentDisplaySpaces: GridReconciler.displaySpaceMap(wmState, displayFilter: displayFilter)
+        )
+        if migrated {
+            jlog("reconcile.spaces.migrated", data: ["display": displayFilter ?? "all"])
+        }
+    }
+
     // handleDisplayConnected
     //
     // Triggered when a display is reconnected (e.g., external monitor plugged back in).
@@ -1690,6 +1709,11 @@ class GridReconciler: StateEventHandler {
         // before we query it. Without this, wmState may not yet reflect new spaces.
         // 500ms is enough for display negotiation; short enough to feel instant.
         try? await Task.sleep(for: .milliseconds(500))
+
+        // Pair this display's old space IDs with its new ones first. Without
+        // a wake nothing else ran the migration, so a re-docked display's
+        // spaces came up on the default layout.
+        await migrateSpaceIDs(displayFilter: displayUUID)
 
         // Reapply layouts and sync borders for the reconnected display.
         // refreshAllDisplays handles: find active space, check layout,
