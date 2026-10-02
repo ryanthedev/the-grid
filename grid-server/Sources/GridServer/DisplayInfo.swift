@@ -153,20 +153,21 @@ class DisplayInfoHelper {
     }
 
     /// Index of the screen whose UUID matches (case-insensitive). Otherwise
-    /// falls back to `fallbackIndex`, unless that screen belongs to another
-    /// display SkyLight listed (`claimedUUIDs`): handing it out would give two
+    /// falls back to a screen no other listed display claims (`claimedUUIDs`),
+    /// preferring `fallbackIndex`: handing out a claimed screen would give two
     /// displays one frame. A UUID no screen has (e.g. one shared space list
-    /// when "Displays have separate Spaces" is off) still gets the fallback.
+    /// when "Displays have separate Spaces" is off) still gets a screen.
     static func matchScreenIndex(uuid: String, screenUUIDs: [String?], fallbackIndex: Int, claimedUUIDs: Set<String> = []) -> Int? {
         if let i = screenUUIDs.firstIndex(where: { $0?.caseInsensitiveCompare(uuid) == .orderedSame }) {
             return i
         }
-        guard screenUUIDs.indices.contains(fallbackIndex) else { return nil }
         let claimed = Set(claimedUUIDs.map { $0.uppercased() })
-        if let screenUUID = screenUUIDs[fallbackIndex], claimed.contains(screenUUID.uppercased()) {
-            return nil
+        let unclaimed = screenUUIDs.indices.filter { i in
+            guard let screenUUID = screenUUIDs[i] else { return true }
+            return !claimed.contains(screenUUID.uppercased())
         }
-        return fallbackIndex
+        // Prefer the display's own position, else the first free screen.
+        return unclaimed.contains(fallbackIndex) ? fallbackIndex : unclaimed.first
     }
 
     /// The display UUID string SkyLight uses for a CGDirectDisplayID.

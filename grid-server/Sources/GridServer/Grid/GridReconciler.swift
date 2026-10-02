@@ -1161,7 +1161,11 @@ class GridReconciler: StateEventHandler {
             // bounds resolve through the display's current space, so a
             // background space would just log err.layout.zero_bounds. A window
             // adopted there is placed by the next layout apply, as before.
-            if wmState.displays.contains(where: { String($0.currentSpaceID) == spaceID }) {
+            // Also only when the window's own space is known: an unknown one
+            // (e.g. just un-minimized) resolved to the focused space, and
+            // laying it out there could pull it across displays.
+            if !windowState.spaces.isEmpty,
+               wmState.displays.contains(where: { String($0.currentSpaceID) == spaceID }) {
                 try? await gridApply?.applyCellLayout(spaceID: spaceID, cellID: targetCell)
             }
 
@@ -1485,16 +1489,17 @@ class GridReconciler: StateEventHandler {
     private var membershipSweepTask: Task<Void, Never>?
     private let membershipSweepDelay: Duration = .milliseconds(3500)
 
-    private func scheduleMembershipSweep() {
+    private func scheduleMembershipSweep(dragDeferrals: Int = 0) {
         membershipSweepTask?.cancel()
         membershipSweepTask = Task { [weak self] in
             guard let self else { return }
             try? await Task.sleep(for: self.membershipSweepDelay)
             guard !Task.isCancelled, !self.suppressReconciliation else { return }
             // Mid-drag: wait for the drop rather than snapping the window into
-            // a cell under the cursor.
-            if NSEvent.pressedMouseButtons != 0 {
-                self.scheduleMembershipSweep()
+            // a cell under the cursor. Capped (~35s) so a latched button can't
+            // turn the sweeps off.
+            if NSEvent.pressedMouseButtons != 0 && dragDeferrals < 10 {
+                self.scheduleMembershipSweep(dragDeferrals: dragDeferrals + 1)
                 return
             }
             await self.adoptUntrackedTileables()
@@ -2123,11 +2128,18 @@ class GridReconciler: StateEventHandler {
             // Pick a cell the target layout actually has, the same way window
             // creation does. A hardcoded "left" put windows into a cell that
             // single-tabs layouts lack, so they were never placed (vana: 16h).
-            let targetCell = GridReconciler.pickTargetCell(
-                focusedCell: await gridState.getFocusedCell(spaceID: targetSpaceID),
-                assignments: await gridState.getWindowAssignments(spaceID: targetSpaceID),
-                locked: lockedCells
+            let targetFocused = await gridState.getFocusedCell(spaceID: targetSpaceID)
+            let targetAssignments = await gridState.getWindowAssignments(spaceID: targetSpaceID)
+            var targetCell = GridReconciler.pickTargetCell(
+                focusedCell: targetFocused, assignments: targetAssignments, locked: lockedCells
             )
+            // Every cell reserved: still move it. Leaving it in its source cell
+            // lets the next apply there drag it back across displays.
+            if targetCell.isEmpty {
+                targetCell = GridReconciler.pickTargetCell(
+                    focusedCell: targetFocused, assignments: targetAssignments, locked: []
+                )
+            }
             guard !targetCell.isEmpty else {
                 jlog("reconcile.lift.skip", data: ["reason": "no_cells", "wid": Int(wid), "to": targetSpaceID])
                 continue
