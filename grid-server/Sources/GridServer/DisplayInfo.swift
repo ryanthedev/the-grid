@@ -66,13 +66,17 @@ class DisplayInfoHelper {
     static func enrichDisplayInfo(uuid: String, screenIndex: Int, currentSpaceID: UInt64, spaces: [UInt64]) -> DisplayState {
         var display = DisplayState(uuid: uuid, currentSpaceID: currentSpaceID, spaces: spaces)
 
-        // Get NSScreen by index (following AeroSpace pattern)
+        // Find the NSScreen with this UUID. SkyLight and NSScreen list displays
+        // in different orders (two stacked externals came back swapped on two
+        // machines), so pairing by index gave each external the other's frame.
+        // Index is only a fallback for a UUID no screen reports.
         let screens = NSScreen.screens
-        guard screenIndex >= 0 && screenIndex < screens.count else {
+        let screenUUIDs = screens.map { getCGDisplayID(from: $0).flatMap(displayUUID(for:)) }
+        guard let matched = matchScreenIndex(uuid: uuid, screenUUIDs: screenUUIDs, fallbackIndex: screenIndex) else {
             // If index is out of bounds, return basic info
             return display
         }
-        let screen = screens[screenIndex]
+        let screen = screens[matched]
 
         // Extract CGDirectDisplayID
         let displayID = getCGDisplayID(from: screen)
@@ -143,6 +147,23 @@ class DisplayInfoHelper {
         }
 
         return display
+    }
+
+    /// Index of the screen whose UUID matches (case-insensitive), else
+    /// `fallbackIndex` when it is in range, else nil.
+    static func matchScreenIndex(uuid: String, screenUUIDs: [String?], fallbackIndex: Int) -> Int? {
+        if let i = screenUUIDs.firstIndex(where: { $0?.caseInsensitiveCompare(uuid) == .orderedSame }) {
+            return i
+        }
+        return screenUUIDs.indices.contains(fallbackIndex) ? fallbackIndex : nil
+    }
+
+    /// The display UUID string SkyLight uses for a CGDirectDisplayID.
+    private static func displayUUID(for displayID: CGDirectDisplayID) -> String? {
+        guard let uuid = CGDisplayCreateUUIDFromDisplayID(displayID)?.takeRetainedValue() else {
+            return nil
+        }
+        return CFUUIDCreateString(nil, uuid) as String?
     }
 
     /// Extracts the CGDirectDisplayID from an NSScreen
