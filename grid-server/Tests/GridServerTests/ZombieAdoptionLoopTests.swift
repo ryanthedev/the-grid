@@ -254,4 +254,22 @@ final class ZombieAdoptionLoopTests: XCTestCase {
         XCTAssertEqual(reconciler._test_notStandardGraceCount, 0,
             "an expired floating window must not restart the grace on every action")
     }
+
+    // ska: adopted windows were assigned to a cell but left at their own size
+    // until the user re-applied the layout. Adoption must place the cell.
+    func testAdoptedWindowIsPlacedInItsCell() async {
+        let (reconciler, gridState, mock) = await wire(ghostState())
+        defer { withExtendedLifetime((gridState, mock)) {} }
+        reconciler._test_setAXWindowIDs { pid in pid == 39899 ? [1130] : [] }
+        let gridApply = GridApply()
+        var placed: [String] = []
+        gridApply._test_applyCellLayoutHook = { spaceID, cellID in placed.append("\(spaceID)/\(cellID)") }
+        reconciler._test_setGridApply(gridApply)
+
+        await reconciler._test_adoptUntrackedTileables()
+
+        let cell = await gridState.getWindowCell(windowID: 1130, inSpace: "100")
+        XCTAssertNotNil(cell)
+        XCTAssertEqual(placed, ["100/\(cell ?? "")"], "the adopted window's cell is laid out")
+    }
 }

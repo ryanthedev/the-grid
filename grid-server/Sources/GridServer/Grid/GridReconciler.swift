@@ -1146,6 +1146,12 @@ class GridReconciler: StateEventHandler {
         if !targetCell.isEmpty {
             await gridState.assignWindow(windowID, toCellID: targetCell, inSpace: spaceID)
 
+            // Place it now, like every other path into a cell. Assigning alone
+            // left a new window at its own size inside a full-screen cell until
+            // the user re-applied the layout (ska: 44 of 135 manual applies came
+            // within 30s of an adoption).
+            try? await gridApply?.applyCellLayout(spaceID: spaceID, cellID: targetCell)
+
             // Sync borders after assignment
             await syncBordersForCurrentSpace()
         }
