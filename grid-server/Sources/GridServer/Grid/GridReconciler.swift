@@ -1468,6 +1468,27 @@ class GridReconciler: StateEventHandler {
 
         await syncBordersForSpace(spaceID, displayUUID: displayUUID)
         jlog("reconcile.space.activated", data: ["space": spaceID, "display": displayUUID])
+        scheduleMembershipSweep()
+    }
+
+    // Debounced adopt + displaced sweep after a window move or space switch.
+    // Both sweeps used to run only at the end of a hotkey action, so a window
+    // dragged to another display stayed in its old cell (ska: 10 min; Mac
+    // Studio: 58 h), and windows back from behind a fullscreen app stayed out
+    // of the grid until the next hotkey (9 h). The delay covers the ~3s lag of
+    // StateManager's cached space list.
+    private var membershipSweepTask: Task<Void, Never>?
+    private let membershipSweepDelay: Duration = .milliseconds(3500)
+
+    private func scheduleMembershipSweep() {
+        membershipSweepTask?.cancel()
+        membershipSweepTask = Task { [weak self] in
+            guard let self else { return }
+            try? await Task.sleep(for: self.membershipSweepDelay)
+            guard !Task.isCancelled, !self.suppressReconciliation else { return }
+            await self.adoptUntrackedTileables()
+            await self.sweepDisplacedWindows()
+        }
     }
 
     // Debounce window for geometry-only display reconfiguration (#25). Multiple
@@ -1583,6 +1604,7 @@ class GridReconciler: StateEventHandler {
 
     private func handleWindowMoved(_ windowID: UInt32, _ frame: CGRect) async {
         await borderRenderer?.handleWindowMoved(windowID: windowID, newFrame: frame)
+        scheduleMembershipSweep()
 
         // Re-evaluate rejected windows that may now be tileable (e.g. Ghostty
         // emits a 0x0 AX window at creation, then resizes to real dimensions).
