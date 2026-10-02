@@ -154,9 +154,11 @@ final class DisplayInfoHelperTests: XCTestCase {
         XCTAssertEqual(DisplayInfoHelper.matchScreenIndex(uuid: "37d8", screenUUIDs: screens, fallbackIndex: 0), 0)
     }
 
-    func test_matchScreenIndex_falls_back_to_index_then_nil() {
+    func test_matchScreenIndex_falls_back_only_to_an_unclaimed_screen() {
         let screens: [String?] = ["A", nil]
         XCTAssertEqual(DisplayInfoHelper.matchScreenIndex(uuid: "Main", screenUUIDs: screens, fallbackIndex: 1), 1)
+        XCTAssertNil(DisplayInfoHelper.matchScreenIndex(uuid: "Main", screenUUIDs: screens, fallbackIndex: 0),
+            "screen 0 is display A's; don't give it to a second display")
         XCTAssertNil(DisplayInfoHelper.matchScreenIndex(uuid: "Main", screenUUIDs: screens, fallbackIndex: 5))
     }
 }

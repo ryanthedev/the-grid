@@ -76,6 +76,9 @@ class DisplayInfoHelper {
             // If index is out of bounds, return basic info
             return display
         }
+        if screenUUIDs[matched]?.caseInsensitiveCompare(uuid) != .orderedSame {
+            jlog("warn.dsp.screen_fallback", data: ["uuid": uuid, "index": matched])
+        }
         let screen = screens[matched]
 
         // Extract CGDirectDisplayID
@@ -149,13 +152,18 @@ class DisplayInfoHelper {
         return display
     }
 
-    /// Index of the screen whose UUID matches (case-insensitive), else
-    /// `fallbackIndex` when it is in range, else nil.
+    /// Index of the screen whose UUID matches (case-insensitive). Falls back to
+    /// `fallbackIndex` only when that screen's UUID is unknown: a screen that
+    /// reports a different UUID belongs to another display, and handing it out
+    /// would give two displays one frame. Otherwise nil.
     static func matchScreenIndex(uuid: String, screenUUIDs: [String?], fallbackIndex: Int) -> Int? {
         if let i = screenUUIDs.firstIndex(where: { $0?.caseInsensitiveCompare(uuid) == .orderedSame }) {
             return i
         }
-        return screenUUIDs.indices.contains(fallbackIndex) ? fallbackIndex : nil
+        guard screenUUIDs.indices.contains(fallbackIndex), screenUUIDs[fallbackIndex] == nil else {
+            return nil
+        }
+        return fallbackIndex
     }
 
     /// The display UUID string SkyLight uses for a CGDirectDisplayID.

@@ -62,6 +62,7 @@ final class EventAllowlistTests: XCTestCase {
         "reconcile.dsp.geometry.deferred",
         "reconcile.wake.deferred",
         "state.wake.deferred",
+        "warn.dsp.screen_fallback",
         "warn.layout.stale_space",
         "warn.reconcile.dsp.geometry.errors",
         "warn.space.migrate.count_mismatch",
