@@ -508,11 +508,10 @@ actor StateManager: StateEventHandler, StateProvider {
 
         let displayUUIDs: [String] = cfArrayToSwiftArray(displaysArray)
 
-        // #63s instrumentation (suspected — trace only, NO behavioral change).
-        // enrichDisplayInfo joins SLS managed-display order to NSScreen.screens
-        // by array index; with 2+ displays the orders can diverge and attach
-        // the wrong frame/scale to a UUID. Record the join so UAT can confirm
-        // or drop the finding before any UUID-matching fix is attempted.
+        // #63s: SLS managed-display order and NSScreen.screens order diverge
+        // (confirmed: two stacked externals swapped on ska and vana), so
+        // enrichDisplayInfo now matches screens by UUID. Keep recording the SLS
+        // order for diagnosis.
         let screenCount = NSScreen.screens.count
         for (index, displayUUID) in displayUUIDs.enumerated() {
             jlog("dsp.refresh.join", data: [

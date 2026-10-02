@@ -142,4 +142,21 @@ final class DisplayInfoHelperTests: XCTestCase {
 
         XCTAssertEqual(result, quartzFrame)
     }
+
+    // MARK: - matchScreenIndex
+
+    // ska's real orders: SkyLight [laptop, 1297, 40D5], NSScreen [laptop, 40D5,
+    // 1297]. Pairing by index swapped the externals' frames.
+    func test_matchScreenIndex_pairs_by_uuid_not_position() {
+        let screens: [String?] = ["37D8", "40D5", "1297"]
+        XCTAssertEqual(DisplayInfoHelper.matchScreenIndex(uuid: "1297", screenUUIDs: screens, fallbackIndex: 1), 2)
+        XCTAssertEqual(DisplayInfoHelper.matchScreenIndex(uuid: "40D5", screenUUIDs: screens, fallbackIndex: 2), 1)
+        XCTAssertEqual(DisplayInfoHelper.matchScreenIndex(uuid: "37d8", screenUUIDs: screens, fallbackIndex: 0), 0)
+    }
+
+    func test_matchScreenIndex_falls_back_to_index_then_nil() {
+        let screens: [String?] = ["A", nil]
+        XCTAssertEqual(DisplayInfoHelper.matchScreenIndex(uuid: "Main", screenUUIDs: screens, fallbackIndex: 1), 1)
+        XCTAssertNil(DisplayInfoHelper.matchScreenIndex(uuid: "Main", screenUUIDs: screens, fallbackIndex: 5))
+    }
 }
