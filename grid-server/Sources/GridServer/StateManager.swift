@@ -2482,7 +2482,27 @@ return
         await removeObserver(for: pid)
 
         // Remove all windows for this PID
+        let removedWindowIDs = state.windows.values.filter { $0.pid == pid }.map(\.id)
         state.windows = state.windows.filter { $0.value.pid != pid }
+
+        // Route destroy events, as the poll does, so GridReconciler drops them
+        // from their cells now. Without this they are gone from state, so the
+        // poll never reports them, and they sat in cells until the 30s
+        // validator pruned them as dead.
+        let now = CFAbsoluteTimeGetCurrent()
+        for windowID in removedWindowIDs {
+            removalTombstone[windowID] = now
+        }
+        if !removedWindowIDs.isEmpty {
+            Task {
+                for windowID in removedWindowIDs {
+                    await EventRouter.shared.route(
+                        .windowDestroyed(windowID: windowID),
+                        from: .workspaceObserver
+                    )
+                }
+            }
+        }
 
         state.metadata.update()
     }
