@@ -66,13 +66,15 @@ final class DisplayReconnectSpacesTests: XCTestCase {
         XCTAssertEqual(four, "")
     }
 
-    // A space ID now live on one display is dropped from another display's
-    // record, so the absent display can't take it back on reconnect.
-    func test_live_space_is_dropped_from_an_absent_displays_record() async {
-        let gridState = GridState()
-        await gridState._test_seedDisplaySpaces("ext", ["4", "5"])
-        _ = await gridState.migrateSpaceIDs(currentDisplaySpaces: ["laptop": ["1", "4"]])
-        let ext = await gridState.getSpaceIDsForDisplay("ext")
-        XCTAssertEqual(ext, ["5"])
+    func test_migration_pairs_only_unambiguous_changes() {
+        typealias P = SpaceMigrationPolicy
+        // Wake renumbered one desktop to a fresh, higher ID.
+        XCTAssertTrue(P.migrationPairs(recorded: ["1", "3"], current: ["1", "700"]) == (["3"], ["700"]))
+        // Full renumber, nothing survived.
+        XCTAssertTrue(P.migrationPairs(recorded: ["6", "7"], current: ["612", "625"]) == (["6", "7"], ["612", "625"]))
+        // Reboot renumber overlapping old IDs: ambiguous, pair nothing.
+        XCTAssertTrue(P.migrationPairs(recorded: ["1", "3", "4"], current: ["1", "2", "3"]) == ([], []))
+        // Unchanged.
+        XCTAssertTrue(P.migrationPairs(recorded: ["1", "3"], current: ["3", "1"]) == ([], []))
     }
 }

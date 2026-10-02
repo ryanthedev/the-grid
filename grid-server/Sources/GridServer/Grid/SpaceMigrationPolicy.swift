@@ -47,6 +47,28 @@ enum SpaceMigrationPolicy {
     // [String].sorted() which is lexicographic ("999" > "1001"), pairing the
     // wrong spaces on wake. Non-numeric IDs sort last, deterministically by
     // their string value, so the function is total.
+    /// Which recorded space IDs to pair with which new ones, by position.
+    /// Never guesses:
+    /// - identical lists: nothing moved.
+    /// - no ID survived: a full renumber (wake, reboot); pair the lists.
+    /// - some survived: pair the vanished IDs with the new ones only when every
+    ///   new ID is higher than all recorded ones (freshly allocated this boot,
+    ///   e.g. one desktop renumbered on wake). Otherwise it is ambiguous (a
+    ///   reboot renumber overlapping old IDs, or desktops added and removed),
+    ///   and pairing could move a live desktop's layout, so pair nothing.
+    static func migrationPairs(recorded: [String], current: [String]) -> (old: [String], new: [String]) {
+        let old = numericallySorted(recorded)
+        let new = numericallySorted(current)
+        let oldSet = Set(old), newSet = Set(new)
+        if oldSet == newSet { return ([], []) }
+        if oldSet.isDisjoint(with: newSet) { return (old, new) }
+        let vanished = old.filter { !newSet.contains($0) }
+        let appeared = new.filter { !oldSet.contains($0) }
+        let maxOld = old.compactMap { UInt64($0) }.max() ?? 0
+        guard appeared.allSatisfy({ (UInt64($0) ?? 0) > maxOld }) else { return ([], []) }
+        return (vanished, appeared)
+    }
+
     static func numericallySorted(_ ids: [String]) -> [String] {
         return ids.sorted { lhs, rhs in
             switch (UInt64(lhs), UInt64(rhs)) {

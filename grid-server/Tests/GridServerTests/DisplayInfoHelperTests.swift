@@ -157,9 +157,11 @@ final class DisplayInfoHelperTests: XCTestCase {
     func test_matchScreenIndex_falls_back_only_to_an_unclaimed_screen() {
         let screens: [String?] = ["A", nil]
         XCTAssertEqual(DisplayInfoHelper.matchScreenIndex(uuid: "X", screenUUIDs: screens, fallbackIndex: 1, claimedUUIDs: ["A", "X"]), 1)
-        XCTAssertNil(DisplayInfoHelper.matchScreenIndex(uuid: "X", screenUUIDs: screens, fallbackIndex: 0, claimedUUIDs: ["A", "X"]),
-            "screen 0 is display A's; don't give it to a second display")
-        XCTAssertNil(DisplayInfoHelper.matchScreenIndex(uuid: "X", screenUUIDs: screens, fallbackIndex: 5, claimedUUIDs: ["A", "X"]))
+        XCTAssertEqual(DisplayInfoHelper.matchScreenIndex(uuid: "X", screenUUIDs: screens, fallbackIndex: 0, claimedUUIDs: ["A", "X"]), 1,
+            "screen 0 is display A's; take the free screen instead")
+        XCTAssertEqual(DisplayInfoHelper.matchScreenIndex(uuid: "X", screenUUIDs: ["Y", "A"], fallbackIndex: 1, claimedUUIDs: ["A", "X"]), 0)
+        XCTAssertNil(DisplayInfoHelper.matchScreenIndex(uuid: "X", screenUUIDs: ["A"], fallbackIndex: 0, claimedUUIDs: ["A", "X"]))
+        XCTAssertEqual(DisplayInfoHelper.matchScreenIndex(uuid: "X", screenUUIDs: screens, fallbackIndex: 5, claimedUUIDs: ["A", "X"]), 1)
     }
 
     // Separate Spaces off: SkyLight lists one display with an ID no screen has.
