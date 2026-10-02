@@ -1157,8 +1157,13 @@ class GridReconciler: StateEventHandler {
             // Place it now, like every other path into a cell. Assigning alone
             // left a new window at its own size inside a full-screen cell until
             // the user re-applied the layout (ska: 44 of 135 manual applies came
-            // within 30s of an adoption).
-            try? await gridApply?.applyCellLayout(spaceID: spaceID, cellID: targetCell)
+            // within 30s of an adoption). Only for a showing space: display
+            // bounds resolve through the display's current space, so a
+            // background space would just log err.layout.zero_bounds. A window
+            // adopted there is placed by the next layout apply, as before.
+            if wmState.displays.contains(where: { String($0.currentSpaceID) == spaceID }) {
+                try? await gridApply?.applyCellLayout(spaceID: spaceID, cellID: targetCell)
+            }
 
             // Sync borders after assignment
             await syncBordersForCurrentSpace()
