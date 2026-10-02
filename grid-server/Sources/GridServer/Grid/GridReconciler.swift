@@ -1486,7 +1486,17 @@ class GridReconciler: StateEventHandler {
             guard let self else { return }
             try? await Task.sleep(for: self.membershipSweepDelay)
             guard !Task.isCancelled, !self.suppressReconciliation else { return }
+            // Mid-drag: wait for the drop rather than snapping the window into
+            // a cell under the cursor.
+            if NSEvent.pressedMouseButtons != 0 {
+                self.scheduleMembershipSweep()
+                return
+            }
             await self.adoptUntrackedTileables()
+            // Adoption awaits; an action may have begun meanwhile, and the
+            // displaced sweep could bounce a hotkey move back before its grace
+            // is set.
+            guard !Task.isCancelled, !self.suppressReconciliation else { return }
             await self.sweepDisplacedWindows()
         }
     }
@@ -1925,8 +1935,11 @@ class GridReconciler: StateEventHandler {
 
     // Determine which tracked space a window belongs to using its OS-level
     // space list. Picks the first space that has an active layout in GridState.
-    // Falls back to the focused space if the window's spaces are empty or
-    // none have layouts (e.g. window just created, spaces not yet populated).
+    // Falls back to the focused space only when the window's spaces are unknown
+    // (window just created, spaces not yet populated). A window on a known
+    // space with no layout belongs to no grid: borrowing the focused space put
+    // another display's windows into its cells, and now that adoption lays the
+    // cell out, that would pull them across displays.
     private func resolveWindowSpace(
         _ windowState: WindowState,
         gridState: GridState,
@@ -1939,7 +1952,7 @@ class GridReconciler: StateEventHandler {
                 return sid
             }
         }
-        return findCurrentSpaceID(from: wmState)
+        return windowState.spaces.isEmpty ? findCurrentSpaceID(from: wmState) : nil
     }
 
     private func findDisplayUUIDForSpace(_ spaceID: String, from wmState: WindowManagerState) -> String? {
@@ -2047,6 +2060,16 @@ class GridReconciler: StateEventHandler {
 
         let allWids = await gridState.getAllWindowIDs()
 
+        // Cells reserved by app rules; keep displaced windows out of them, as
+        // window creation does.
+        let appRules: [GridAppRule]
+        if let override = _test_appRuleOverride {
+            appRules = override
+        } else {
+            appRules = await MainActor.run { gridConfig?.appRules ?? [] }
+        }
+        let lockedCells = lockedCellIDs(appRules: appRules)
+
         let sweepNow = CFAbsoluteTimeGetCurrent()
 
         for wid in allWids {
@@ -2098,7 +2121,7 @@ class GridReconciler: StateEventHandler {
             let targetCell = GridReconciler.pickTargetCell(
                 focusedCell: await gridState.getFocusedCell(spaceID: targetSpaceID),
                 assignments: await gridState.getWindowAssignments(spaceID: targetSpaceID),
-                locked: []
+                locked: lockedCells
             )
             guard !targetCell.isEmpty else {
                 jlog("reconcile.lift.skip", data: ["reason": "no_cells", "wid": Int(wid), "to": targetSpaceID])

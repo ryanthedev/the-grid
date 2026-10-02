@@ -530,6 +530,7 @@ actor StateManager: StateEventHandler, StateProvider {
             let display = DisplayInfoHelper.enrichDisplayInfo(
                 uuid: displayUUID,
                 screenIndex: index,
+                slsUUIDs: Set(displayUUIDs),
                 currentSpaceID: currentSpaceID,
                 spaces: []  // Will be populated in refreshSpaces
             )
