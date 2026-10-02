@@ -142,4 +142,30 @@ final class DisplayInfoHelperTests: XCTestCase {
 
         XCTAssertEqual(result, quartzFrame)
     }
+
+    // MARK: - matchScreenIndex
+
+    // ska's real orders: SkyLight [laptop, 1297, 40D5], NSScreen [laptop, 40D5,
+    // 1297]. Pairing by index swapped the externals' frames.
+    func test_matchScreenIndex_pairs_by_uuid_not_position() {
+        let screens: [String?] = ["37D8", "40D5", "1297"]
+        XCTAssertEqual(DisplayInfoHelper.matchScreenIndex(uuid: "1297", screenUUIDs: screens, fallbackIndex: 1), 2)
+        XCTAssertEqual(DisplayInfoHelper.matchScreenIndex(uuid: "40D5", screenUUIDs: screens, fallbackIndex: 2), 1)
+        XCTAssertEqual(DisplayInfoHelper.matchScreenIndex(uuid: "37d8", screenUUIDs: screens, fallbackIndex: 0), 0)
+    }
+
+    func test_matchScreenIndex_falls_back_only_to_an_unclaimed_screen() {
+        let screens: [String?] = ["A", nil]
+        XCTAssertEqual(DisplayInfoHelper.matchScreenIndex(uuid: "X", screenUUIDs: screens, fallbackIndex: 1, claimedUUIDs: ["A", "X"]), 1)
+        XCTAssertEqual(DisplayInfoHelper.matchScreenIndex(uuid: "X", screenUUIDs: screens, fallbackIndex: 0, claimedUUIDs: ["A", "X"]), 1,
+            "screen 0 is display A's; take the free screen instead")
+        XCTAssertEqual(DisplayInfoHelper.matchScreenIndex(uuid: "X", screenUUIDs: ["Y", "A"], fallbackIndex: 1, claimedUUIDs: ["A", "X"]), 0)
+        XCTAssertNil(DisplayInfoHelper.matchScreenIndex(uuid: "X", screenUUIDs: ["A"], fallbackIndex: 0, claimedUUIDs: ["A", "X"]))
+        XCTAssertEqual(DisplayInfoHelper.matchScreenIndex(uuid: "X", screenUUIDs: screens, fallbackIndex: 5, claimedUUIDs: ["A", "X"]), 1)
+    }
+
+    // Separate Spaces off: SkyLight lists one display with an ID no screen has.
+    func test_matchScreenIndex_unlisted_uuid_still_gets_its_screen() {
+        XCTAssertEqual(DisplayInfoHelper.matchScreenIndex(uuid: "Main", screenUUIDs: ["A", "B"], fallbackIndex: 0, claimedUUIDs: ["Main"]), 0)
+    }
 }

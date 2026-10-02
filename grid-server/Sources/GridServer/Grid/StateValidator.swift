@@ -239,6 +239,9 @@ actor StateValidator {
         let allTrackedIDs = await gridState.getAllWindowIDs()
         var stillOrphaned: Set<UInt32> = []
 
+        // Spaces showing on some display right now.
+        let visibleSpaces = Set(wmState.displays.map(\.currentSpaceID))
+
         // Group tracked windows by pid to batch AX lookups per app
         var pidToWindows: [pid_t: [UInt32]] = [:]
         for windowID in allTrackedIDs {
@@ -246,6 +249,12 @@ actor StateValidator {
                 continue
             }
             guard let windowState = wmState.windows[String(windowID)] else { continue }
+            // Some apps (kitty) leave windows on a space that isn't showing out
+            // of kAXWindows. Pruning those dropped live windows from the grid,
+            // e.g. while a fullscreen app covered their space, for days.
+            guard Self.isOnVisibleSpace(windowSpaces: windowState.spaces, visibleSpaces: visibleSpaces) else {
+                continue
+            }
             pidToWindows[windowState.pid, default: []].append(windowID)
         }
 
@@ -283,6 +292,13 @@ actor StateValidator {
                 "cycles": count,
             ])
         }
+    }
+
+    // isOnVisibleSpace -- whether an AX absence can be trusted for this window.
+    // Unknown space membership counts as visible, so ghosts with no space are
+    // still pruned.
+    static func isOnVisibleSpace(windowSpaces: [UInt64], visibleSpaces: Set<UInt64>) -> Bool {
+        windowSpaces.isEmpty || windowSpaces.contains(where: visibleSpaces.contains)
     }
 
     // axFailureMeansNoWindows -- classify a failed kAXWindows query.
@@ -350,9 +366,15 @@ actor StateValidator {
 
         let liveSpaceIDs = Set(wmState.spaces.keys)
         let trackedSpaceIDs = await gridState.getSpaceIDs()
+        // Keep an unplugged display's spaces; they migrate on reconnect.
+        // Pruning them lost the layout every time a display was unplugged
+        // while awake (ska: spaces 6 and 7).
+        let parked = await gridState.parkedSpaceIDs(
+            connectedDisplays: Set(wmState.displays.map(\.uuid))
+        )
 
         for spaceID in trackedSpaceIDs {
-            if !liveSpaceIDs.contains(spaceID) {
+            if !liveSpaceIDs.contains(spaceID) && !parked.contains(spaceID) {
                 await gridState.removeSpace(spaceID)
                 jlog("validate.space.prune", data: ["spaceID": spaceID])
             }

@@ -63,16 +63,23 @@ class DisplayInfoHelper {
     }
 
     /// Enriches a display with comprehensive information from NSScreen and CGDisplay
-    static func enrichDisplayInfo(uuid: String, screenIndex: Int, currentSpaceID: UInt64, spaces: [UInt64]) -> DisplayState {
+    static func enrichDisplayInfo(uuid: String, screenIndex: Int, slsUUIDs: Set<String> = [], currentSpaceID: UInt64, spaces: [UInt64]) -> DisplayState {
         var display = DisplayState(uuid: uuid, currentSpaceID: currentSpaceID, spaces: spaces)
 
-        // Get NSScreen by index (following AeroSpace pattern)
+        // Find the NSScreen with this UUID. SkyLight and NSScreen list displays
+        // in different orders (two stacked externals came back swapped on two
+        // machines), so pairing by index gave each external the other's frame.
+        // Index is only a fallback for a UUID no screen reports.
         let screens = NSScreen.screens
-        guard screenIndex >= 0 && screenIndex < screens.count else {
+        let screenUUIDs = screens.map { getCGDisplayID(from: $0).flatMap(displayUUID(for:)) }
+        guard let matched = matchScreenIndex(uuid: uuid, screenUUIDs: screenUUIDs, fallbackIndex: screenIndex, claimedUUIDs: slsUUIDs) else {
             // If index is out of bounds, return basic info
             return display
         }
-        let screen = screens[screenIndex]
+        if screenUUIDs[matched]?.caseInsensitiveCompare(uuid) != .orderedSame {
+            jlog("warn.dsp.screen_fallback", data: ["uuid": uuid, "index": matched])
+        }
+        let screen = screens[matched]
 
         // Extract CGDirectDisplayID
         let displayID = getCGDisplayID(from: screen)
@@ -143,6 +150,32 @@ class DisplayInfoHelper {
         }
 
         return display
+    }
+
+    /// Index of the screen whose UUID matches (case-insensitive). Otherwise
+    /// falls back to a screen no other listed display claims (`claimedUUIDs`),
+    /// preferring `fallbackIndex`: handing out a claimed screen would give two
+    /// displays one frame. A UUID no screen has (e.g. one shared space list
+    /// when "Displays have separate Spaces" is off) still gets a screen.
+    static func matchScreenIndex(uuid: String, screenUUIDs: [String?], fallbackIndex: Int, claimedUUIDs: Set<String> = []) -> Int? {
+        if let i = screenUUIDs.firstIndex(where: { $0?.caseInsensitiveCompare(uuid) == .orderedSame }) {
+            return i
+        }
+        let claimed = Set(claimedUUIDs.map { $0.uppercased() })
+        let unclaimed = screenUUIDs.indices.filter { i in
+            guard let screenUUID = screenUUIDs[i] else { return true }
+            return !claimed.contains(screenUUID.uppercased())
+        }
+        // Prefer the display's own position, else the first free screen.
+        return unclaimed.contains(fallbackIndex) ? fallbackIndex : unclaimed.first
+    }
+
+    /// The display UUID string SkyLight uses for a CGDirectDisplayID.
+    private static func displayUUID(for displayID: CGDirectDisplayID) -> String? {
+        guard let uuid = CGDisplayCreateUUIDFromDisplayID(displayID)?.takeRetainedValue() else {
+            return nil
+        }
+        return CFUUIDCreateString(nil, uuid) as String?
     }
 
     /// Extracts the CGDirectDisplayID from an NSScreen

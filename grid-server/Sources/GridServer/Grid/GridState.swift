@@ -227,6 +227,16 @@ actor GridState {
         return displaySpaces[displayUUID] ?? []
     }
 
+    // Space IDs recorded for displays that are not connected now. Their grid
+    // state is kept so it can migrate when the display returns.
+    func parkedSpaceIDs(connectedDisplays: Set<String>) -> Set<String> {
+        var parked = Set<String>()
+        for (displayUUID, spaceIDs) in displaySpaces where !connectedDisplays.contains(displayUUID) {
+            parked.formUnion(spaceIDs)
+        }
+        return parked
+    }
+
     func removeSpace(_ spaceID: String) {
         spaces.removeValue(forKey: spaceID)
         markDirty()
@@ -295,21 +305,26 @@ actor GridState {
             // Numeric pairing on both legs (#6): lexicographic order paired the
             // wrong spaces ("999" > "1001").
             let newSpaceList = SpaceMigrationPolicy.numericallySorted(rawNewSpaceList)
-            let oldSpaceList = SpaceMigrationPolicy.numericallySorted(displaySpaces[displayUUID] ?? [])
-            let limit = min(oldSpaceList.count, newSpaceList.count)
+            let pairs = SpaceMigrationPolicy.migrationPairs(
+                recorded: displaySpaces[displayUUID] ?? [],
+                current: newSpaceList
+            )
+            let oldSpaceList = pairs.old
+            let appearedList = pairs.new
+            let limit = min(oldSpaceList.count, appearedList.count)
 
-            if oldSpaceList.count != newSpaceList.count {
+            if oldSpaceList.count != appearedList.count {
                 jlog("warn.space.migrate.count_mismatch", data: [
                     "display": displayUUID,
                     "old": oldSpaceList.count,
-                    "new": newSpaceList.count,
+                    "new": appearedList.count,
                     "paired": limit,
                 ])
             }
 
             for i in 0..<limit {
                 let oldSpaceID = oldSpaceList[i]
-                let newSpaceID = newSpaceList[i]
+                let newSpaceID = appearedList[i]
 
                 if oldSpaceID.isEmpty || newSpaceID.isEmpty || oldSpaceID == newSpaceID {
                     continue
@@ -787,6 +802,13 @@ actor GridState {
 
             if let existingCell = existingCells[cellID] {
                 cell.stackMode = existingCell.stackMode
+                // Keep focus history by wid; it was zeroed on every apply.
+                if windowIDs.contains(existingCell.lastFocusedWid) {
+                    cell.lastFocusedWid = existingCell.lastFocusedWid
+                }
+                if windowIDs.contains(existingCell.prevFocusedWid) {
+                    cell.prevFocusedWid = existingCell.prevFocusedWid
+                }
 
                 if existingCell.lastFocusedIdx >= 0 && existingCell.lastFocusedIdx < existingCell.windows.count {
                     let focusedWID = existingCell.windows[existingCell.lastFocusedIdx]
@@ -815,6 +837,15 @@ actor GridState {
             }
 
             space.cells[cellID] = cell
+        }
+
+        // Re-point the space's focused index at the same window. An apply can
+        // reorder a cell (position strategy sorts by z-order), and the stale
+        // index made borders and focus next/prev act on a different window.
+        if let oldCell = existingCells[space.focusedCell],
+           oldCell.windows.indices.contains(space.focusedWindow),
+           let newIndex = space.cells[space.focusedCell]?.windows.firstIndex(of: oldCell.windows[space.focusedWindow]) {
+            space.focusedWindow = newIndex
         }
 
         spaces[spaceID] = space

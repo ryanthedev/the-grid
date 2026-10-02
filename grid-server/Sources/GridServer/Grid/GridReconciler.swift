@@ -79,6 +79,12 @@ class GridReconciler: StateEventHandler {
     // window buttons slightly after creation then tile without a manual reopen.
     private var notStandardGrace: [UInt32: CFAbsoluteTime] = [:]
 
+    // Windows whose not_standard grace expired. Adoption skips them while they
+    // still classify non-standard; otherwise every action.end re-ran the create
+    // path, which restarted the grace, and a floating window cycled untracked ->
+    // bail -> expired forever (163 times over 8 hours for one window).
+    private var notStandardExpired: Set<UInt32> = []
+
     // FIX 1 / DW-D2: windows deliberately moved across spaces, with the move
     // timestamp. StateManager's cached space list (wmState.windows[wid].spaces)
     // is refreshed only on the ~3s poll or a display-crossing frame write, so
@@ -132,17 +138,21 @@ class GridReconciler: StateEventHandler {
     // arrival order when suppressionDepth returns to 0.
     private var suppressedEvents = SuppressedEventQueue()
 
-    // Lock-state tracking (DW-2.5, #23). The reconciler is the single
-    // serialized consumer of screenLocked/screenUnlocked/systemWoke events, so
-    // a plain Bool is sufficient (no new actor; §8 satisfied). On wake the
-    // validator is resumed ONLY when the screen is not locked — resuming at the
-    // login screen lets AX's reduced window list false-positive ax_orphan
-    // prunes against real tiled windows.
-    private var screenLocked: Bool = false
+    // Lock-state tracking (DW-2.5, #23). StateManager keeps its own copy for its
+    // wake rescan; this one gates the reconciler's refreshes. Wake and
+    // display refreshes that arrive while locked are held until unlock: at the
+    // login screen the window list is reduced, so validating against it
+    // false-positive prunes real windows (DW-2.5), and refreshing layouts from
+    // it saves every cell empty.
+    private var wakeDeferral = WakeDeferral()
 
     // _test_setScreenLocked: drive the lock flag directly in tests.
     func _test_setScreenLocked(_ locked: Bool) {
-        screenLocked = locked
+        if locked {
+            wakeDeferral.lock()
+        } else {
+            _ = wakeDeferral.unlock()
+        }
     }
 
     // Consume-once action tokens (DW-1.4, #4). A long-lived session token is
@@ -314,6 +324,14 @@ class GridReconciler: StateEventHandler {
         var candidatesByPID: [pid_t: [(wid: UInt32, state: WindowState)]] = [:]
         for (widStr, windowState) in wmState.windows {
             guard let wid = UInt32(widStr) else { continue }
+            if notStandardExpired.contains(wid) {
+                // Skip only while it still classifies non-standard; once it
+                // changes (app unhidden, rescan, late buttons) it is adoptable.
+                if classifyWindow(window: windowState, appName: windowState.appName ?? "") != .standard {
+                    continue
+                }
+                notStandardExpired.remove(wid)
+            }
             var assignedAnywhere = trackedWids.contains(wid)
             if !assignedAnywhere {
                 assignedAnywhere = await gridState.isWindowRejected(wid)
@@ -695,6 +713,7 @@ class GridReconciler: StateEventHandler {
             }
             axAbsentStreak.removeValue(forKey: wid)
             axAbsentRetryAt.removeValue(forKey: wid)
+            lastAXAbsentSkipped.remove(wid)
 
             await gridState.unrejectWindow(wid)
             jlog("sweep.unrejected", data: [
@@ -710,19 +729,20 @@ class GridReconciler: StateEventHandler {
             }
         }
 
-        // Log the transition, not the state. This runs every 300ms and a ghost
-        // persists indefinitely, so a per-tick line would emit ~33MB/day and
-        // blow through the log's 32MB rotation ceiling daily -- undoing the
-        // diagnostics that preserving the log was meant to buy.
-        if skipped != lastAXAbsentSkipped {
-            if !skipped.isEmpty {
-                jlog("sweep.unreject.skip", data: [
-                    "reason": "ax_absent",
-                    "count": skipped.count,
-                    "wids": skipped.sorted().prefix(20).map { Int($0) },
-                ])
-            }
-            lastAXAbsentSkipped = skipped
+        // Log a window once when it becomes AX-absent, not per tick. This runs
+        // every 300ms and a ghost persists indefinitely. Comparing each tick's
+        // skipped set was not enough: ghosts on different backoff schedules are
+        // skipped on different ticks, so the set alternated and logged every
+        // time (52k lines, a quarter of one machine's log). A wid stays in the
+        // logged set until it recovers above or is destroyed.
+        let newlyAbsent = skipped.subtracting(lastAXAbsentSkipped)
+        lastAXAbsentSkipped.formUnion(skipped)
+        if !newlyAbsent.isEmpty {
+            jlog("sweep.unreject.skip", data: [
+                "reason": "ax_absent",
+                "count": lastAXAbsentSkipped.count,
+                "wids": newlyAbsent.sorted().prefix(20).map { Int($0) },
+            ])
         }
     }
 
@@ -740,6 +760,7 @@ class GridReconciler: StateEventHandler {
         for (wid, firstSeen) in notStandardGrace {
             if !NotStandardGracePolicy.shouldReevaluate(now: now, firstSeen: firstSeen) {
                 notStandardGrace[wid] = nil
+                notStandardExpired.insert(wid)
                 jlog("reconcile.not_standard.expired", data: ["wid": Int(wid)])
                 continue
             }
@@ -793,6 +814,30 @@ class GridReconciler: StateEventHandler {
             return
         }
 
+        // Lock, unlock and wake must always be processed. Dropping one during
+        // an action would leave the lock flag stuck and defer every later
+        // wake and display refresh until the next unlock.
+        switch event {
+        case .systemWoke:
+            await handleSystemWake()
+            return
+        case .screenLocked:
+            wakeDeferral.lock()
+            await stateValidator?.pause()
+            return
+        case .screenUnlocked:
+            if wakeDeferral.unlock() {
+                // Runs the wake reconcile held back while locked; it resumes
+                // the validator itself.
+                await handleSystemWake()
+            } else {
+                await stateValidator?.resume()
+            }
+            return
+        default:
+            break
+        }
+
         // Queue (don't drop) window create/destroy that arrive during suppression
         // (DW-1.6, #12). They are replayed in arrival order when depth returns to 0.
         // Other events (move/resize/minimize/etc.) are still skipped — the active
@@ -822,19 +867,8 @@ class GridReconciler: StateEventHandler {
         case .windowCreated(let windowID, let pid):
             await handleWindowCreated(windowID, pid)
 
-        case .systemWoke:
-            await handleSystemWake()
-
         case .systemWillSleep:
             await stateValidator?.pause()
-
-        case .screenLocked:
-            screenLocked = true
-            await stateValidator?.pause()
-
-        case .screenUnlocked:
-            screenLocked = false
-            await stateValidator?.resume()
 
         case .spaceActivated(let spaceID, let displayUUID):
             await handleSpaceActivated(spaceID: spaceID, displayUUID: displayUUID)
@@ -922,6 +956,7 @@ class GridReconciler: StateEventHandler {
         axAbsentStreak.removeValue(forKey: windowID)
         axAbsentRetryAt.removeValue(forKey: windowID)
         lastAXAbsentSkipped.remove(windowID)
+        notStandardExpired.remove(windowID)
 
         // Remove window from GridState (all spaces)
         await gridState?.removeWindowFromAllSpaces(windowID)
@@ -1118,6 +1153,21 @@ class GridReconciler: StateEventHandler {
 
         if !targetCell.isEmpty {
             await gridState.assignWindow(windowID, toCellID: targetCell, inSpace: spaceID)
+
+            // Place it now, like every other path into a cell. Assigning alone
+            // left a new window at its own size inside a full-screen cell until
+            // the user re-applied the layout (ska: 44 of 135 manual applies came
+            // within 30s of an adoption). Only for a showing space: display
+            // bounds resolve through the display's current space, so a
+            // background space would just log err.layout.zero_bounds. A window
+            // adopted there is placed by the next layout apply, as before.
+            // Also only when the window's own space is known: an unknown one
+            // (e.g. just un-minimized) resolved to the focused space, and
+            // laying it out there could pull it across displays.
+            if !windowState.spaces.isEmpty,
+               wmState.displays.contains(where: { String($0.currentSpaceID) == spaceID }) {
+                try? await gridApply?.applyCellLayout(spaceID: spaceID, cellID: targetCell)
+            }
 
             // Sync borders after assignment
             await syncBordersForCurrentSpace()
@@ -1427,6 +1477,38 @@ class GridReconciler: StateEventHandler {
 
         await syncBordersForSpace(spaceID, displayUUID: displayUUID)
         jlog("reconcile.space.activated", data: ["space": spaceID, "display": displayUUID])
+        scheduleMembershipSweep()
+    }
+
+    // Debounced adopt + displaced sweep after a window move or space switch.
+    // Both sweeps used to run only at the end of a hotkey action, so a window
+    // dragged to another display stayed in its old cell (ska: 10 min; Mac
+    // Studio: 58 h), and windows back from behind a fullscreen app stayed out
+    // of the grid until the next hotkey (9 h). The delay covers the ~3s lag of
+    // StateManager's cached space list.
+    private var membershipSweepTask: Task<Void, Never>?
+    private let membershipSweepDelay: Duration = .milliseconds(3500)
+
+    private func scheduleMembershipSweep(dragDeferrals: Int = 0) {
+        membershipSweepTask?.cancel()
+        membershipSweepTask = Task { [weak self] in
+            guard let self else { return }
+            try? await Task.sleep(for: self.membershipSweepDelay)
+            guard !Task.isCancelled, !self.suppressReconciliation else { return }
+            // Mid-drag: wait for the drop rather than snapping the window into
+            // a cell under the cursor. Capped (~35s) so a latched button can't
+            // turn the sweeps off.
+            if NSEvent.pressedMouseButtons != 0 && dragDeferrals < 10 {
+                self.scheduleMembershipSweep(dragDeferrals: dragDeferrals + 1)
+                return
+            }
+            await self.adoptUntrackedTileables()
+            // Adoption awaits; an action may have begun meanwhile, and the
+            // displaced sweep could bounce a hotkey move back before its grace
+            // is set.
+            guard !Task.isCancelled, !self.suppressReconciliation else { return }
+            await self.sweepDisplacedWindows()
+        }
     }
 
     // Debounce window for geometry-only display reconfiguration (#25). Multiple
@@ -1438,6 +1520,12 @@ class GridReconciler: StateEventHandler {
     // UUID. Reapply layouts (debounced) so windows resize to the new bounds.
     private func handleDisplayGeometryChanged(_ displayUUID: String) async {
         jlog("reconcile.dsp.geometry", data: ["display": displayUUID])
+
+        // Locked: the unlock reconcile refreshes every display instead.
+        if !wakeDeferral.wake() {
+            jlog("reconcile.dsp.geometry.deferred", data: ["display": displayUUID])
+            return
+        }
 
         geometryReapplyTask?.cancel()
         geometryReapplyTask = Task { [weak self] in
@@ -1455,6 +1543,14 @@ class GridReconciler: StateEventHandler {
     private func handleSystemWake() async {
         guard let stateProvider, let gridState else { return }
 
+        // Locked: hold the whole reconcile (migrate, validate, refresh) until
+        // unlock. Refreshing from the login screen's window list is what
+        // emptied every cell.
+        if !wakeDeferral.wake() {
+            jlog("reconcile.wake.deferred")
+            return
+        }
+
         jlog("reconcile.wake.start")
 
         // Capture wmState once for consistency across all steps
@@ -1465,32 +1561,14 @@ class GridReconciler: StateEventHandler {
         let task = Task { [weak self] in
             guard let self else { return }
 
-            // Step 0: Resume the validator ONLY when the screen is unlocked
-            // (DW-2.5, #23). At the login screen AX returns reduced window
-            // lists that false-positive ax_orphan-prune real tiled windows.
-            // If still locked, the validator stays paused; the later
-            // screenUnlocked event resumes it.
-            if self.screenLocked {
-                jlog("reconcile.wake.validator.deferred")
-            } else {
-                await self.stateValidator?.resume()
-            }
+            // Step 0: Resume the validator. A wake that arrives while locked
+            // is deferred above and replayed on unlock (DW-2.5, #23).
+            await self.stateValidator?.resume()
 
             // Step 1: Migrate space IDs (macOS may reassign after sleep)
-            var displaySpaces: [String: [String]] = [:]
-            for display in wmState.displays {
-                var spaceIDs: [String] = []
-                for (spaceKey, space) in wmState.spaces {
-                    if space.displayUUID == display.uuid {
-                        spaceIDs.append(spaceKey)
-                    }
-                }
-                // #6: numeric sort for positional matching ([String].sorted()
-                // is lexicographic, pairing "999" ahead of "1001").
-                displaySpaces[display.uuid] = SpaceMigrationPolicy.numericallySorted(spaceIDs)
-            }
-
-            let migrated = await gridState.migrateSpaceIDs(currentDisplaySpaces: displaySpaces)
+            let migrated = await gridState.migrateSpaceIDs(
+                currentDisplaySpaces: GridReconciler.displaySpaceMap(wmState)
+            )
             if migrated {
                 jlog("reconcile.wake.migrated")
             }
@@ -1535,6 +1613,7 @@ class GridReconciler: StateEventHandler {
 
     private func handleWindowMoved(_ windowID: UInt32, _ frame: CGRect) async {
         await borderRenderer?.handleWindowMoved(windowID: windowID, newFrame: frame)
+        scheduleMembershipSweep()
 
         // Re-evaluate rejected windows that may now be tileable (e.g. Ghostty
         // emits a 0x0 AX window at creation, then resizes to real dimensions).
@@ -1559,6 +1638,7 @@ class GridReconciler: StateEventHandler {
         }
 
         await gridState.unrejectWindow(windowID)
+        lastAXAbsentSkipped.remove(windowID)
         jlog("reconcile.win.unrejected", data: ["wid": windowID, "w": frame.width, "h": frame.height])
 
         if pendingLaunchTarget != nil {
@@ -1600,6 +1680,36 @@ class GridReconciler: StateEventHandler {
         jlog("reconcile.win.unmin", data: ["wid": windowID])
     }
 
+    // Per-display space IDs from wmState, numerically sorted for positional
+    // pairing (#6: [String].sorted() is lexicographic, pairing "999" ahead of
+    // "1001").
+    static func displaySpaceMap(_ wmState: WindowManagerState, displayFilter: String? = nil) -> [String: [String]] {
+        var map: [String: [String]] = [:]
+        for display in wmState.displays where displayFilter == nil || display.uuid == displayFilter {
+            let spaceIDs = wmState.spaces.compactMap { key, space in
+                space.displayUUID == display.uuid ? key : nil
+            }
+            map[display.uuid] = SpaceMigrationPolicy.numericallySorted(spaceIDs)
+        }
+        return map
+    }
+
+    // Migrate saved space IDs to the current ones and record the current
+    // per-display lists (the "old" side of the next migration). Runs at
+    // startup, on display connect and on wake. It used to run only on wake,
+    // so the list was often empty and the next wake or re-dock had nothing to
+    // pair: vana logged old:0 and its external layouts were pruned.
+    func migrateSpaceIDs(displayFilter: String? = nil) async {
+        guard let gridState, let stateProvider else { return }
+        let wmState = await stateProvider.getState()
+        let migrated = await gridState.migrateSpaceIDs(
+            currentDisplaySpaces: GridReconciler.displaySpaceMap(wmState, displayFilter: displayFilter)
+        )
+        if migrated {
+            jlog("reconcile.spaces.migrated", data: ["display": displayFilter ?? "all"])
+        }
+    }
+
     // handleDisplayConnected
     //
     // Triggered when a display is reconnected (e.g., external monitor plugged back in).
@@ -1608,10 +1718,22 @@ class GridReconciler: StateEventHandler {
     private func handleDisplayConnected(_ displayUUID: String) async {
         jlog("reconcile.display.connect", data: ["display": displayUUID])
 
+        // Locked: the unlock reconcile refreshes every display, after space-ID
+        // migration, instead of this refresh running ahead of it.
+        if !wakeDeferral.wake() {
+            jlog("reconcile.display.connect.deferred", data: ["display": displayUUID])
+            return
+        }
+
         // Short delay allows macOS to stabilize space/window state after reconnect
         // before we query it. Without this, wmState may not yet reflect new spaces.
         // 500ms is enough for display negotiation; short enough to feel instant.
         try? await Task.sleep(for: .milliseconds(500))
+
+        // Pair this display's old space IDs with its new ones first. Without
+        // a wake nothing else ran the migration, so a re-docked display's
+        // spaces came up on the default layout.
+        await migrateSpaceIDs(displayFilter: displayUUID)
 
         // Reapply layouts and sync borders for the reconnected display.
         // refreshAllDisplays handles: find active space, check layout,
@@ -1823,8 +1945,11 @@ class GridReconciler: StateEventHandler {
 
     // Determine which tracked space a window belongs to using its OS-level
     // space list. Picks the first space that has an active layout in GridState.
-    // Falls back to the focused space if the window's spaces are empty or
-    // none have layouts (e.g. window just created, spaces not yet populated).
+    // Falls back to the focused space only when the window's spaces are unknown
+    // (window just created, spaces not yet populated). A window on a known
+    // space with no layout belongs to no grid: borrowing the focused space put
+    // another display's windows into its cells, and now that adoption lays the
+    // cell out, that would pull them across displays.
     private func resolveWindowSpace(
         _ windowState: WindowState,
         gridState: GridState,
@@ -1837,7 +1962,7 @@ class GridReconciler: StateEventHandler {
                 return sid
             }
         }
-        return findCurrentSpaceID(from: wmState)
+        return windowState.spaces.isEmpty ? findCurrentSpaceID(from: wmState) : nil
     }
 
     private func findDisplayUUIDForSpace(_ spaceID: String, from wmState: WindowManagerState) -> String? {
@@ -1945,6 +2070,16 @@ class GridReconciler: StateEventHandler {
 
         let allWids = await gridState.getAllWindowIDs()
 
+        // Cells reserved by app rules; keep displaced windows out of them, as
+        // window creation does.
+        let appRules: [GridAppRule]
+        if let override = _test_appRuleOverride {
+            appRules = override
+        } else {
+            appRules = await MainActor.run { gridConfig?.appRules ?? [] }
+        }
+        let lockedCells = lockedCellIDs(appRules: appRules)
+
         let sweepNow = CFAbsoluteTimeGetCurrent()
 
         for wid in allWids {
@@ -1990,7 +2125,25 @@ class GridReconciler: StateEventHandler {
 
             // Record the source cell before state mutation
             let sourceCell = await gridState.getWindowCell(windowID: wid, inSpace: trackedSpaceID) ?? ""
-            let targetCell = await gridState.getFocusedCell(spaceID: targetSpaceID) ?? "left"
+            // Pick a cell the target layout actually has, the same way window
+            // creation does. A hardcoded "left" put windows into a cell that
+            // single-tabs layouts lack, so they were never placed (vana: 16h).
+            let targetFocused = await gridState.getFocusedCell(spaceID: targetSpaceID)
+            let targetAssignments = await gridState.getWindowAssignments(spaceID: targetSpaceID)
+            var targetCell = GridReconciler.pickTargetCell(
+                focusedCell: targetFocused, assignments: targetAssignments, locked: lockedCells
+            )
+            // Every cell reserved: still move it. Leaving it in its source cell
+            // lets the next apply there drag it back across displays.
+            if targetCell.isEmpty {
+                targetCell = GridReconciler.pickTargetCell(
+                    focusedCell: targetFocused, assignments: targetAssignments, locked: []
+                )
+            }
+            guard !targetCell.isEmpty else {
+                jlog("reconcile.lift.skip", data: ["reason": "no_cells", "wid": Int(wid), "to": targetSpaceID])
+                continue
+            }
 
             await gridState.removeWindow(wid, fromSpace: trackedSpaceID)
             await gridState.assignWindow(wid, toCellID: targetCell, inSpace: targetSpaceID)

@@ -70,6 +70,9 @@ actor StateManager: StateEventHandler, StateProvider {
     // later rediscovery (different window, reused id) does not false-positive.
     private let resurrectionGraceSeconds: CFAbsoluteTime = 3.5
 
+    // Holds the wake rescan until the screen unlocks (see WakeDeferral).
+    private var wakeDeferral = WakeDeferral()
+
     // CLI path (used for ResizeManager)
     private var cliPath: String = "thegrid"
 
@@ -331,11 +334,27 @@ actor StateManager: StateEventHandler, StateProvider {
             await handleApplicationUnhidden(app)
 
         case .systemWoke:
-            await handleSystemWoke()
+            // A rescan at the login screen caches every window as hidden (and
+            // AX answers there are unreliable), and the poll never corrects
+            // either, so nothing tiles until restart. Rescan on unlock instead.
+            // Registered ahead of GridReconciler, so this finishes before its
+            // own deferred wake reconcile runs.
+            if wakeDeferral.wake() {
+                await handleSystemWoke()
+            } else {
+                jlog("state.wake.deferred")
+            }
 
-        case .systemWillSleep, .screenLocked, .screenUnlocked:
-            // Handled by GridReconciler (validator pause/resume).
-            // StateManager itself does not need to react to sleep/lock state.
+        case .screenLocked:
+            wakeDeferral.lock()
+
+        case .screenUnlocked:
+            if wakeDeferral.unlock() {
+                await handleSystemWoke()
+            }
+
+        case .systemWillSleep:
+            // Handled by GridReconciler (validator pause).
             break
 
         case .displayReconfigured(_):
@@ -489,11 +508,10 @@ actor StateManager: StateEventHandler, StateProvider {
 
         let displayUUIDs: [String] = cfArrayToSwiftArray(displaysArray)
 
-        // #63s instrumentation (suspected — trace only, NO behavioral change).
-        // enrichDisplayInfo joins SLS managed-display order to NSScreen.screens
-        // by array index; with 2+ displays the orders can diverge and attach
-        // the wrong frame/scale to a UUID. Record the join so UAT can confirm
-        // or drop the finding before any UUID-matching fix is attempted.
+        // #63s: SLS managed-display order and NSScreen.screens order diverge
+        // (confirmed: two stacked externals swapped on ska and vana), so
+        // enrichDisplayInfo now matches screens by UUID. Keep recording the SLS
+        // order for diagnosis.
         let screenCount = NSScreen.screens.count
         for (index, displayUUID) in displayUUIDs.enumerated() {
             jlog("dsp.refresh.join", data: [
@@ -512,6 +530,7 @@ actor StateManager: StateEventHandler, StateProvider {
             let display = DisplayInfoHelper.enrichDisplayInfo(
                 uuid: displayUUID,
                 screenIndex: index,
+                slsUUIDs: Set(displayUUIDs),
                 currentSpaceID: currentSpaceID,
                 spaces: []  // Will be populated in refreshSpaces
             )
@@ -2464,7 +2483,27 @@ return
         await removeObserver(for: pid)
 
         // Remove all windows for this PID
+        let removedWindowIDs = state.windows.values.filter { $0.pid == pid }.map(\.id)
         state.windows = state.windows.filter { $0.value.pid != pid }
+
+        // Route destroy events, as the poll does, so GridReconciler drops them
+        // from their cells now. Without this they are gone from state, so the
+        // poll never reports them, and they sat in cells until the 30s
+        // validator pruned them as dead.
+        let now = CFAbsoluteTimeGetCurrent()
+        for windowID in removedWindowIDs {
+            removalTombstone[windowID] = now
+        }
+        if !removedWindowIDs.isEmpty {
+            Task {
+                for windowID in removedWindowIDs {
+                    await EventRouter.shared.route(
+                        .windowDestroyed(windowID: windowID),
+                        from: .workspaceObserver
+                    )
+                }
+            }
+        }
 
         state.metadata.update()
     }
@@ -2564,6 +2603,12 @@ return
         // Without this delay, SkyLight/AX queries return stale or incomplete data.
         // BFD uses a similar 1s delay for event tap recovery.
         try? await Task.sleep(nanoseconds: 2_000_000_000)
+
+        // The screen may have locked during the delay; rescan on unlock instead.
+        if !wakeDeferral.wake() {
+            jlog("state.wake.deferred")
+            return
+        }
 
         await refreshCompleteState()
 

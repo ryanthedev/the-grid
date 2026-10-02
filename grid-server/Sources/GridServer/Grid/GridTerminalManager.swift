@@ -276,10 +276,8 @@ actor GridTerminalManager {
 
         // Primary: match by PID and title containing "grid:scratch"
         for (_, window) in state.windows {
-            if window.pid == pid {
-                if let title = window.title, title.contains(Self.ghosttyTitle) {
-                    return window.id
-                }
+            if window.pid == pid, Self.isScratchWindow(window) {
+                return window.id
             }
         }
 
@@ -293,6 +291,13 @@ actor GridTerminalManager {
         return nil
     }
 
+    /// Whether a window carries the scratch title. Checks the AX title too:
+    /// the window-list title (kCGWindowName) is empty without Screen Recording
+    /// permission, which made every launch time out and leave an extra Ghostty.
+    static func isScratchWindow(_ window: WindowState) -> Bool {
+        [window.title, window.axTitle].contains { $0?.contains(ghosttyTitle) == true }
+    }
+
     /// Search all windows for any Ghostty window with matching title.
     /// Used when no saved PID/WID exists (tier 3: orphaned window).
     private func findAnyGhosttyWindow() async -> (UInt32, pid_t)? {
@@ -301,10 +306,9 @@ actor GridTerminalManager {
         for (_, window) in state.windows {
             let pidStr = String(window.pid)
             if let app = state.applications[pidStr],
-               app.bundleIdentifier == Self.ghosttyBundleID {
-                if let title = window.title, title.contains(Self.ghosttyTitle) {
-                    return (window.id, window.pid)
-                }
+               app.bundleIdentifier == Self.ghosttyBundleID,
+               Self.isScratchWindow(window) {
+                return (window.id, window.pid)
             }
         }
 

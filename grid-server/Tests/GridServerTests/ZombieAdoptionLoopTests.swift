@@ -231,4 +231,70 @@ final class ZombieAdoptionLoopTests: XCTestCase {
         let clearedOnDestroy = await gridState.isWindowRejected(1130)
         XCTAssertFalse(clearedOnDestroy, "a real destroy must release the wid")
     }
+
+    // vana: a floating Ghostty cycled validate.win.untracked -> not_standard
+    // bail -> not_standard.expired 163 times in 8 hours, because each action.end
+    // re-adopted it and restarted the grace. Once expired, adoption skips it.
+    func testExpiredNotStandardWindowIsNotReadopted() async throws {
+        var wmState = ghostState()
+        // Modal: classifies as floating, not standard.
+        wmState.windows["1130"]?.isModal = true
+        let (reconciler, gridState, mock) = await wire(wmState)
+        defer { withExtendedLifetime((gridState, mock)) {} }
+        reconciler._test_setAXWindowIDs { pid in pid == 39899 ? [1130] : [] }
+
+        await reconciler._test_adoptUntrackedTileables()
+        XCTAssertEqual(reconciler._test_notStandardGraceCount, 1, "precondition: grace started")
+
+        try await Task.sleep(for: .milliseconds(3200))
+        await reconciler._test_notStandardGraceSweep()
+        XCTAssertEqual(reconciler._test_notStandardGraceCount, 0, "precondition: grace expired")
+
+        await reconciler._test_adoptUntrackedTileables()
+        XCTAssertEqual(reconciler._test_notStandardGraceCount, 0,
+            "an expired floating window must not restart the grace on every action")
+
+        // It later becomes a normal window (e.g. the app is unhidden or a
+        // rescan corrects it): adoption must take it again.
+        mock.state.windows["1130"]?.isModal = false
+        await reconciler._test_adoptUntrackedTileables()
+        let space = await gridState.findSpaceContaining(windowID: 1130)
+        XCTAssertEqual(space, "100", "a window that becomes standard is adopted")
+    }
+
+    // ska: adopted windows were assigned to a cell but left at their own size
+    // until the user re-applied the layout. Adoption must place the cell.
+    func testAdoptedWindowIsPlacedInItsCell() async {
+        let (reconciler, gridState, mock) = await wire(ghostState())
+        defer { withExtendedLifetime((gridState, mock)) {} }
+        reconciler._test_setAXWindowIDs { pid in pid == 39899 ? [1130] : [] }
+        let gridApply = GridApply()
+        var placed: [String] = []
+        gridApply._test_applyCellLayoutHook = { spaceID, cellID in placed.append("\(spaceID)/\(cellID)") }
+        reconciler._test_setGridApply(gridApply)
+
+        await reconciler._test_adoptUntrackedTileables()
+
+        let cell = await gridState.getWindowCell(windowID: 1130, inSpace: "100")
+        XCTAssertNotNil(cell)
+        XCTAssertEqual(placed, ["100/\(cell ?? "")"], "the adopted window's cell is laid out")
+    }
+
+    // A window on another display's desktop that has no layout must stay out of
+    // the focused display's grid; with adoption laying cells out it would be
+    // pulled across displays.
+    func testWindowOnUnlaidOutSpaceIsNotBorrowedIntoFocusedSpace() async {
+        var wmState = ghostState()
+        wmState.windows["1130"]?.spaces = [200]
+        wmState.displays.append(makeDisplay(uuid: "display-2", space: 200))
+        wmState.spaces["200"] = SpaceState(id: 200, uuid: "v", type: "user", displayUUID: "display-2")
+        let (reconciler, gridState, mock) = await wire(wmState)
+        defer { withExtendedLifetime((gridState, mock)) {} }
+        reconciler._test_setAXWindowIDs { pid in pid == 39899 ? [1130] : [] }
+
+        await reconciler._test_adoptUntrackedTileables()
+
+        let space = await gridState.findSpaceContaining(windowID: 1130)
+        XCTAssertNil(space)
+    }
 }
