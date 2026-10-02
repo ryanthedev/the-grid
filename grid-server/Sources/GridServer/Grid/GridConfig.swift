@@ -326,14 +326,16 @@ final class GridConfig {
             JSONLogger.shared.log("grid.cfg.borders.bridge")
         }
 
+        // Expand paths and watch the files before validating. A validation
+        // error used to throw first, so one bad reference (vana: "space 4
+        // references unknown layout") left config hot reload off and `~`
+        // unexpanded for the life of the server. The parsed config is in
+        // effect either way; watching means fixing the file reloads it.
+        expandPaths()
+        startConfigWatchers()
+
         // Validate
         try validate()
-
-        // Expand paths
-        expandPaths()
-
-        // Start file watchers
-        startConfigWatchers()
     }
 
     // MARK: - Layout Access
