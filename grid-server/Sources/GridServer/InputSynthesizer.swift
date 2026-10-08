@@ -283,7 +283,21 @@ final class InputSynthesizer {
         send(ev)
     }
 
+    /// When agent input was last posted. Input sent with postToPid can count in
+    /// the HID keyDown counter without crossing the BFD tap, so the tap watchdog
+    /// treats intervals that overlap it as inconclusive.
+    private static let lastSendLock = NSLock()
+    nonisolated(unsafe) private static var _lastSendAt = Date.distantPast
+    static var lastSendAt: Date {
+        lastSendLock.lock()
+        defer { lastSendLock.unlock() }
+        return _lastSendAt
+    }
+
     private func send(_ ev: CGEvent, pid: pid_t? = nil) {
+        Self.lastSendLock.lock()
+        Self._lastSendAt = Date()
+        Self.lastSendLock.unlock()
         ev.setIntegerValueField(.eventSourceUserData, value: Self.syntheticEventTag)
         if let pid {
             ev.postToPid(pid)
