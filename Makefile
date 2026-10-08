@@ -1,4 +1,4 @@
-.PHONY: run run-clean install-dev help build server cli viewer test clean server-test server-clean run-server install dist dev reset-accessibility setup-signing server-universal cli-universal viewer-universal dist-universal notify notify-dev notify-universal notify-app-bundle notify-test notify-clean mcp mcp-dev mcp-install
+.PHONY: run run-clean install-dev help build server cli viewer test clean server-test server-clean run-server install dist dev reset-accessibility setup-signing server-universal cli-universal viewer-universal dist-universal notify notify-dev notify-universal notify-app-bundle notify-test notify-clean generate-version generate-skill generate-cli
 
 # Version from VERSION file
 VERSION := $(shell cat VERSION)
@@ -30,9 +30,18 @@ generate-version:
 	@echo "// Auto-generated - do not edit" > grid-server/Sources/GridServer/Version.swift
 	@echo "let GridServerVersion = \"$(VERSION)\"" >> grid-server/Sources/GridServer/Version.swift
 	@echo "let GridServerCommit = \"$(COMMIT)\"" >> grid-server/Sources/GridServer/Version.swift
+	@echo "// Auto-generated - do not edit" > grid-server/Sources/GridCLI/Version.swift
+	@echo "let GridCLIVersion = \"$(VERSION)\"" >> grid-server/Sources/GridCLI/Version.swift
+
+# Embed skills/thegrid/SKILL.md into the CLI (see scripts/generate-skill.sh)
+generate-skill:
+	@./scripts/generate-skill.sh
+
+# Everything the CLI target needs before `swift build` can see it
+generate-cli: generate-version generate-skill
 
 # Server targets
-server: generate-version
+server: generate-cli
 	@echo "Building grid-server..."
 	@cd grid-server && swift build
 
@@ -41,11 +50,11 @@ viewer:
 	@echo "Building grid-viewer..."
 	@cd grid-server && swift build --product grid-viewer
 
-server-release: generate-version
+server-release: generate-cli
 	@echo "Building grid-server (release)..."
 	@cd grid-server && swift build -c release
 
-server-test:
+server-test: generate-cli
 	@echo "Running grid-server tests..."
 	@cd grid-server && swift test
 
@@ -67,7 +76,7 @@ notify-clean:
 	@cd grid-notify && swift package clean
 
 # CLI target (Swift)
-cli:
+cli: generate-cli
 	@echo "Building grid-cli (Swift)..."
 	@cd grid-server && swift build --product grid-cli
 
@@ -101,7 +110,7 @@ dist: server-release cli
 	@shasum -a 256 dist/thegrid-$(VERSION).tar.gz
 
 # Universal binary builds (arm64 + x86_64)
-server-universal: generate-version
+server-universal: generate-cli
 	@echo "Building grid-server (universal binary)..."
 	@cd grid-server && swift build -c release --arch arm64 --arch x86_64
 	@echo "Verifying universal binary..."
@@ -110,7 +119,7 @@ server-universal: generate-version
 		exit 1; \
 	fi
 
-cli-universal:
+cli-universal: generate-cli
 	@echo "Building grid-cli universal binary..."
 	@cd grid-server && swift build -c release --product grid-cli --arch arm64 --arch x86_64
 	@echo "Verifying universal binary..."
@@ -358,10 +367,14 @@ run-clean: dev install-dev
 	@echo "✓ Service restarted (state and logs cleared)"
 
 # Install dev build to ~/.local/bin
+# `install` unlinks the target first. `cp` overwrote the running binary in
+# place, which left the kernel holding a stale code signature for that inode
+# and every later exec of ~/.local/bin/thegrid died with SIGKILL while a
+# long-lived `thegrid mcp serve` was still running from it.
 install-dev: cli viewer
 	@mkdir -p ~/.local/bin
-	@cp grid-server/.build/debug/grid-cli ~/.local/bin/thegrid
-	@cp grid-server/.build/debug/grid-viewer ~/.local/bin/grid-viewer
+	@install -m 755 grid-server/.build/debug/grid-cli ~/.local/bin/thegrid
+	@install -m 755 grid-server/.build/debug/grid-viewer ~/.local/bin/grid-viewer
 	@echo "✓ Installed dev CLI to ~/.local/bin/thegrid"
 	@echo "✓ Installed grid-viewer to ~/.local/bin/grid-viewer"
 
@@ -380,25 +393,3 @@ reset-accessibility:
 # Setup code signing certificate (one-time)
 setup-signing:
 	@./scripts/create-dev-certificate.sh
-
-# --- grid-mcp (MCP server) ---
-
-MCP_BINARY := grid-mcp/.build/debug/GridMCP
-MCP_INSTALL_PATH := $(HOME)/.local/bin/grid-mcp
-
-# Build grid-mcp debug binary
-mcp:
-	cd grid-mcp && swift build
-	@echo "✓ GridMCP built"
-
-# Build and symlink grid-mcp binary (changes reflected immediately on next call)
-mcp-dev: mcp
-	@mkdir -p $(HOME)/.local/bin
-	@ln -sf $(CURDIR)/$(MCP_BINARY) $(MCP_INSTALL_PATH)
-	@echo "✓ GridMCP symlinked to $(MCP_INSTALL_PATH)"
-
-# Install grid-mcp binary (copy, for stable installs)
-mcp-install: mcp
-	@mkdir -p $(HOME)/.local/bin
-	@cp $(CURDIR)/$(MCP_BINARY) $(MCP_INSTALL_PATH)
-	@echo "✓ GridMCP installed to $(MCP_INSTALL_PATH)"

@@ -3,8 +3,10 @@ grid-server/.build/
 grid-server/.swiftpm/
 grid-server/Package.resolved
 
-# Auto-generated version file
+# Auto-generated (make generate-cli)
 grid-server/Sources/GridServer/Version.swift
+grid-server/Sources/GridCLI/Version.swift
+grid-server/Sources/GridCLI/EmbeddedSkill.swift
 # Go build artifacts (grid-cli)
 grid-cli/bin/
 grid-cli/thegrid

@@ -60,6 +60,11 @@ let package = Package(
             name: "GridServerTests",
             dependencies: ["GridServer"],
             path: "Tests/GridServerTests"
+        ),
+        .testTarget(
+            name: "GridCLITests",
+            dependencies: ["GridCLI"],
+            path: "Tests/GridCLITests"
         )
     ]
 )

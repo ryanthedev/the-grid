@@ -142,6 +142,7 @@ final class EventAllowlistTests: XCTestCase {
         "grid.state.load", "grid.state.load.new", "grid.state.save",
         "layout.apply.ax_partial", "layout.apply.done", "layout.apply.start", "layout.cell.start",
         "layout.refresh_all.done", "layout.refresh_all.start",
+        "input.err", "input.ok",
         "mouse.down", "mouse.drag", "mouse.init", "mouse.start", "mouse.stop",
         "msg.err", "msg.handle", "msg.register",
         "notify.err", "notify.launch",

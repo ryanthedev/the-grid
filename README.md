@@ -7,21 +7,33 @@
 
 macOS window manager with grid-based tiling layouts.
 
+## Install
+
+```bash
+brew tap ryanthedev/thegrid && brew install thegrid
+```
+
+## Claude Code
+
+The CLI ships an MCP server (48 tools: grid, window, query, screenshot, and mouse/keyboard input) and a skill. One command registers both:
+
+```bash
+thegrid mcp install     # registers `thegrid mcp serve` with Claude Code, writes ~/.claude/skills/thegrid/SKILL.md
+```
+
+Restart Claude Code, then `claude mcp list` should show `thegrid` connected. `thegrid mcp uninstall` reverses it.
+
+The same input tools are available from the shell: `thegrid input click 800 400`, `thegrid input type "hello"`, `thegrid input key cmd+s`, `thegrid input scroll 0 -300`, `thegrid input drag X1 Y1 X2 Y2`.
+
 ## Build & Run
 
 ```bash
-# Server (Swift)
-cd grid-server && swift build
-.build/debug/grid-server
-
-# CLI (Go)
-cd grid-cli && make build
-./bin/grid ping
+make run                # build everything, restart the dev service
+make cli                # just the CLI (grid-server/.build/debug/grid-cli)
+make test
 ```
 
 ## Requirements
 
 - macOS 13+
 - Accessibility permissions
-
-See [grid-server/README.md](grid-server/README.md) and [grid-cli/README.md](grid-cli/README.md) for details.

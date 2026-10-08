@@ -26,6 +26,7 @@ class MessageHandler {
 
     init(logger: Logger? = nil) {
         registerBuiltInHandlers()
+        registerInputHandlers()
     }
 
     /// Register a handler for a specific method
