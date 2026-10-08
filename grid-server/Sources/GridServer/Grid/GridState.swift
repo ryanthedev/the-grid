@@ -102,7 +102,23 @@ actor GridState {
 
     // Production init: uses FileGridStorage at the XDG state path.
     init() {
-        storage = FileGridStorage(path: "\(XDG.stateHome)/thegrid/state.json")
+        storage = FileGridStorage(path: Self.resolveStatePath(
+            stateHome: XDG.stateHome,
+            xctestLoaded: NSClassFromString("XCTestCase") != nil,
+            temporaryDirectory: NSTemporaryDirectory()
+        ))
+    }
+
+    /// The test suite must never write the real state file. Several tests build
+    /// a production GridState(); their debounced save used to land fixture
+    /// spaces in ~/.local/state/thegrid/state.json, and a server restarted
+    /// before its next own save loaded them and lost every real layout. Same
+    /// signal as the log redirect: whether XCTest is loaded.
+    static func resolveStatePath(stateHome: String, xctestLoaded: Bool, temporaryDirectory: String) -> String {
+        if xctestLoaded {
+            return (temporaryDirectory as NSString).appendingPathComponent("thegrid-tests/state-\(UUID().uuidString).json")
+        }
+        return (stateHome as NSString).appendingPathComponent("thegrid/state.json")
     }
 
     // Injection init: accepts any GridStorage (used by tests with InMemoryGridStorage).

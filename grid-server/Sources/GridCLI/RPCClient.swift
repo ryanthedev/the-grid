@@ -63,6 +63,13 @@ final class RPCClient {
             throw RPCError.connectionFailed("Cannot connect to \(socketPath) - is the server running?")
         }
 
+        // The timeout was stored and never applied, so a server that accepted the
+        // request and never answered hung the CLI and every MCP call forever.
+        if timeout > 0 {
+            var tv = timeval(tv_sec: Int(timeout), tv_usec: Int32((timeout - floor(timeout)) * 1_000_000))
+            setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
+        }
+
         self.fileDescriptor = fd
     }
 
@@ -136,6 +143,9 @@ final class RPCClient {
         while true {
             let n = read(fileDescriptor, &byte, 1)
             if n < 0 {
+                // SO_RCVTIMEO expired: the server never answered.
+                if errno == EAGAIN || errno == EWOULDBLOCK { throw RPCError.timeout }
+                if errno == EINTR { continue }
                 throw RPCError.readFailed("Failed to read from socket")
             }
             if n == 0 {

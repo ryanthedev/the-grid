@@ -119,12 +119,16 @@ struct InputScroll: ParsableCommand {
 struct InputType: ParsableCommand {
     static let configuration = CommandConfiguration(commandName: "type", abstract: "Type literal text (never triggers shortcuts)")
     @Argument var text: String
+    @Option(name: .long, help: "Window that must hold keyboard focus first (focused and verified)")
+    var window: String?
     @OptionGroup var globals: GlobalOptions
 
     func run() throws {
+        var params: [String: Any] = ["text": text]
+        if let window { params["windowId"] = window }
         let client = makeClient(from: globals)
         defer { client.disconnect() }
-        printOkOrJSON(try client.call("input.key.type", params: ["text": text]), json: globals.json)
+        printOkOrJSON(try client.call("input.key.type", params: params), json: globals.json)
     }
 }
 
@@ -133,11 +137,15 @@ struct InputKey: ParsableCommand {
     @Argument var key: String
     @Option(name: .long, help: "Repeat count")
     var count: Int = 1
+    @Option(name: .long, help: "Window that must hold keyboard focus first (focused and verified)")
+    var window: String?
     @OptionGroup var globals: GlobalOptions
 
     func run() throws {
+        var params: [String: Any] = ["key": key, "count": count]
+        if let window { params["windowId"] = window }
         let client = makeClient(from: globals)
         defer { client.disconnect() }
-        printOkOrJSON(try client.call("input.key.press", params: ["key": key, "count": count]), json: globals.json)
+        printOkOrJSON(try client.call("input.key.press", params: params), json: globals.json)
     }
 }

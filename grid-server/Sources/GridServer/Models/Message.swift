@@ -140,6 +140,20 @@ struct AnyCodable: Codable {
     func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
 
+        // A numeric NSNumber (anything JSONSerialization parsed) bridges to Bool
+        // when it holds 0 or 1, so `as Bool` alone turns those into
+        // false/true. Only a CFBoolean is a real boolean.
+        if let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() {
+            if CFNumberIsFloatType(number) {
+                try container.encode(number.doubleValue)
+            } else if String(cString: number.objCType) == "Q" {
+                try container.encode(number.uint64Value)
+            } else {
+                try container.encode(number.int64Value)
+            }
+            return
+        }
+
         switch value {
         case let bool as Bool:
             try container.encode(bool)

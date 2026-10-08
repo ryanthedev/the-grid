@@ -15,7 +15,7 @@ brew tap ryanthedev/thegrid && brew install thegrid
 
 ## Claude Code
 
-The CLI ships an MCP server (48 tools: grid, window, query, screenshot, and mouse/keyboard input) and a skill. One command registers both:
+The CLI ships an MCP server (66 tools: grid, window, spaces, query, screenshot, accessibility snapshots, menu bar commands, clipboard, and mouse/keyboard input) and a skill. One command registers both:
 
 ```bash
 thegrid mcp install     # registers `thegrid mcp serve` with Claude Code, writes ~/.claude/skills/thegrid/SKILL.md
@@ -23,7 +23,7 @@ thegrid mcp install     # registers `thegrid mcp serve` with Claude Code, writes
 
 Restart Claude Code, then `claude mcp list` should show `thegrid` connected. `thegrid mcp uninstall` reverses it.
 
-The same input tools are available from the shell: `thegrid input click 800 400`, `thegrid input type "hello"`, `thegrid input key cmd+s`, `thegrid input scroll 0 -300`, `thegrid input drag X1 Y1 X2 Y2`.
+The same input tools are available from the shell: `thegrid input click 800 400`, `thegrid input type "hello"`, `thegrid input key cmd+s`, `thegrid input scroll 0 -300`, `thegrid input drag X1 Y1 X2 Y2`. `thegrid ui snapshot WINDOW_ID` prints a window's accessibility tree with refs for `thegrid ui press|set|click REF`, and `--window WINDOW_ID` on `input type`/`input key` refuses to type unless that window verifiably holds focus.
 
 ## Build & Run
 

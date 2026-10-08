@@ -151,27 +151,49 @@ private func windowSwap(_ direction: String, globals: GlobalOptions) throws {
 struct WindowFind: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "find",
-        abstract: "Find window by process ID"
+        abstract: "Find windows by process ID, app name, or title"
     )
 
     @Option(name: .long, help: "Process ID to find owning window for")
-    var pid: Int
+    var pid: Int?
+
+    @Option(name: .long, help: "Exact application name, e.g. Safari")
+    var app: String?
+
+    @Option(name: .long, help: "Window title substring")
+    var title: String?
 
     @OptionGroup var globals: GlobalOptions
 
+    func validate() throws {
+        guard pid != nil || app != nil || title != nil else {
+            throw ValidationError("give at least one of --pid, --app, --title")
+        }
+    }
+
     func run() throws {
+        var params: [String: Any] = [:]
+        if let pid { params["pid"] = pid }
+        if let app { params["appName"] = app }
+        if let title { params["title"] = title }
         let client = makeClient(from: globals)
         defer { client.disconnect() }
 
-        let result = try client.call("window.find", params: ["pid": pid])
+        let result = try client.call("window.find", params: params)
 
         if globals.json {
             printResult(result, json: true)
         } else if result["found"] as? Bool == true {
-            // Plain text: just the window ID for easy shell capture
-            print(result["windowId"] as? String ?? "")
+            // Plain text: one "ID<TAB>title" line per match; a lone pid match stays a bare ID for shell capture.
+            if let matches = result["matches"] as? [[String: Any]] {
+                for match in matches {
+                    print("\(match["windowId"] as? String ?? "")\t\(match["title"] as? String ?? "")")
+                }
+            } else {
+                print(result["windowId"] as? String ?? "")
+            }
         } else {
-            throw ValidationError("no window found for pid \(pid)")
+            throw ValidationError("no window found")
         }
     }
 }
