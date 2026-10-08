@@ -95,7 +95,8 @@ final class EventAllowlistTests: XCTestCase {
         "bfd.err.config", "bfd.err.internal", "bfd.err.reload",
         "bfd.err.start", "bfd.err.tap", "bfd.error",
         "bfd.exec", "bfd.init", "bfd.internal", "bfd.ready", "bfd.reload",
-        "bfd.resume", "bfd.start", "bfd.stop", "bfd.suspend",
+        "bfd.resume", "bfd.secure_input.off", "bfd.secure_input.on",
+        "bfd.start", "bfd.stop", "bfd.suspend",
         "bfd.wake.check", "bfd.wake.reenable", "bfd.wake.restart",
         "cellops.init", "cfg.merge", "cfg.resolve", "cfg.skip",
         // Phase 1 serialization foundation.
@@ -225,7 +226,7 @@ final class EventAllowlistTests: XCTestCase {
         "warn.action.end.consumed", "warn.action.end.underflow", "warn.ax.permission",
         "warn.bdr.bad_bounds", "warn.bdr.exists", "warn.bdr.missing",
         "warn.bdr.no_ctx", "warn.bdr.setup",
-        "warn.bfd.init", "warn.broadcast", "warn.client_response",
+        "warn.bfd.init", "warn.bfd.secure_input", "warn.broadcast", "warn.client_response",
         "warn.config", "warn.dsp", "warn.dsp.cgbounds_empty", "warn.fence.empty",
         "warn.focus", "warn.mouse", "warn.mouse.tap_disabled",
         "warn.move", "warn.mss", "warn.placement",

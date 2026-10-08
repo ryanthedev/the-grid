@@ -21,6 +21,9 @@ class BFDKeyHandler {
     // Health check timer
     private var healthCheckTimer: Timer?
 
+    // Secure Input blinds the tap without disabling it; polled separately
+    private let secureInputMonitor = SecureInputMonitor()
+
     // Callbacks
     var onHotkeyTriggered: ((String, BFDHotkeyDef) -> Void)?
 
@@ -118,15 +121,18 @@ class BFDKeyHandler {
                 }
                 let enabled = CGEvent.tapIsEnabled(tap: tap)
                 let portValid = CFMachPortIsValid(tap)
+                let secureInput = SecureInputMonitor.isEnabled
                 Task {
                     JSONLogger.shared.log("bfd.dbg.health", data: [
                         "enabled": enabled,
-                        "portValid": portValid
+                        "portValid": portValid,
+                        "secureInput": secureInput
                     ])
                 }
             }
             // Fire immediately for first check
             self.healthCheckTimer?.fire()
+            self.secureInputMonitor.start()
         }
 
         return true
@@ -175,6 +181,7 @@ class BFDKeyHandler {
     func stop() {
         healthCheckTimer?.invalidate()
         healthCheckTimer = nil
+        secureInputMonitor.stop()
 
         guard let tap = eventTap else { return }
 
