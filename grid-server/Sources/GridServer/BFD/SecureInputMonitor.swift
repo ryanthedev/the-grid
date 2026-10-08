@@ -49,8 +49,8 @@ struct SecureInputPolicy {
     }
 }
 
-/// Polls Secure Event Input every couple of seconds, logs who holds it, and
-/// tells the user when it has blocked hotkeys for long enough to matter.
+/// Polls Secure Event Input every couple of seconds and logs it, so the tap
+/// watchdog and the log can tell a blinded tap from a broken one.
 final class SecureInputMonitor {
     private var policy = SecureInputPolicy()
     private var timer: Timer?
@@ -93,7 +93,6 @@ final class SecureInputMonitor {
                 JSONLogger.shared.log("warn.bfd.secure_input", msg: "hotkeys blocked by Secure Input",
                                       data: ["frontPid": Int(pid ?? -1), "frontApp": app, "secs": seconds])
             }
-            Self.notify(app: app)
         }
     }
 
@@ -107,14 +106,5 @@ final class SecureInputMonitor {
     static func appName(_ pid: Int32?) -> String {
         guard let pid = pid, let app = NSRunningApplication(processIdentifier: pid) else { return "unknown" }
         return app.localizedName ?? app.bundleIdentifier ?? "unknown"
-    }
-
-    private static func notify(app: String) {
-        let safeApp = app.replacingOccurrences(of: "\\", with: "").replacingOccurrences(of: "\"", with: "")
-        let script = "display notification \"An app has Secure Input on (frontmost: \(safeApp)), so hotkeys can't be seen. Look for an open password or sudo prompt.\" with title \"theGrid hotkeys blocked\""
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        process.arguments = ["-e", script]
-        try? process.run()
     }
 }

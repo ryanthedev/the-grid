@@ -24,6 +24,15 @@ class BFDKeyHandler {
     // Secure Input blinds the tap without disabling it; polled separately
     private let secureInputMonitor = SecureInputMonitor()
 
+    // Deaf-tap watchdog: keyDowns this tap received vs the system's count.
+    // The policy outlives stop()/start() so a recreate is remembered.
+    private var keyDownsSeen = 0
+    private var watchdogTimer: Timer?
+    private var watchdogPolicy = TapWatchdogPolicy()
+    private var lastSystemKeys: UInt32 = 0
+    private var lastTapKeys = 0
+    private static let watchdogInterval: TimeInterval = 5
+
     // Callbacks
     var onHotkeyTriggered: ((String, BFDHotkeyDef) -> Void)?
 
@@ -133,6 +142,7 @@ class BFDKeyHandler {
             // Fire immediately for first check
             self.healthCheckTimer?.fire()
             self.secureInputMonitor.start()
+            self.startWatchdog()
         }
 
         return true
@@ -182,6 +192,8 @@ class BFDKeyHandler {
         healthCheckTimer?.invalidate()
         healthCheckTimer = nil
         secureInputMonitor.stop()
+        watchdogTimer?.invalidate()
+        watchdogTimer = nil
 
         guard let tap = eventTap else { return }
 
@@ -197,6 +209,52 @@ class BFDKeyHandler {
         isEnabled = false
 
         JSONLogger.shared.log("bfd.stop", data: [:])
+    }
+
+    // MARK: - Deaf-tap watchdog
+
+    /// Main thread only (called from start()'s main-queue block).
+    private func startWatchdog() {
+        guard watchdogTimer == nil else { return }
+        lastSystemKeys = CGEventSource.counterForEventType(.hidSystemState, eventType: .keyDown)
+        lastTapKeys = keyDownsSeen
+        watchdogTimer = Timer.scheduledTimer(withTimeInterval: Self.watchdogInterval, repeats: true) { [weak self] _ in
+            self?.checkDeafness()
+        }
+    }
+
+    private func checkDeafness() {
+        let systemNow = CGEventSource.counterForEventType(.hidSystemState, eventType: .keyDown)
+        let systemKeys = Int(systemNow &- lastSystemKeys)
+        let tapKeys = keyDownsSeen &- lastTapKeys
+        lastSystemKeys = systemNow
+        lastTapKeys = keyDownsSeen
+
+        let tapEnabled = eventTap.map { CGEvent.tapIsEnabled(tap: $0) } ?? false
+        let agentTyping = Date().timeIntervalSince(InputSynthesizer.lastSendAt) < Self.watchdogInterval + 1
+        let inconclusive = !tapEnabled || SecureInputMonitor.isEnabled || agentTyping
+
+        let verdict = watchdogPolicy.evaluate(systemKeys: systemKeys, tapKeys: tapKeys,
+                                              inconclusive: inconclusive,
+                                              restartAllowed: TapRestartMarker.restartAllowed())
+        guard verdict != .ok && verdict != .suspect else { return }
+
+        var data = TapDiagnostics.snapshot()
+        data["systemKeys"] = systemKeys
+        data["action"] = "\(verdict)"
+        JSONLogger.shared.log("warn.bfd.deaf", msg: "system saw keys the hotkey tap did not", data: data)
+
+        switch verdict {
+        case .recreateTap, .stillDeaf:
+            stop()
+            _ = start()
+        case .restartServer:
+            TapRestartMarker.record()
+            // The graceful SIGTERM path; launchd's KeepAlive starts a fresh process
+            kill(getpid(), SIGTERM)
+        case .ok, .suspect:
+            break
+        }
     }
 
     // MARK: - Private
@@ -242,6 +300,7 @@ class BFDKeyHandler {
         guard type == .keyDown else {
             return Unmanaged.passUnretained(event)
         }
+        keyDownsSeen &+= 1
 
         // Check for key repeat
         let isRepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0

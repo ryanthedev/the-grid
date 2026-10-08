@@ -226,7 +226,7 @@ final class EventAllowlistTests: XCTestCase {
         "warn.action.end.consumed", "warn.action.end.underflow", "warn.ax.permission",
         "warn.bdr.bad_bounds", "warn.bdr.exists", "warn.bdr.missing",
         "warn.bdr.no_ctx", "warn.bdr.setup",
-        "warn.bfd.init", "warn.bfd.secure_input", "warn.broadcast", "warn.client_response",
+        "warn.bfd.deaf", "warn.bfd.init", "warn.bfd.secure_input", "warn.broadcast", "warn.client_response",
         "warn.config", "warn.dsp", "warn.dsp.cgbounds_empty", "warn.fence.empty",
         "warn.focus", "warn.mouse", "warn.mouse.tap_disabled",
         "warn.move", "warn.mss", "warn.placement",
