@@ -125,6 +125,15 @@ class SocketServer {
                 continue
             }
 
+            // Whoever connects can drive the desktop with this process's Accessibility grant, and
+            // nothing authenticates them. At least make every driver attributable.
+            var peerPid: pid_t = 0
+            var peerLen = socklen_t(MemoryLayout<pid_t>.size)
+            if getsockopt(clientSocket, SOL_LOCAL, LOCAL_PEERPID, &peerPid, &peerLen) == 0 {
+                let pid = peerPid
+                Task { JSONLogger.shared.log("sock.peer", data: ["pid": Int(pid)]) }
+            }
+
             // #1: SO_NOSIGPIPE on the accepted socket. macOS has no MSG_NOSIGNAL,
             // so without this a write to a client that hung up raises SIGPIPE.
             // With it, send() returns -1/EPIPE which the sock.err branch handles

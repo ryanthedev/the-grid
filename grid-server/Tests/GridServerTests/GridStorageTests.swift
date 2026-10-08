@@ -151,4 +151,11 @@ final class GridStorageTests: XCTestCase {
         XCTAssertNotNil(saved, "Storage should contain the saved data")
         XCTAssertEqual(saved?.spaces["space-10"]?.currentLayoutId, "mono", "save should preserve layout ID")
     }
+
+    func testProductionGridStateNeverTargetsTheRealStateFileUnderXCTest() {
+        let underTest = GridState.resolveStatePath(stateHome: "/home/u/.local/state", xctestLoaded: true, temporaryDirectory: "/tmp/x")
+        XCTAssertTrue(underTest.hasPrefix("/tmp/x/thegrid-tests/"))
+        let live = GridState.resolveStatePath(stateHome: "/home/u/.local/state", xctestLoaded: false, temporaryDirectory: "/tmp/x")
+        XCTAssertEqual(live, "/home/u/.local/state/thegrid/state.json")
+    }
 }

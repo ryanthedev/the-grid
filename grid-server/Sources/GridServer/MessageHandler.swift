@@ -27,6 +27,10 @@ class MessageHandler {
     init(logger: Logger? = nil) {
         registerBuiltInHandlers()
         registerInputHandlers()
+        registerUIHandlers()
+        registerMenuHandlers()
+        registerSpaceHandlers()
+        registerClipboardHandlers()
     }
 
     /// Register a handler for a specific method
@@ -312,8 +316,12 @@ class MessageHandler {
                     return
                 }
 
-                // appName/title branch: filter by name and/or title substring
-                for window in state.windows.values {
+                // appName/title branch: filter by name and/or title substring.
+                // Every match is returned: with several Chrome profiles open, the
+                // first one is a coin toss and the caller must pick by title.
+                var matches: [[String: Any]] = []
+                // Sorted so "first match" is at least stable between calls.
+                for window in state.windows.values.sorted(by: { $0.id < $1.id }) {
                     if let appName = appNameFilter, window.appName != appName { continue }
                     if let title = titleFilter, !(window.title?.contains(title) ?? false) { continue }
                     if window.isHidden { continue }
@@ -321,15 +329,27 @@ class MessageHandler {
                     // Skip phantoms (Chrome helper AX elements report nil role)
                     if window.role != "AXWindow" { continue }
 
-                    completion(Response(id: request.id, result: AnyCodable([
-                        "found": true,
+                    matches.append([
                         "windowId": String(window.id),
-                        "pid": window.pid
-                    ])))
-                    return
+                        "pid": Int(window.pid),
+                        "appName": window.appName ?? "",
+                        "title": window.title ?? "",
+                        "frame": ["x": window.frame.minX, "y": window.frame.minY,
+                                  "width": window.frame.width, "height": window.frame.height],
+                    ])
                 }
 
-                completion(Response(id: request.id, result: AnyCodable(["found": false])))
+                guard let first = matches.first else {
+                    completion(Response(id: request.id, result: AnyCodable(["found": false])))
+                    return
+                }
+                completion(Response(id: request.id, result: AnyCodable([
+                    "found": true,
+                    "windowId": first["windowId"] ?? "",
+                    "pid": first["pid"] ?? 0,
+                    "count": matches.count,
+                    "matches": matches,
+                ])))
             }
         }
 
@@ -707,7 +727,31 @@ class MessageHandler {
                            let closeButton = closeButtonRef {
                             let result = AXUIElementPerformAction(closeButton as! AXUIElement, kAXPressAction as CFString)
                             if result == .success {
-                                completion(Response(id: request.id, result: AnyCodable(["success": true, "windowId": windowId])))
+                                // Pressing the button is not the same as the window closing: a save sheet can
+                                // hold it open, and an app that caches its closed windows off-screen (TextEdit)
+                                // never posts a destroyed notification, which left a ghost window in state and
+                                // in its grid cell. Watch the app's own window list for the verdict.
+                                var gone = false
+                                for _ in 0..<15 {
+                                    try? await Task.sleep(nanoseconds: 100_000_000)
+                                    // Closing the last window makes some apps quit (Calculator); then the
+                                    // window list cannot be read at all, which is also "gone".
+                                    if kill(context.pid, 0) != 0 { gone = true; break }
+                                    var listRef: CFTypeRef?
+                                    guard AXUIElementCopyAttributeValue(makeAppElement(pid: context.pid), kAXWindowsAttribute as CFString, &listRef) == .success,
+                                          let listed = listRef as? [AXUIElement] else { continue }
+                                    let stillListed = listed.contains { element in
+                                        var id: UInt32 = 0
+                                        return _AXUIElementGetWindow(element, &id) == .success && id == windowID
+                                    }
+                                    if !stillListed { gone = true; break }
+                                }
+                                if gone {
+                                    await EventRouter.shared.route(.windowDestroyed(windowID: windowID), from: .manual(reason: "window.close"))
+                                    completion(Response(id: request.id, result: AnyCodable(["success": true, "windowId": windowId])))
+                                } else {
+                                    completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Close button pressed but window \(windowID) is still open (a save dialog may be waiting)")))
+                                }
                             } else {
                                 completion(Response(id: request.id, error: ErrorInfo(code: -32000, message: "Failed to press close button")))
                             }

@@ -1631,6 +1631,7 @@ var windows: [String: WindowState] = [:]
                 let pid = state.windows[windowKey]?.pid
                 if state.metadata.focusedWindowID == windowID {
                     state.metadata.focusedWindowID = nil
+                    recoverFocusSoon()
                 }
                 state.windows.removeValue(forKey: windowKey)
                 // FIX 2 / DW-D4: tombstone the poll-pruned wid so a stale
@@ -1910,6 +1911,26 @@ var windows: [String: WindowState] = [:]
         ])
     }
 
+    /// When the focused window goes away, macOS hands focus to something else a
+    /// moment later, but not always with a notification this server sees (an app
+    /// that quits as its last window closes). Without this, focusedWindowID stayed
+    /// empty until the user next clicked a window. Ask the OS once it has settled.
+    private func recoverFocusSoon() {
+        Task {
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            await self.recoverFocusIfEmpty()
+        }
+    }
+
+    private func recoverFocusIfEmpty() async {
+        guard state.metadata.focusedWindowID == nil else { return }
+        // AX against our own pid runs in-place and trips AppKit's main-thread assertion.
+        guard let front = NSWorkspace.shared.frontmostApplication,
+              front.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return }
+        await initializeFocusState()
+        state.metadata.update()
+    }
+
     private func handleWindowDestroyed(_ windowID: UInt32) async {
         // Get window info before removing
         let window = state.windows[String(windowID)]
@@ -1921,6 +1942,7 @@ var windows: [String: WindowState] = [:]
             state.metadata.activeDisplayUUID = nil
             // Try to recover activeDisplayUUID from current active space
             updateActiveDisplayFromSpaces()
+            recoverFocusSoon()
         }
 
         // Remove from state
@@ -2455,6 +2477,7 @@ return
            let focusedWindow = state.windows[String(focusedID)],
            focusedWindow.pid == pid {
             state.metadata.focusedWindowID = nil
+            recoverFocusSoon()
         }
 
         // Remove application state

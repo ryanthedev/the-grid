@@ -57,6 +57,8 @@ typealias SLSConnectionGetPID_t = @convention(c) (Int32, UnsafeMutablePointer<pi
 typealias SLSSpaceSetCompatID_t = @convention(c) (Int32, UInt64, Int32) -> CGError
 typealias SLSSetWindowListWorkspace_t = @convention(c) (Int32, UnsafePointer<UInt32>, Int32, Int32) -> CGError
 typealias SLSMoveWindowsToManagedSpace_t = @convention(c) (Int32, CFArray, UInt64) -> Void
+typealias SLSManagedDisplaySetCurrentSpace_t = @convention(c) (Int32, CFString, UInt64) -> Void
+typealias SLSShowHideSpaces_t = @convention(c) (Int32, CFArray) -> Void
 
 // Region creation (from CoreGraphics private API)
 typealias CGSNewRegionWithRect_t = @convention(c) (UnsafePointer<CGRect>, UnsafeMutablePointer<CFTypeRef?>) -> CGError
@@ -129,6 +131,9 @@ private let _SLSConnectionGetPID: SLSConnectionGetPID_t? = loadSymbol("SLSConnec
 private let _SLSSpaceSetCompatID: SLSSpaceSetCompatID_t? = loadSymbol("SLSSpaceSetCompatID")
 private let _SLSSetWindowListWorkspace: SLSSetWindowListWorkspace_t? = loadSymbol("SLSSetWindowListWorkspace")
 private let _SLSMoveWindowsToManagedSpace: SLSMoveWindowsToManagedSpace_t? = loadSymbol("SLSMoveWindowsToManagedSpace")
+private let _SLSManagedDisplaySetCurrentSpace: SLSManagedDisplaySetCurrentSpace_t? = loadSymbol("SLSManagedDisplaySetCurrentSpace")
+private let _SLSShowSpaces: SLSShowHideSpaces_t? = loadSymbol("SLSShowSpaces")
+private let _SLSHideSpaces: SLSShowHideSpaces_t? = loadSymbol("SLSHideSpaces")
 
 // Region creation API (from CoreGraphics)
 private let _CGSNewRegionWithRect: CGSNewRegionWithRect_t? = loadCGSymbol("CGSNewRegionWithRect")
@@ -254,6 +259,22 @@ func SLSSetWindowListWorkspace(_ cid: Int32, _ windowList: UnsafePointer<UInt32>
 
 func SLSMoveWindowsToManagedSpace(_ cid: Int32, _ windowList: CFArray, _ spaceID: UInt64) {
     _SLSMoveWindowsToManagedSpace?(cid, windowList, spaceID)
+}
+
+/// Make `spaceID` the display's current space. Returns false when the symbol is missing.
+/// Void in SkyLight: whether it took effect can only be read back (SLSManagedDisplayGetCurrentSpace).
+func SLSManagedDisplaySetCurrentSpace(_ cid: Int32, _ displayRef: CFString, _ spaceID: UInt64) -> Bool {
+    guard let fn = _SLSManagedDisplaySetCurrentSpace else { return false }
+    fn(cid, displayRef, spaceID)
+    return true
+}
+
+func SLSShowSpaces(_ cid: Int32, _ spaces: CFArray) {
+    _SLSShowSpaces?(cid, spaces)
+}
+
+func SLSHideSpaces(_ cid: Int32, _ spaces: CFArray) {
+    _SLSHideSpaces?(cid, spaces)
 }
 
 // MARK: - Region Creation API Wrapper

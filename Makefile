@@ -1,4 +1,4 @@
-.PHONY: run run-clean install-dev help build server cli viewer test clean server-test server-clean run-server install dist dev reset-accessibility setup-signing server-universal cli-universal viewer-universal dist-universal notify notify-dev notify-universal notify-app-bundle notify-test notify-clean generate-version generate-skill generate-cli
+.PHONY: integration-test run run-clean install-dev help build server cli viewer test clean server-test server-clean run-server install dist dev reset-accessibility setup-signing server-universal cli-universal viewer-universal dist-universal notify notify-dev notify-universal notify-app-bundle notify-test notify-clean generate-version generate-skill generate-cli
 
 # Version from VERSION file
 VERSION := $(shell cat VERSION)
@@ -83,6 +83,12 @@ cli: generate-cli
 # Combined targets
 test: server-test notify-test
 	@echo "✓ All tests passed"
+
+# Live end-to-end tests against the RUNNING server, the real MCP binary and real
+# apps. Takes over the mouse and keyboard for about a minute, opens Calculator
+# and TextEdit, then quits them and restores the saved grid state and focus.
+integration-test:
+	@./scripts/integration-test.py
 
 clean: server-clean notify-clean
 	@echo "✓ Cleaned all components"
@@ -377,6 +383,10 @@ install-dev: cli viewer
 	@install -m 755 grid-server/.build/debug/grid-viewer ~/.local/bin/grid-viewer
 	@echo "✓ Installed dev CLI to ~/.local/bin/thegrid"
 	@echo "✓ Installed grid-viewer to ~/.local/bin/grid-viewer"
+	@# Keep an installed skill in step with the tools this CLI now serves; an agent
+	@# reading a stale skill never learns about new tools. Skill only: the MCP
+	@# registration is left alone, and nothing is installed for a dev who never ran it.
+	@if [ -f ~/.claude/skills/thegrid/SKILL.md ]; then ~/.local/bin/thegrid mcp install --skill-only >/dev/null && echo "✓ Refreshed ~/.claude/skills/thegrid"; fi
 
 # Tail server logs (real-time streaming)
 tail-server:
