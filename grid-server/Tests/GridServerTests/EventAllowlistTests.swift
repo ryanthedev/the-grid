@@ -142,7 +142,7 @@ final class EventAllowlistTests: XCTestCase {
         "validate.adopt.skip",
         "sweep.unreject.skip",
         "reconcile.unreject.skip",
-        "focus.seq.reject", "focus.skip_empty",
+        "focus.seq.reject", "focus.steal", "focus.steal.result", "focus.skip_empty",
         "grid.cfg.borders.bridge", "grid.cfg.merge", "grid.cfg.ready",
         "grid.cfg.reload.ok", "grid.cfg.reload.start",
         "grid.cfg.resolve", "grid.cfg.skip", "grid.cfg.warn",

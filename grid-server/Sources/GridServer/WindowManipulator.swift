@@ -665,12 +665,52 @@ return true
     func focusWindow(pid: pid_t, windowID: UInt32) -> Bool {
         JSONLogger.shared.log("ax.focus", data: ["pid": pid, "wid": windowID])
 
+        let seq = FocusRequestSequence.next()
         let result = focusWindowWithRaise(pid: pid, windowID: windowID)
 
         if !result {
             JSONLogger.shared.log("err.focus", data: ["wid": windowID])
+        } else {
+            scheduleStealCheck(pid: pid, windowID: windowID, seq: seq, retries: 0)
         }
         return result
+    }
+
+    private static let stealCheckQueue = DispatchQueue(label: "com.thegrid.focus.steal", qos: .userInteractive)
+
+    /// Some apps (Island) re-key their own window after activation, undoing
+    /// the raise. Look again shortly after; raise once more if it was undone.
+    private func scheduleStealCheck(pid: pid_t, windowID: UInt32, seq: UInt64, retries: Int) {
+        Self.stealCheckQueue.asyncAfter(deadline: .now() + FocusStealPolicy.verifyDelay) { [weak self] in
+            guard let self = self else { return }
+            let got = self.appFocusedWindowID(pid: pid)
+            let frontPid = NSWorkspace.shared.frontmostApplication?.processIdentifier
+            let isLatest = FocusRequestSequence.isLatest(seq)
+
+            if retries > 0 {
+                JSONLogger.shared.log("focus.steal.result", data: [
+                    "wid": windowID, "got": Int(got ?? 0), "fixed": got == windowID
+                ])
+                return
+            }
+            guard FocusStealPolicy.shouldRetry(want: windowID, got: got, appIsFrontmost: frontPid == pid,
+                                               isLatestRequest: isLatest, retriesSoFar: retries) else { return }
+
+            JSONLogger.shared.log("focus.steal", data: ["wid": windowID, "got": Int(got ?? 0), "pid": pid])
+            if let element = self.getAXElement(pid: pid, windowID: windowID) {
+                AXUIElementSetAttributeValue(element, kAXMainAttribute as CFString, kCFBooleanTrue)
+            }
+            _ = self.focusWindowWithRaise(pid: pid, windowID: windowID)
+            self.scheduleStealCheck(pid: pid, windowID: windowID, seq: seq, retries: retries + 1)
+        }
+    }
+
+    /// The window the app itself reports as focused, from its application element.
+    private func appFocusedWindowID(pid: pid_t) -> UInt32? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(makeAppElement(pid: pid), kAXFocusedWindowAttribute as CFString, &value) == .success,
+              let value = value, CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+        return getWindowID(from: value as! AXUIElement)
     }
 
     /// Focus a window using context - updates state immediately on success
