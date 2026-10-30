@@ -185,7 +185,10 @@ protocol StateEventHandler: AnyObject {
 
 /// Central router for all state events
 ///
-/// **Thread Safety**: All event routing happens on a serial queue.
+/// **Thread Safety**: The handler list is actor-isolated, but routing is NOT
+/// serial: `route` suspends while awaiting each handler, and the actor lets the
+/// next `route` start meanwhile. A non-actor handler (GridReconciler) therefore
+/// sees events in parallel on the global pool and must guard its own state.
 /// Handlers are stored weakly to avoid retain cycles.
 actor EventRouter {
     static let shared = EventRouter()

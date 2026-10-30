@@ -64,6 +64,20 @@ class GridReconciler: StateEventHandler {
     // and corrects drift from late/stale events.
     private var sweepTimer: DispatchSourceTimer?
     private let sweepInterval: TimeInterval = 0.3
+    // When the running sweep Task started; nil when none runs. A tick that
+    // finds a sweep running is skipped, so a sweep stuck on a slow app's AX
+    // call can't overlap the next one and write the same bookkeeping from two
+    // threads. A claim older than sweepStaleAfter is ignored, so a sweep that
+    // never finishes can't switch sweeping off. Guarded by refLock.
+    private var sweepStartedAt: CFAbsoluteTime?
+    private let sweepStaleAfter: CFAbsoluteTime = 10
+
+    // Guards the Task references (wakeValidationTask, membershipSweepTask,
+    // geometryReapplyTask), sweepStartedAt and the fence. This class is not an
+    // actor and handle() runs on the global pool, so these are written from
+    // parallel threads; an unguarded double release of a Task corrupts the
+    // heap. Never held across an await.
+    private let refLock = NSLock()
 
     // Guards user commands during sleep/wake recovery.
     // Non-nil only while handleSystemWake is in progress.
@@ -93,9 +107,9 @@ class GridReconciler: StateEventHandler {
     // otherwise see the just-moved window as "displaced" and migrate its
     // GridState assignment back — bouncing the move. A window within this
     // grace is exempt from displaced-sweep correction until the cache catches
-    // up. Lives on the
-    // single-threaded reconciler event path (same threading class as
-    // notStandardGrace) — no new shared concurrency state.
+    // up. Written from commands and read by the membership sweep, which run
+    // in parallel (handle() is not serialized). Not yet guarded; see
+    // docs/findings-log-audit-2026-10.md.
     private var crossMoveGrace: [UInt32: CFAbsoluteTime] = [:]
 
     // Grace span for crossMoveGrace. 5s covers the ~3s cache poll lag with
@@ -402,7 +416,7 @@ class GridReconciler: StateEventHandler {
         }
         let now = CFAbsoluteTimeGetCurrent()
         for windowID in windowIDs.sorted() {
-            let depth = fence.acquire(windowID, now: now)
+            let depth = refLock.withLock { fence.acquire(windowID, now: now) }
             jlog("fence.acquire", data: [
                 "wid": Int(windowID),
                 "depth": depth,
@@ -416,7 +430,7 @@ class GridReconciler: StateEventHandler {
     // released (depth 0). Releasing an unheld window is a logged no-op.
     func releaseFence(windowIDs: Set<UInt32>) {
         for windowID in windowIDs.sorted() {
-            let depth = fence.release(windowID)
+            let depth = refLock.withLock { fence.release(windowID) }
             jlog("fence.release", data: [
                 "wid": Int(windowID),
                 "depth": depth,
@@ -427,7 +441,8 @@ class GridReconciler: StateEventHandler {
     // FIX 1 / DW-D2: record a deliberate cross-space move so the displaced
     // sweep exempts this window until the SLS space query catches up. Called
     // synchronously from GridWindowMove.moveWindowCrossDisplay after the move
-    // succeeds (mirrors acquireFence — single-threaded reconciler path).
+    // succeeds (mirrors acquireFence). Not single-threaded: crossMoveGrace is
+    // also read by the membership sweep in parallel and is not yet guarded.
     func noteCrossSpaceMove(_ windowID: UInt32) {
         crossMoveGrace[windowID] = CFAbsoluteTimeGetCurrent()
     }
@@ -479,13 +494,14 @@ class GridReconciler: StateEventHandler {
     // If wake validation is in progress, suspends the caller until it finishes.
     // Fast path (common case): wakeValidationTask is nil, returns immediately.
     func awaitWakeCompletion() async {
-        await wakeValidationTask?.value
+        let task = refLock.withLock { wakeValidationTask }
+        await task?.value
     }
 
     // Check if a window is currently fenced (not expired).
     // Lazily cleans up expired entries.
     private func isWindowFenced(_ windowID: UInt32) -> Bool {
-        fence.isFenced(windowID)
+        refLock.withLock { fence.isFenced(windowID) }
     }
 
     // isCellMateOfFencedWindow: returns true if windowID shares a cell (in any
@@ -497,7 +513,7 @@ class GridReconciler: StateEventHandler {
         guard let gridState else { return false }
 
         // Collect active (non-expired) fenced window IDs.
-        let activeFencedIDs = fence.activeWindows()
+        let activeFencedIDs = refLock.withLock { fence.activeWindows() }
 
         // Fast path: no active fences (normal operation outside of moves).
         if activeFencedIDs.isEmpty { return false }
@@ -555,7 +571,22 @@ class GridReconciler: StateEventHandler {
         )
         source.setEventHandler { [weak self] in
             guard let self else { return }
+            let now = CFAbsoluteTimeGetCurrent()
+            let claimed = self.refLock.withLock {
+                if let started = self.sweepStartedAt, now - started <= self.sweepStaleAfter {
+                    return false
+                }
+                self.sweepStartedAt = now
+                return true
+            }
+            guard claimed else { return }
             Task {
+                defer {
+                    // A stale sweep finishing late must not clear a newer claim.
+                    self.refLock.withLock {
+                        if self.sweepStartedAt == now { self.sweepStartedAt = nil }
+                    }
+                }
                 await self.focusSweep()
                 await self.rejectedWindowSweep()
                 await self.notStandardGraceSweep()
@@ -1490,8 +1521,7 @@ class GridReconciler: StateEventHandler {
     private let membershipSweepDelay: Duration = .milliseconds(3500)
 
     private func scheduleMembershipSweep(dragDeferrals: Int = 0) {
-        membershipSweepTask?.cancel()
-        membershipSweepTask = Task { [weak self] in
+        let task = Task { [weak self] in
             guard let self else { return }
             try? await Task.sleep(for: self.membershipSweepDelay)
             guard !Task.isCancelled, !self.suppressReconciliation else { return }
@@ -1509,6 +1539,12 @@ class GridReconciler: StateEventHandler {
             guard !Task.isCancelled, !self.suppressReconciliation else { return }
             await self.sweepDisplacedWindows()
         }
+        let previous = refLock.withLock {
+            let old = membershipSweepTask
+            membershipSweepTask = task
+            return old
+        }
+        previous?.cancel()
     }
 
     // Debounce window for geometry-only display reconfiguration (#25). Multiple
@@ -1527,8 +1563,7 @@ class GridReconciler: StateEventHandler {
             return
         }
 
-        geometryReapplyTask?.cancel()
-        geometryReapplyTask = Task { [weak self] in
+        let task = Task { [weak self] in
             guard let self else { return }
             try? await Task.sleep(for: .milliseconds(300))
             if Task.isCancelled { return }
@@ -1538,6 +1573,12 @@ class GridReconciler: StateEventHandler {
                      data: ["display": displayUUID, "errorCount": errors.count])
             }
         }
+        let previous = refLock.withLock {
+            let old = geometryReapplyTask
+            geometryReapplyTask = task
+            return old
+        }
+        previous?.cancel()
     }
 
     private func handleSystemWake() async {
@@ -1599,16 +1640,18 @@ class GridReconciler: StateEventHandler {
             await self.syncBordersForCurrentSpace()
 
             jlog("reconcile.wake.done")
-
-            // Clear the task reference so subsequent commands pass through immediately
-            self.wakeValidationTask = nil
         }
-        wakeValidationTask = task
+        refLock.withLock { wakeValidationTask = task }
 
         // Await the task so handleSystemWake() itself doesn't return until
         // everything is done. This preserves the existing guarantee that wake
         // handling is synchronous from the event handler's perspective.
         await task.value
+
+        // Clear the task reference so subsequent commands pass through
+        // immediately. Done here rather than inside the task, which could
+        // finish before the assignment above and race it.
+        refLock.withLock { wakeValidationTask = nil }
     }
 
     private func handleWindowMoved(_ windowID: UInt32, _ frame: CGRect) async {
@@ -2284,6 +2327,11 @@ class GridReconciler: StateEventHandler {
 
     // _test_handle: drive the public StateEventHandler entry point so a test can
     // exercise the suppressed-event queueing branch through real wiring.
+    // _test_isWindowFenced: read the fence from a test.
+    func _test_isWindowFenced(_ windowID: UInt32) -> Bool {
+        isWindowFenced(windowID)
+    }
+
     func _test_handle(_ event: StateEvent) async {
         try? await handle(event, context: EventContext(source: .manual(reason: "test")))
     }
