@@ -988,6 +988,7 @@ class GridReconciler: StateEventHandler {
         axAbsentRetryAt.removeValue(forKey: windowID)
         lastAXAbsentSkipped.remove(windowID)
         notStandardExpired.remove(windowID)
+        FloatOverrides.remove(windowID)
 
         // Remove window from GridState (all spaces)
         await gridState?.removeWindowFromAllSpaces(windowID)

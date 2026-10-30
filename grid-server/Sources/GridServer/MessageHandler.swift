@@ -1384,6 +1384,11 @@ completion(Response(id: request.id, result: AnyCodable(["success": true])))
             dispatchAndRespond(request, commandString: cmd, completion: completion)
         }
 
+        // grid.window.float -- toggle the focused window between tiled and floating
+        register(method: "grid.window.float") { request, completion in
+            dispatchAndRespond(request, commandString: "@window float", completion: completion)
+        }
+
         // grid.resize.adjust -- { delta: double, cell?: bool, direction?: string }
         register(method: "grid.resize.adjust") { request, completion in
             var delta: Double = 0
