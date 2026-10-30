@@ -164,14 +164,12 @@ Configs are merged in this order (lowest to highest priority):
 ### Debugging Config Resolution
 
 ```bash
-# Show config sources and XDG paths
-thegrid config sources
-
-# Show merged config as YAML
+# Show the config the running server loaded (JSON summary)
 thegrid config show
 
-# Validate config
-thegrid config validate
+# Which files were found and merged, and any validation error
+grep -E '"ev":"(grid\.cfg\.(resolve|merge|reload\.ok)|err\.grid\.cfg[a-z.]*)"' \
+  ~/.local/state/thegrid/thegrid-server.json | tail -5
 ```
 
 ## BFD Hotkey Configuration

@@ -412,15 +412,16 @@ The configuration is validated on load. Invalid configs are rejected.
 ## Debugging Commands
 
 ```bash
-# Show XDG paths and which config files exist
-thegrid config sources
-
-# Show final merged configuration as YAML
+# Show the config the running server loaded (JSON summary)
 thegrid config show
 
-# Validate configuration without running
-thegrid config validate
+# Which files were found and merged, and any validation error
+grep -E '"ev":"(grid\.cfg\.(resolve|merge|reload\.ok)|err\.grid\.cfg[a-z.]*)"' \
+  ~/.local/state/thegrid/thegrid-server.json | tail -5
 ```
+
+A config that fails validation still loads: everything parses and applies, and the error is
+logged as `err.grid.cfg` (startup) or `err.grid.cfg.reload` (on save).
 
 ---
 

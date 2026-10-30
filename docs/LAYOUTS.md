@@ -343,10 +343,8 @@ See [RESIZE.md](RESIZE.md) for complete resize documentation including cell boun
 ### Configuration
 
 ```bash
-grid config show                 # Show current config as JSON
-grid config validate             # Validate config file
-grid config validate /path/to/config.yaml
-grid config init                 # Create default config
+thegrid config show              # Show the loaded config as JSON
+thegrid config init              # Create default config
 ```
 
 ### State Management
