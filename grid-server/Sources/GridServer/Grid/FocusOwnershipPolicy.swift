@@ -46,17 +46,26 @@ struct FocusRaiseOutcome {
     let axElementPresent: Bool
     // AXUIElementPerformAction(kAXRaiseAction) returned .success.
     let axRaiseSucceeded: Bool
+    // Read only after a failed raise: the app reports itself frontmost and the
+    // requested window as its focused window.
+    var windowConfirmedFront: Bool = false
 }
 
 // Genuine focus success requires the front-process switch AND the AX raise to
 // have landed on a real element. A missing AX element or a failed SLPS/AX call
 // means focus did not actually change — the historical "always true" return is
 // the #21 bug.
+//
+// A failed raise is overridden only by a confirmed front window. iPhone
+// Mirroring rejects AXRaise (kAXErrorAttributeUnsupported) once it is the
+// active app, so every raise after activation "failed" while its window was
+// already front. Focus cycling then skipped it as unfocusable and focused the
+// next window, dropping iPhone Mirroring behind it.
 func classifyFocusResult(_ outcome: FocusRaiseOutcome) -> Bool {
     guard outcome.psnResolved else { return false }
     guard outcome.slpsFrontSucceeded else { return false }
     guard outcome.axElementPresent else { return false }
-    guard outcome.axRaiseSucceeded else { return false }
+    guard outcome.axRaiseSucceeded || outcome.windowConfirmedFront else { return false }
     return true
 }
 

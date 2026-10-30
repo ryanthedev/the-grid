@@ -621,12 +621,19 @@ return true
         // failure, not a silent success.
         var axElementPresent = false
         var axRaiseSucceeded = false
+        var windowConfirmedFront = false
         if let element = getAXElement(pid: pid, windowID: windowID) {
             axElementPresent = true
             let raiseErr = AXUIElementPerformAction(element, kAXRaiseAction as CFString)
             axRaiseSucceeded = (raiseErr == .success)
             if !axRaiseSucceeded {
-                JSONLogger.shared.log("warn.focus", data: ["reason": "ax_raise_fail", "wid": windowID])
+                // Some apps (iPhone Mirroring) refuse AXRaise while already
+                // active. Ask the app whether the window is front anyway.
+                windowConfirmedFront = appIsFrontmost(pid: pid) && appFocusedWindowID(pid: pid) == windowID
+                JSONLogger.shared.log("warn.focus", data: [
+                    "reason": "ax_raise_fail", "wid": windowID,
+                    "err": Int(raiseErr.rawValue), "confirmed": windowConfirmedFront,
+                ])
             }
         } else {
             JSONLogger.shared.log("warn.focus", data: ["reason": "no_ax_element", "wid": windowID])
@@ -637,7 +644,8 @@ return true
             psnResolved: true,
             slpsFrontSucceeded: slpsFrontSucceeded,
             axElementPresent: axElementPresent,
-            axRaiseSucceeded: axRaiseSucceeded
+            axRaiseSucceeded: axRaiseSucceeded,
+            windowConfirmedFront: windowConfirmedFront
         ))
     }
 
@@ -711,6 +719,16 @@ return true
         guard AXUIElementCopyAttributeValue(makeAppElement(pid: pid), kAXFocusedWindowAttribute as CFString, &value) == .success,
               let value = value, CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
         return getWindowID(from: value as! AXUIElement)
+    }
+
+    /// The app's own AXFrontmost flag. Unlike NSWorkspace.frontmostApplication,
+    /// it is current immediately after a front-process switch, without waiting
+    /// for this process's runloop to deliver the activation notification.
+    private func appIsFrontmost(pid: pid_t) -> Bool {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(makeAppElement(pid: pid), kAXFrontmostAttribute as CFString, &value) == .success
+        else { return false }
+        return (value as? Bool) ?? false
     }
 
     /// Focus a window using context - updates state immediately on success

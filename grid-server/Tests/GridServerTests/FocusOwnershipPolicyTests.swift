@@ -40,6 +40,30 @@ final class FocusOwnershipPolicyTests: XCTestCase {
         XCTAssertFalse(classifyFocusResult(outcome))
     }
 
+    func test_classify_failed_raise_with_confirmed_front_window_is_true() {
+        // iPhone Mirroring: AXRaise fails once the app is active, but the
+        // app reports itself frontmost with the requested window focused.
+        let outcome = FocusRaiseOutcome(
+            psnResolved: true,
+            slpsFrontSucceeded: true,
+            axElementPresent: true,
+            axRaiseSucceeded: false,
+            windowConfirmedFront: true
+        )
+        XCTAssertTrue(classifyFocusResult(outcome))
+    }
+
+    func test_classify_failed_raise_without_confirmation_is_false() {
+        let outcome = FocusRaiseOutcome(
+            psnResolved: true,
+            slpsFrontSucceeded: true,
+            axElementPresent: true,
+            axRaiseSucceeded: false,
+            windowConfirmedFront: false
+        )
+        XCTAssertFalse(classifyFocusResult(outcome))
+    }
+
     func test_DW_3_1_classify_psn_fail_is_false() {
         let outcome = FocusRaiseOutcome(
             psnResolved: false,
