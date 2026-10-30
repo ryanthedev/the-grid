@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import CoreGraphics
 
@@ -35,6 +36,32 @@ private let terminalApps: Set<String> = [
     "Hyper", "Code", "Visual Studio Code", "Emacs",
     "GIMP", "Activity Monitor", "Steam",
 ]
+
+// MARK: - Tile Overrides
+
+/// Apps the user marked `tile: true` in appRules, by app name or bundle ID.
+/// Set on every config load; read by `classifyWindow`.
+enum TileOverrides {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var apps: Set<String> = []
+
+    static func set(_ newApps: Set<String>) {
+        lock.lock()
+        defer { lock.unlock() }
+        apps = newApps
+    }
+
+    static func matches(appName: String, pid: pid_t) -> Bool {
+        lock.lock()
+        let snapshot = apps
+        lock.unlock()
+        if snapshot.isEmpty { return false }
+        if snapshot.contains(appName) { return true }
+        // Only resolve the bundle ID when a rule exists to compare it against.
+        guard let bundleID = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier else { return false }
+        return snapshot.contains(bundleID)
+    }
+}
 
 // MARK: - Window Classification
 
@@ -91,7 +118,10 @@ func classifyWindow(window: WindowState, appName: String) -> GridWindowCategory 
             return .floating
         }
         // PIP detection: no fullscreen button AND not a known terminal app
-        if !window.hasFullscreenButton && !terminalApps.contains(appName) {
+        // AND not marked `tile: true` by the user
+        if !window.hasFullscreenButton
+            && !terminalApps.contains(appName)
+            && !TileOverrides.matches(appName: appName, pid: window.pid) {
             return .floating
         }
         return .standard

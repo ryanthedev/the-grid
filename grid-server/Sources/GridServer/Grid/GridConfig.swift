@@ -72,6 +72,7 @@ struct GridAppRuleYAML: Codable {
     var preferredCell: String?
     var layouts: [String]?
     var float: Bool?
+    var tile: Bool?
     var locked: Bool?
     var preferredStackMode: String?
 }
@@ -150,6 +151,10 @@ struct GridAppRule: Sendable {
     var float: Bool
     var locked: Bool
     var preferredStackMode: GridStackMode?
+    /// Tile this app's standard windows even though they have no fullscreen
+    /// button (iPhone Mirroring). Without it those read as picture-in-picture
+    /// and float. Never un-floats dialogs, sheets or modals.
+    var tile: Bool = false
 }
 
 // MARK: - Built-in Layouts
@@ -664,6 +669,12 @@ final class GridConfig {
             onReload?()
         } catch {
             jlog("err.grid.cfg.reload", data: ["err": "\(error)"])
+            // A validation error is thrown after everything is parsed and in
+            // effect (vana's config fails validation on every load), so the
+            // grid should still act on the new values.
+            if case GridConfigError.validationError = error {
+                onReload?()
+            }
         }
     }
 
@@ -810,7 +821,8 @@ final class GridConfig {
                     layouts: r.layouts,
                     float: r.float ?? false,
                     locked: r.locked ?? false,
-                    preferredStackMode: r.preferredStackMode.flatMap { GridStackMode(rawValue: $0) }
+                    preferredStackMode: r.preferredStackMode.flatMap { GridStackMode(rawValue: $0) },
+                    tile: r.tile ?? false
                 )
             }
         } else {
@@ -819,6 +831,10 @@ final class GridConfig {
 
         // Append built-in rules that aren't overridden by user config
         appendBuiltinAppRules()
+
+        // classifyWindow is a free function called from the reconciler and
+        // apply paths, which have no config handle; publish the tile set to it.
+        TileOverrides.set(Set(appRules.filter { $0.tile }.map { $0.app }))
     }
 
     // Built-in app rules appended after user config parsing.

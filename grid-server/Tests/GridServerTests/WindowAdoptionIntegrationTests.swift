@@ -284,4 +284,39 @@ final class WindowAdoptionIntegrationTests: XCTestCase {
         XCTAssertEqual(tiled, "100", "slow-button window tiles on grace re-eval (#41)")
         XCTAssertEqual(reconciler._test_notStandardGraceCount, 0, "grace entry cleared after success")
     }
+
+    // appRules `tile: true` added while the app is open: the config reload
+    // schedules the membership sweep, which adopts the floating window.
+    func test_config_reload_adopts_window_newly_marked_tile() async throws {
+        defer { TileOverrides.set([]) }
+        var wmState = WindowManagerState()
+        wmState.metadata.activeSpaceID = 100
+        var win = makeTileable(id: 1200, pid: 41, space: 100, app: "iPhone Mirroring")
+        win.hasFullscreenButton = false
+        wmState.windows["1200"] = win
+        wmState.displays = [makeDisplay(uuid: "display-1", space: 100)]
+        wmState.spaces["100"] = SpaceState(id: 100, uuid: "u", type: "user", displayUUID: "display-1")
+        wmState.applications["41"] = ApplicationState._test_make(pid: 41, name: "iPhone Mirroring")
+
+        let mock = MockStateProvider(state: wmState)
+        let gridState = GridState()
+        await gridState._test_setLayout(spaceID: "100", layoutID: "two-col")
+        await gridState._test_setCells(spaceID: "100", cellIDs: ["left", "right"])
+
+        let reconciler = GridReconciler()
+        reconciler._test_setup(stateProvider: mock, gridState: gridState)
+        reconciler._test_setAXWindowIDs { pid in pid == 41 ? [1200] : [] }
+
+        await reconciler._test_adoptUntrackedTileables()
+        let floating = await gridState.findSpaceContaining(windowID: 1200)
+        XCTAssertNil(floating, "no fullscreen button: floats without a rule")
+
+        TileOverrides.set(["iPhone Mirroring"])
+        reconciler.handleConfigReload()
+        try await Task.sleep(for: .milliseconds(4000))
+
+        let tiled = await gridState.findSpaceContaining(windowID: 1200)
+        XCTAssertEqual(tiled, "100", "reload adopts it without a hotkey or window move")
+        withExtendedLifetime(mock) {}
+    }
 }

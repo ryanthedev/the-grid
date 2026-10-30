@@ -1547,6 +1547,13 @@ class GridReconciler: StateEventHandler {
         previous?.cancel()
     }
 
+    // Config file saved and reloaded. Re-check untracked windows now, so a new
+    // appRules `tile: true` takes effect a few seconds after saving instead of
+    // waiting for the next hotkey or window move.
+    func handleConfigReload() {
+        scheduleMembershipSweep()
+    }
+
     // Debounce window for geometry-only display reconfiguration (#25). Multiple
     // didChangeScreenParameters notifications fire in a burst during a
     // resolution change or Dock animation; coalesce them into one reapply.

@@ -184,6 +184,14 @@ struct GridServerCommand: ParsableCommand {
                 )
                 gridReconciler.setValidator(stateValidator)
 
+                // onReload was declared but never assigned, so a saved config
+                // changed values without the grid acting on them.
+                await MainActor.run {
+                    gridConfig.onReload = { [weak gridReconciler] in
+                        gridReconciler?.handleConfigReload()
+                    }
+                }
+
                 // Start periodic 30-second validation timer
                 await stateValidator.start()
 

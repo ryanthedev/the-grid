@@ -185,6 +185,7 @@ Application-specific window behavior rules.
 | `preferredCell` | `string` | No | Cell ID to prefer for this app |
 | `layouts` | `[]string` | No | Only applies to these layout IDs |
 | `float` | `bool` | No | Never tile this app (`true` = floating) |
+| `tile` | `bool` | No | Tile this app's standard windows even without a fullscreen button (`true` = tile). Fixed-size apps like iPhone Mirroring otherwise float as picture-in-picture. Dialogs, sheets and modals still float. |
 | `preferredStackMode` | `StackMode` | No | Stack mode preference for this app |
 
 ---
@@ -506,6 +507,8 @@ appRules:
     preferredStackMode: horizontal
   - app: "Finder"
     float: true
+  - app: "iPhone Mirroring"
+    tile: true
   - app: "Safari"
     preferredCell: right
     layouts: [two-column]
