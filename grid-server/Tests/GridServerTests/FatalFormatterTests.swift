@@ -41,6 +41,7 @@ final class FatalFormatterTests: XCTestCase {
             (SIGILL,  "SIGILL"),
             (SIGBUS,  "SIGBUS"),
             (SIGFPE,  "SIGFPE"),
+            (SIGTRAP, "SIGTRAP"),
             (SIGPIPE, "SIGPIPE"),
         ]
         for (n, name) in sigs {

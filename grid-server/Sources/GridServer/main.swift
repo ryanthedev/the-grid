@@ -34,7 +34,7 @@ struct GridServerCommand: ParsableCommand {
 
     // Test-only: after installing crash reporter + logging srv.start, trigger
     // a synthetic fault so we can verify the crash instrumentation path.
-    // Accepted values: SIGSEGV, SIGABRT, SIGILL, SIGBUS, SIGFPE, SIGPIPE,
+    // Accepted values: SIGSEGV, SIGABRT, SIGILL, SIGBUS, SIGFPE, SIGTRAP, SIGPIPE,
     // NSException, exit-after-startlog.
     @Option(name: .long, help: .hidden)
     var crashTest: String? = nil
@@ -334,6 +334,7 @@ func triggerCrashTest(mode: String) {
     case "SIGILL":  raise(SIGILL)
     case "SIGBUS":  raise(SIGBUS)
     case "SIGFPE":  raise(SIGFPE)
+    case "SIGTRAP": raise(SIGTRAP)
     case "SIGPIPE": raise(SIGPIPE)
     case "NSException":
         // Raise on a background queue so the uncaught handler path is exercised

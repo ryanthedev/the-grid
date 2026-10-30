@@ -38,6 +38,7 @@ enum FatalFormatter {
         case SIGILL:  return "SIGILL"
         case SIGBUS:  return "SIGBUS"
         case SIGFPE:  return "SIGFPE"
+        case SIGTRAP: return "SIGTRAP"
         case SIGPIPE: return "SIGPIPE"
         default:      return "UNKNOWN"
         }

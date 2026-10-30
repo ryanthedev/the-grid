@@ -3,9 +3,10 @@ import Foundation
 
 /// Crash-exit instrumentation for grid-server. Installs:
 ///
-///   - Async-signal-safe handlers for SIGSEGV/SIGABRT/SIGILL/SIGBUS/SIGFPE/SIGPIPE
-///     that write one preformatted `srv.fatal` line to a pre-opened log fd and
-///     call `_exit(128+sig)`. These handlers never touch the Swift runtime,
+///   - Async-signal-safe handlers for SIGSEGV/SIGABRT/SIGILL/SIGBUS/SIGFPE/SIGTRAP
+///     that write one preformatted `srv.fatal` line and one `srv.fatal.bt` line
+///     (raw return addresses + this image's load address) to a pre-opened log
+///     fd and call `_exit(128+sig)`. These handlers never touch the Swift runtime,
 ///     allocator, Foundation, DispatchQueue, or String — they use only
 ///     `Darwin.write`, `getpid`, `clock_gettime`, `time`, integer math, and a
 ///     preallocated C buffer.
@@ -52,7 +53,27 @@ enum CrashReporter {
     /// which previously _exit'd the whole window manager. Accepted sockets now
     /// carry SO_NOSIGPIPE and the process ignores SIGPIPE, so a dead peer
     /// surfaces as EPIPE on the write path instead of killing the server.
-    static let fatalSignals: [Int32] = [SIGSEGV, SIGABRT, SIGILL, SIGBUS, SIGFPE]
+    ///
+    /// SIGTRAP is a Swift runtime trap (force-unwrapped nil, index out of
+    /// range) or a libmalloc corruption abort. Without a handler those deaths
+    /// left no `srv.fatal` line and classified as `exit: unknown`.
+    static let fatalSignals: [Int32] = [SIGSEGV, SIGABRT, SIGILL, SIGBUS, SIGFPE, SIGTRAP]
+
+    // MARK: - Backtrace capture
+
+    /// Return addresses captured by the handler. `_exit` keeps macOS from
+    /// writing a crash report (and from showing a "quit unexpectedly" dialog),
+    /// so without this a segfault left no trace at all. Symbolicate offline:
+    /// `atos -o grid-server -l <base> <frames...>` against the same commit.
+    /// Raw addresses only: symbolizing in the handler (backtrace_symbols_fd)
+    /// may allocate, and after heap corruption that can hang the window
+    /// manager instead of letting launchd restart it.
+    private static let maxFrames: Int32 = 64
+    nonisolated(unsafe) private static var frames: UnsafeMutablePointer<UnsafeMutableRawPointer?>? = nil
+    nonisolated(unsafe) private static var btBuffer: UnsafeMutablePointer<UInt8>? = nil
+    private static let btBufferCapacity: Int = 2048
+    /// Load address of this image (the grid-server executable), for atos -l.
+    nonisolated(unsafe) private static var imageBase: UInt64 = 0
 
     // MARK: - Public API
 
@@ -78,6 +99,13 @@ enum CrashReporter {
 
         // Allocate the preformatting buffer once.
         writeBuffer = UnsafeMutablePointer<UInt8>.allocate(capacity: writeBufferCapacity)
+
+        // Backtrace buffers, and one warm-up call so the handler's backtrace()
+        // never does first-use setup while the process is crashing.
+        frames = UnsafeMutablePointer<UnsafeMutableRawPointer?>.allocate(capacity: Int(maxFrames))
+        btBuffer = UnsafeMutablePointer<UInt8>.allocate(capacity: btBufferCapacity)
+        imageBase = UInt64(UInt(bitPattern: #dsohandle))
+        _ = backtrace(frames!, maxFrames)
 
         // Ignore SIGPIPE process-wide (#1): a write to a hung-up client must
         // return EPIPE, not raise a signal. SO_NOSIGPIPE on the accepted socket
@@ -159,6 +187,7 @@ enum CrashReporter {
         case SIGILL:  writeASCII(buf!, cap, &n, "SIGILL")
         case SIGBUS:  writeASCII(buf!, cap, &n, "SIGBUS")
         case SIGFPE:  writeASCII(buf!, cap, &n, "SIGFPE")
+        case SIGTRAP: writeASCII(buf!, cap, &n, "SIGTRAP")
         case SIGPIPE: writeASCII(buf!, cap, &n, "SIGPIPE")
         default:      writeASCII(buf!, cap, &n, "UNKNOWN")
         }
@@ -177,7 +206,37 @@ enum CrashReporter {
         // payload are effectively impossible; we don't loop.
         _ = Darwin.write(fd, buf!, n)
 
+        writeBacktraceLine(fd: fd)
+
         Darwin._exit(128 &+ sig)
+    }
+
+    /// `{"ev":"srv.fatal.bt","data":{"base":"0x…","frames":["0x…",…]},"ts":…}`
+    /// Async-signal-safe: backtrace() was warmed at install and walks frame
+    /// pointers; everything else is preallocated buffers and write().
+    private static func writeBacktraceLine(fd: Int32) {
+        guard let frames = CrashReporter.frames, let bt = CrashReporter.btBuffer else { return }
+        let count = backtrace(frames, CrashReporter.maxFrames)
+        let cap = CrashReporter.btBufferCapacity
+        var n = 0
+        writeASCII(bt, cap, &n, "{\"ev\":\"srv.fatal.bt\",\"data\":{\"base\":\"")
+        writeHex(bt, cap, &n, CrashReporter.imageBase)
+        writeASCII(bt, cap, &n, "\",\"frames\":[")
+        var i: Int32 = 0
+        while i < count {
+            if i > 0 { writeASCII(bt, cap, &n, ",") }
+            writeASCII(bt, cap, &n, "\"")
+            writeHex(bt, cap, &n, UInt64(UInt(bitPattern: frames[Int(i)])))
+            writeASCII(bt, cap, &n, "\"")
+            i &+= 1
+        }
+        writeASCII(bt, cap, &n, "]},\"ts\":")
+        writeUInt(bt, cap, &n, UInt64(time(nil)))
+        writeASCII(bt, cap, &n, "}\n")
+        // Only write a complete line; a truncated one would break JSONL readers.
+        if n < cap {
+            _ = Darwin.write(fd, bt, n)
+        }
     }
 
     // MARK: - Async-signal-safe helpers
@@ -201,6 +260,25 @@ enum CrashReporter {
                 buf[n] = b
                 n &+= 1
             }
+        }
+    }
+
+    /// Append `0x` and the lowercase hex digits of `value` into the buffer.
+    @inline(__always)
+    private static func writeHex(_ buf: UnsafeMutablePointer<UInt8>, _ cap: Int, _ n: inout Int, _ value: UInt64) {
+        writeASCII(buf, cap, &n, "0x")
+        var started = false
+        var shift: UInt64 = 60
+        while true {
+            let nibble = UInt8((value >> shift) & 0xf)
+            if nibble != 0 || started || shift == 0 {
+                started = true
+                if n >= cap { return }
+                buf[n] = nibble < 10 ? UInt8(ascii: "0") &+ nibble : UInt8(ascii: "a") &+ (nibble &- 10)
+                n &+= 1
+            }
+            if shift == 0 { break }
+            shift &-= 4
         }
     }
 

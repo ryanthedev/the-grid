@@ -17,7 +17,7 @@ final class Phase7PolicyTests: XCTestCase {
 
     func test_DW_7_1_real_crash_signals_still_fatal() {
         // The genuine crash signals must remain installed.
-        for sig in [SIGSEGV, SIGABRT, SIGILL, SIGBUS, SIGFPE] {
+        for sig in [SIGSEGV, SIGABRT, SIGILL, SIGBUS, SIGFPE, SIGTRAP] {
             XCTAssertTrue(CrashReporter.fatalSignals.contains(sig), "\(sig) must stay fatal")
         }
     }

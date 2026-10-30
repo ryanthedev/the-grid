@@ -100,6 +100,15 @@ final class CrashInstrumentationTests: XCTestCase {
         XCTAssertTrue(log.contains("\"sig\":\"SIGSEGV\""), "missing SIGSEGV sig in log:\n\(log)")
         XCTAssertTrue(log.contains("\"pid\":"), "missing pid in log:\n\(log)")
         XCTAssertTrue(log.contains("\"uptime\":"), "missing uptime in log:\n\(log)")
+
+        // The backtrace line is valid JSON with a base address and frames.
+        let btLine = try XCTUnwrap(log.split(separator: "\n").first { $0.contains("\"ev\":\"srv.fatal.bt\"") },
+                                   "missing srv.fatal.bt in log:\n\(log)")
+        let bt = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(btLine.utf8)) as? [String: Any])
+        let data = try XCTUnwrap(bt["data"] as? [String: Any])
+        XCTAssertTrue((data["base"] as? String)?.hasPrefix("0x") == true)
+        let frames = try XCTUnwrap(data["frames"] as? [String])
+        XCTAssertGreaterThan(frames.count, 2, "expected a real stack, got \(frames)")
     }
 
     // MARK: - DW-1.2
@@ -114,6 +123,20 @@ final class CrashInstrumentationTests: XCTestCase {
         let log = readLog(tmpHome: tmp)
         XCTAssertTrue(log.contains("\"ev\":\"srv.fatal\""), "missing srv.fatal in log:\n\(log)")
         XCTAssertTrue(log.contains("\"sig\":\"SIGABRT\""), "missing SIGABRT sig in log:\n\(log)")
+    }
+
+    // A Swift runtime trap or libmalloc abort (ska, 2026-10-14) dies by
+    // SIGTRAP. It must log srv.fatal like any other fault.
+    func test_SIGTRAP_writes_srv_fatal() throws {
+        let (tmp, status) = try runIsolated(args: [
+            "--socket-path", uniqueSocket(),
+            "--crash-test", "SIGTRAP",
+        ])
+
+        XCTAssertEqual(status, 128 + SIGTRAP, "unexpected exit status: \(status)")
+        let log = readLog(tmpHome: tmp)
+        XCTAssertTrue(log.contains("\"sig\":\"SIGTRAP\""), "missing SIGTRAP sig in log:\n\(log)")
+        XCTAssertTrue(log.contains("\"ev\":\"srv.fatal.bt\""), "missing srv.fatal.bt in log:\n\(log)")
     }
 
     // MARK: - DW-1.3
