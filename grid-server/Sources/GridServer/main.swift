@@ -12,7 +12,7 @@ struct SilentLogHandler: LogHandler {
         get { nil }
         set { }
     }
-    func log(level: Logger.Level, message: Logger.Message, metadata: Logger.Metadata?, source: String, file: String, function: String, line: UInt) {}
+    func log(event: LogEvent) {}
 }
 
 /// GridServer - Unix domain socket server for macOS Spaces and Windows API
