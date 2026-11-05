@@ -1,6 +1,19 @@
 import XCTest
 @testable import GridServer
 
+// The AX lookup stub is @Sendable, so a test's counters can't be plain
+// captured vars (an error in Swift 6 language mode). This box is shared
+// safely between the stub and the test body.
+private final class LockedValue<T>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: T
+    init(_ value: T) { stored = value }
+    var value: T {
+        get { lock.withLock { stored } }
+        set { lock.withLock { stored = newValue } }
+    }
+}
+
 // The adopt/prune loop (BUG A). Four kitty windows whose processes were alive
 // but exposed zero AX windows cycled
 //   validate.win.untracked -> reconcile.win.create -> ax.fail(not_in_list)
@@ -155,16 +168,16 @@ final class ZombieAdoptionLoopTests: XCTestCase {
     func testGhostLeavesCandidacyRatherThanBeingRequeriedForever() async {
         let (reconciler, gridState, mock) = await wire(ghostState())
         withExtendedLifetime(mock) {}
-        var queries = 0
-        reconciler._test_setAXWindowIDs { _ in queries += 1; return [] }
+        let queries = LockedValue(0)
+        reconciler._test_setAXWindowIDs { _ in queries.value += 1; return [] }
 
         await reconciler._test_adoptUntrackedTileables()
-        let afterFirst = queries
+        let afterFirst = queries.value
         await reconciler._test_adoptUntrackedTileables()
 
         let rejected = await gridState.isWindowRejected(1130)
         XCTAssertTrue(rejected, "ghost is rejected, not re-listed")
-        XCTAssertEqual(queries, afterFirst, "second pass must not re-query the ghost's app")
+        XCTAssertEqual(queries.value, afterFirst, "second pass must not re-query the ghost's app")
     }
 
     // A ghost has no natural exit from rejectedWindows: SLS still reports its
@@ -176,12 +189,12 @@ final class ZombieAdoptionLoopTests: XCTestCase {
         let (reconciler, gridState, mock) = await wire(ghostState())
         withExtendedLifetime(mock) {}
         await gridState.rejectWindow(1130)
-        var queries = 0
-        reconciler._test_setAXWindowIDs { _ in queries += 1; return [] }
+        let queries = LockedValue(0)
+        reconciler._test_setAXWindowIDs { _ in queries.value += 1; return [] }
 
         for _ in 0..<20 { await reconciler._test_rejectedWindowSweep() }
 
-        XCTAssertLessThan(queries, 6, "backoff must throttle a persistent ghost")
+        XCTAssertLessThan(queries.value, 6, "backoff must throttle a persistent ghost")
         let rejected = await gridState.isWindowRejected(1130)
         XCTAssertTrue(rejected, "and it stays rejected throughout")
     }
@@ -192,11 +205,11 @@ final class ZombieAdoptionLoopTests: XCTestCase {
         let (reconciler, gridState, mock) = await wire(ghostState())
         withExtendedLifetime(mock) {}
         await gridState.rejectWindow(1130)
-        var present = false
-        reconciler._test_setAXWindowIDs { _ in present ? [1130] : [] }
+        let present = LockedValue(false)
+        reconciler._test_setAXWindowIDs { _ in present.value ? [1130] : [] }
 
         for _ in 0..<3 { await reconciler._test_rejectedWindowSweep() }
-        present = true
+        present.value = true
         // Run past the longest backoff delay.
         for _ in 0..<Int(SweepBackoffPolicy.maxDelayTicks + 2) {
             await reconciler._test_rejectedWindowSweep()
