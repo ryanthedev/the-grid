@@ -38,6 +38,28 @@ Do not retry tool calls in a loop while the server is down.
 - `target="region"` and `target="full"` show the SCREEN, i.e. whatever is on top there. To look at one particular window, covered or not, use `target="window"`. A region that crosses a display edge is clipped to one display; the result then says `clipped` and echoes what you `requested`.
 - On a wide display a full capture is still coarse (3840×1080 → 1568×441). Zoom with `target="region"` and `x`, `y`, `width`, `height` in screen points; the region is clipped to the display it overlaps most and the returned `frame` is what was actually captured.
 
+## Yes/no questions about the screen: ask Gemini, don't look
+
+A screenshot you look at puts the image in your own context. When the tree can't answer and the question has a typed answer (yes/no, one of a few labels, a score), hand the pixels to the Gemini Decisions API through the sdd MCP server instead, if it is installed. You get back a number, never the image.
+
+```
+screencapture -x -o -l <windowId> /abs/scratch/shot.png      # that window by CGWindowID: no shadow, no sound
+dispatch(adapter="gemini", cwd="/abs/scratch", outputPath="/abs/scratch/answers.json", prompt=
+  {"maxCostUsd": 0.05,
+   "questions": {"gone":  {"type": "noul", "instructions": "Is the Save dialog gone?"},
+                 "state": {"type": "choice", "instructions": "What is the page showing?",
+                           "criteria": ["loading spinner", "error message", "loaded content"]}},
+   "items": [{"id": "shot", "input": [{"type": "image", "path": "/abs/scratch/shot.png"}]}]})
+wait(jobIds=[…])   → summary ends answers={"shot":{"gone":0.97,"state":{"choice":"loaded content","p":0.95}}}
+```
+
+- **Order of preference:** `expectText` / `ui.wait` / `ui.query` first (free and exact), then Gemini for a typed question about pixels, then `grid.screenshot` when you must see for yourself.
+- **Look yourself** to find a control's coordinates, read exact text or IDs, or answer anything open-ended. Gemini returns no positions and no prose.
+- **Batch:** ask every question about a shot in one call. Measured on one window: 5.7 s and $0.00005, so use it at checkpoints, not after every keystroke.
+- **Question types:** `noul` returns P(yes); `choice` takes a list of labels in `criteria`; `score` takes a string rubric in `criteria`.
+- **Probabilities are not calibrated.** Act on a clear answer (above 0.9 or below 0.1); take a screenshot yourself when it lands in between.
+- **Other captures:** `screencapture -x -R x,y,w,h` for a region in screen points. The calling terminal needs Screen Recording permission; if the file is missing or blank, fall back to `grid.screenshot`.
+
 ## Coordinates: screenshot pixels → screen points
 
 All `input.*` coordinates are **global screen points** (top-left origin, multi-display aware; a display above the main one has negative y). They are NOT screenshot pixels: Retina capture is 2× points and the low-quality image is downscaled again.
