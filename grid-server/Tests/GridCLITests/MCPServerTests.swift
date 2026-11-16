@@ -123,7 +123,14 @@ final class MCPServerTests: XCTestCase {
             (dir + "shot", ".png"),
             (dir + "no-such-dir-\(UUID().uuidString)/shot.png", "does not exist"),
         ]
-        for (path, expected) in cases {
+        let folder = dir + "dir-\(UUID().uuidString).png"
+        try? FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(atPath: folder) }
+        let cases2 = cases + [(folder, "is a directory")]
+        let bad = server.callTool(name: "grid.screenshot", args: ["target": "full", "output": 5])
+        XCTAssertTrue(bad.isError)
+        XCTAssertTrue((bad.content.first?["text"] as? String ?? "").contains("must be a string"))
+        for (path, expected) in cases2 {
             let result = server.callTool(name: "grid.screenshot", args: ["target": "full", "output": path])
             let text = result.content.first?["text"] as? String ?? ""
             XCTAssertTrue(result.isError, path)

@@ -58,8 +58,8 @@ wait(jobIds=[…])   → summary ends answers={"shot":{"gone":0.97,"state":{"cho
 - **Batch:** ask every question about a shot in one call. Measured on one window: 5.7 s and $0.00005, so use it at checkpoints, not after every keystroke.
 - **Question types:** `noul` returns P(yes); `choice` takes a list of labels in `criteria`; `score` takes a string rubric in `criteria`.
 - **Probabilities are not calibrated.** Act on a clear answer (above 0.9 or below 0.1); take a screenshot yourself when it lands in between.
-- **Why `output`:** the capture runs inside grid, so the calling terminal needs no Screen Recording permission, and settleMs / waitTitle / waitStable still apply. Other targets work too (`region`, `cell`, `full`). It writes full resolution by default (`.png` lossless, `.jpg` for smaller files); `quality="low"` downscales to 1568 px. The result is geometry plus `path` and `bytes`, no image.
-- **Fallback:** `screencapture -x -o -l <windowId> file.png` (or `-R x,y,w,h`) works without grid but needs Screen Recording permission on the terminal and has no waits.
+- **Why `output`:** grid's waits (settleMs / waitTitle / waitStable) apply, and the window, cell and region targets work, as does `full`. The shot is registered, so px/py clicks map to the file's pixels. It writes full resolution by default (`.png` lossless, `.jpg` for smaller files); `quality="low"` downscales to 1568 px. The result is geometry plus `path` and `bytes`, no image.
+- **Fallback:** `screencapture -x -o -l <windowId> file.png` (or `-R x,y,w,h`) works without grid but has no waits or target handling. Either way the capture needs Screen Recording permission for the host that runs the agent.
 
 ## Coordinates: screenshot pixels → screen points
 

@@ -345,7 +345,8 @@ final class MCPServer {
         let high = (args["quality"] as? String) == "high"
         // Validate the destination before any wait or capture so a bad path fails fast.
         var output: (path: String, type: String)?
-        if let raw = args["output"] as? String {
+        if let rawOutput = args["output"], !(rawOutput is NSNull) {
+            guard let raw = rawOutput as? String else { return .error("output must be a string (absolute file path)") }
             switch Self.outputDestination(raw) {
             case .success(let dest): output = dest
             case .failure(let err): return .error(err.message)
@@ -521,6 +522,9 @@ final class MCPServer {
         default: return .failure(OutputError(message: "output must end in .png, .jpg or .jpeg, got '\(raw)'"))
         }
         var isDir: ObjCBool = false
+        if FileManager.default.fileExists(atPath: raw, isDirectory: &isDir), isDir.boolValue {
+            return .failure(OutputError(message: "output is a directory: \(raw)"))
+        }
         let parent = (raw as NSString).deletingLastPathComponent
         guard FileManager.default.fileExists(atPath: parent, isDirectory: &isDir), isDir.boolValue else {
             return .failure(OutputError(message: "directory does not exist: \(parent)"))
