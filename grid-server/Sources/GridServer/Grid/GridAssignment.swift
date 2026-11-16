@@ -63,6 +63,42 @@ enum TileOverrides {
     }
 }
 
+// MARK: - Float Overrides
+
+/// Windows the user floated with `@window float`, by window ID. In memory
+/// only: a server restart tiles them again. Read by `classifyWindow`.
+enum FloatOverrides {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var windows: Set<UInt32> = []
+
+    /// Flip the window's floated state; returns true when it is now floated.
+    static func toggle(_ windowID: UInt32) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if windows.remove(windowID) != nil { return false }
+        windows.insert(windowID)
+        return true
+    }
+
+    static func contains(_ windowID: UInt32) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return windows.contains(windowID)
+    }
+
+    static func remove(_ windowID: UInt32) {
+        lock.lock()
+        defer { lock.unlock() }
+        windows.remove(windowID)
+    }
+
+    static func _test_reset() {
+        lock.lock()
+        defer { lock.unlock() }
+        windows = []
+    }
+}
+
 // MARK: - Window Classification
 
 /// Determine category from AX properties.
@@ -75,6 +111,11 @@ func classifyWindow(window: WindowState, appName: String) -> GridWindowCategory 
 
     // Non-zero level => floating (overlay windows)
     if window.level != 0 {
+        return .floating
+    }
+
+    // Floated by the user with `@window float`
+    if FloatOverrides.contains(window.id) {
         return .floating
     }
 

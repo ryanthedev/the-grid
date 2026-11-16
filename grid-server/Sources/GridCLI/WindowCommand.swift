@@ -9,8 +9,27 @@ struct WindowCommand: ParsableCommand {
             WindowFind.self,
             WindowMove.self,
             WindowSwap.self,
+            WindowFloat.self,
         ]
     )
+}
+
+// MARK: - Window Float
+
+struct WindowFloat: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "float",
+        abstract: "Toggle the focused window between tiled and floating"
+    )
+    @OptionGroup var globals: GlobalOptions
+
+    func run() throws {
+        let client = makeClient(from: globals)
+        defer { client.disconnect() }
+
+        let result = try client.call("grid.window.float", params: [:])
+        printOkOrJSON(result, json: globals.json)
+    }
 }
 
 // MARK: - Window Move

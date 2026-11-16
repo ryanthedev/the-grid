@@ -102,11 +102,39 @@ actor GridState {
 
     // Production init: uses FileGridStorage at the XDG state path.
     init() {
+        let xctestLoaded = NSClassFromString("XCTestCase") != nil
+        if xctestLoaded {
+            _ = Self.pruneStaleTestStateOnce
+        }
         storage = FileGridStorage(path: Self.resolveStatePath(
             stateHome: XDG.stateHome,
-            xctestLoaded: NSClassFromString("XCTestCase") != nil,
+            xctestLoaded: xctestLoaded,
             temporaryDirectory: NSTemporaryDirectory()
         ))
+    }
+
+    // Runs once per test process. Static lets are lazy and initialized once.
+    private static let pruneStaleTestStateOnce: Void = {
+        pruneStaleTestState(
+            directory: (NSTemporaryDirectory() as NSString).appendingPathComponent("thegrid-tests"),
+            olderThan: 3600
+        )
+    }()
+
+    /// Every production GridState() built under XCTest gets its own
+    /// state-<UUID>.json (see resolveStatePath) and nothing deleted them, so
+    /// they piled up by the hundreds across runs. Delete the ones older than
+    /// maxAge. The age floor keeps a concurrent test run (another worktree)
+    /// from losing a file it is still using.
+    static func pruneStaleTestState(directory: String, olderThan maxAge: TimeInterval, now: Date = Date()) {
+        let fm = FileManager.default
+        guard let names = try? fm.contentsOfDirectory(atPath: directory) else { return }
+        for name in names where name.hasPrefix("state-") && name.hasSuffix(".json") {
+            let path = (directory as NSString).appendingPathComponent(name)
+            guard let mtime = (try? fm.attributesOfItem(atPath: path))?[.modificationDate] as? Date,
+                  now.timeIntervalSince(mtime) > maxAge else { continue }
+            try? fm.removeItem(atPath: path)
+        }
     }
 
     /// The test suite must never write the real state file. Several tests build

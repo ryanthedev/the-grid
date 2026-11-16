@@ -149,6 +149,7 @@ final class EventAllowlistTests: XCTestCase {
         "grid.rpc.dispatch", "grid.rpc.record", "grid.rpc.record.toggle",
         "grid.rpc.registered",
         "grid.state.load", "grid.state.load.new", "grid.state.save",
+        "grid.win.float",
         "layout.apply.ax_partial", "layout.apply.done", "layout.apply.start", "layout.cell.start",
         "layout.refresh_all.done", "layout.refresh_all.start",
         "input.err", "input.ok",

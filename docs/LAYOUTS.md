@@ -327,6 +327,11 @@ grid window move right --wrap      # Wrap to opposite edge of display
 grid window move left --window-id 12345  # Move specific window
 ```
 
+To take one window out of the grid, focus it and run `thegrid window float` (or bind
+`@window float` to a hotkey). It stays where it is and the rest of the cell closes the gap.
+Run it again on the same window to tile it. Floated windows are remembered until the server
+restarts.
+
 ### Resize / Split Adjustment
 
 ```bash
@@ -505,6 +510,7 @@ Windows are categorized as:
 | Focus next window in cell | `grid focus next` |
 | Move window left/right/up/down | `grid window move <direction>` |
 | Move window to adjacent monitor | `grid window move <direction> --extend` |
+| Float / re-tile focused window | `thegrid window float` |
 | Grow focused window | `grid resize grow` |
 | Reset splits | `grid resize reset` |
 | Show current layout | `grid layout current` |

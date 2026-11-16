@@ -167,7 +167,7 @@ let mcpTools: [MCPTool] = [
         opt("all", .boolean, "Reset all cells, not just the focused one"),
         opt("cell", .boolean, "Reset cell ratios instead of window splits"),
     ]),
-    MCPTool("grid.screenshot", "Capture a screenshot and return it as an inline image Claude can view, plus a JSON block with the captured region in screen points (frame) and the image's pixel size (image) for mapping pixels to input.* coordinates: x = frame.x + px * frame.width / image.width. Targets: 'full' (one display), 'window' (specific window by ID), 'cell' (grid cell by ID — captures the focused window in that cell), 'region' (a rect in global screen points — zoom into part of a wide display).", [
+    MCPTool("grid.screenshot", "Capture a screenshot and return it as an inline image Claude can view, plus a JSON block with the captured region in screen points (frame) and the image's pixel size (image) for mapping pixels to input.* coordinates: x = frame.x + px * frame.width / image.width. Pass output (absolute .png/.jpg path) to write the capture to that file instead: no image comes back (it stays out of your context, e.g. to hand to another model), only the JSON block plus path and bytes; with output the default is full resolution, and quality=low downscales. Targets: 'full' (one display), 'window' (specific window by ID), 'cell' (grid cell by ID — captures the focused window in that cell), 'region' (a rect in global screen points — zoom into part of a wide display).", [
         opt("target", .string, "What to capture: 'full', 'window', 'cell', or 'region' (default: full)", enum: ["full", "window", "cell", "region"]),
         opt("id", .string, "Window ID for target=window, or cell ID for target=cell"),
         opt("x", .number, "Region left edge in screen points (target=region)"),
@@ -180,7 +180,8 @@ let mcpTools: [MCPTool] = [
         opt("waitTitle", .string, "target=window: wait until the window title contains this text (page loaded, document opened) before capturing; the result reports titleMatched"),
         opt("waitStable", .boolean, "Wait until two frames 150 ms apart look the same before capturing (tolerates a blinking caret); the result reports stable"),
         opt("timeoutMs", .integer, "Ceiling for waitTitle / waitStable (default: 5000)"),
-        opt("quality", .string, "Quality preset: 'low' (default, long edge <=1568px JPEG), 'high' (full resolution; PNG, or JPEG when the PNG would be too large to send)", enum: ["low", "high"]),
+        opt("quality", .string, "Quality preset: 'low' (default, long edge <=1568px JPEG), 'high' (full resolution; PNG, or JPEG when the PNG would be too large to send). With output: full resolution unless 'low'.", enum: ["low", "high"]),
+        opt("output", .string, "Absolute file path ending in .png, .jpg or .jpeg: write the capture there and return no image, only geometry plus path and bytes"),
     ], handler: .screenshot),
     MCPTool("grid.record.start", "Start a screen recording of a cell, window, display, or all screens.", [
         opt("target", .string, "What to record", enum: ["cell", "window", "screen", "all"]),

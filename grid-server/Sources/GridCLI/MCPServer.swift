@@ -343,6 +343,15 @@ final class MCPServer {
         let cursor = args["cursor"] as? Bool ?? false
         let display = (args["display"] as? NSNumber)?.intValue
         let high = (args["quality"] as? String) == "high"
+        // Validate the destination before any wait or capture so a bad path fails fast.
+        var output: (path: String, type: String)?
+        if let rawOutput = args["output"], !(rawOutput is NSNull) {
+            guard let raw = rawOutput as? String else { return .error("output must be a string (absolute file path)") }
+            switch Self.outputDestination(raw) {
+            case .success(let dest): output = dest
+            case .failure(let err): return .error(err.message)
+            }
+        }
         var waited: [String: Any] = [:]
         if let settle = (args["settleMs"] as? NSNumber)?.intValue, settle > 0 {
             Thread.sleep(forTimeInterval: Double(min(settle, 10_000)) / 1000)
@@ -442,7 +451,24 @@ final class MCPServer {
 
         var imageData = png
         var mimeType = "image/png"
-        if !high {
+        if let output {
+            // Disk has no inline size limit: full resolution unless quality=low asks for the downscaled preset.
+            let low = (args["quality"] as? String) == "low"
+            let isPNG = output.type == "public.png"
+            if low || !isPNG {
+                guard let encoded = Self.downscaled(png, maxEdge: low ? Self.lowQualityMaxEdge : 100_000, type: output.type, quality: low ? 0.6 : 0.85) else {
+                    return .error("could not encode screenshot as \(isPNG ? "PNG" : "JPEG")")
+                }
+                imageData = encoded
+            }
+            do {
+                try imageData.write(to: URL(fileURLWithPath: output.path), options: .atomic)
+            } catch {
+                return .error("could not write screenshot to \(output.path): \(error.localizedDescription)")
+            }
+            geometry["path"] = output.path
+            geometry["bytes"] = imageData.count
+        } else if !high {
             guard let jpeg = Self.downscaledJPEG(png, maxEdge: Self.lowQualityMaxEdge) else {
                 return .error("could not downscale screenshot")
             }
@@ -472,12 +498,41 @@ final class MCPServer {
                 geometry["hint"] = [geometry["hint"] as? String, note].compactMap { $0 }.joined(separator: " ")
             }
         }
-        var result = MCPToolResult.image(imageData, mimeType: mimeType)
+        // With output the image stays on disk: only the geometry block is returned.
+        var result = output == nil ? MCPToolResult.image(imageData, mimeType: mimeType) : MCPToolResult(content: [], isError: false)
         if let data = try? JSONSerialization.data(withJSONObject: geometry, options: [.sortedKeys]),
            let text = String(data: data, encoding: .utf8) {
             result = MCPToolResult(content: result.content + [["type": "text", "text": text]], isError: false)
         }
         return result
+    }
+
+    struct OutputError: Error { let message: String }
+
+    /// Check a screenshot `output` path: absolute, .png/.jpg/.jpeg, parent directory exists.
+    /// Returns the path and the image type to encode.
+    static func outputDestination(_ raw: String) -> Result<(path: String, type: String), OutputError> {
+        guard raw.hasPrefix("/") else {
+            return .failure(OutputError(message: "output must be an absolute path, got '\(raw)'"))
+        }
+        let type: String
+        switch (raw as NSString).pathExtension.lowercased() {
+        case "png": type = "public.png"
+        case "jpg", "jpeg": type = "public.jpeg"
+        default: return .failure(OutputError(message: "output must end in .png, .jpg or .jpeg, got '\(raw)'"))
+        }
+        var isDir: ObjCBool = false
+        if FileManager.default.fileExists(atPath: raw, isDirectory: &isDir), isDir.boolValue {
+            return .failure(OutputError(message: "output is a directory: \(raw)"))
+        }
+        let parent = (raw as NSString).deletingLastPathComponent
+        guard FileManager.default.fileExists(atPath: parent, isDirectory: &isDir), isDir.boolValue else {
+            return .failure(OutputError(message: "directory does not exist: \(parent)"))
+        }
+        guard FileManager.default.isWritableFile(atPath: parent) else {
+            return .failure(OutputError(message: "directory is not writable: \(parent)"))
+        }
+        return .success((raw, type))
     }
 
     /// Poll the window's title (a page load, a document opening) until it contains `text`.
@@ -606,6 +661,11 @@ final class MCPServer {
 
     /// JPEG with the long edge at most `maxEdge`. Never upscales.
     static func downscaledJPEG(_ image: Data, maxEdge: Int, quality: Double = 0.6) -> Data? {
+        downscaled(image, maxEdge: maxEdge, type: "public.jpeg", quality: quality)
+    }
+
+    /// Image of `type` (UTI) with the long edge at most `maxEdge`. Never upscales.
+    static func downscaled(_ image: Data, maxEdge: Int, type: String, quality: Double = 0.6) -> Data? {
         guard let source = CGImageSourceCreateWithData(image as CFData, nil) else { return nil }
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
@@ -613,7 +673,7 @@ final class MCPServer {
         ]
         guard let scaled = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
         let out = NSMutableData()
-        guard let dest = CGImageDestinationCreateWithData(out, "public.jpeg" as CFString, 1, nil) else { return nil }
+        guard let dest = CGImageDestinationCreateWithData(out, type as CFString, 1, nil) else { return nil }
         CGImageDestinationAddImage(dest, scaled, [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary)
         guard CGImageDestinationFinalize(dest) else { return nil }
         return out as Data

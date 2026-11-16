@@ -539,6 +539,27 @@ class GridCommandRouter {
             }
             return .ok("swapped \(dirStr)")
 
+        case "float":
+            // @window float — toggle the focused window between tiled and floating
+            let wmState = await stateManager.getState()
+            guard let windowID = wmState.metadata.focusedWindowID else {
+                return .error("no focused window")
+            }
+            let floating = FloatOverrides.toggle(windowID)
+            if floating {
+                // Leave the window where it is; close the gap it leaves behind.
+                if let spaceID = await gridState.findSpaceContaining(windowID: windowID) {
+                    await gridState.removeWindowFromAllSpaces(windowID, forgetRejection: false)
+                    try await gridApply.reapplyLayout(spaceID: spaceID, strategy: .preserve)
+                }
+            } else {
+                // A sweep may have rejected it while floated. The adoption pass
+                // that runs when this action ends tiles it again.
+                await gridState.unrejectWindow(windowID)
+            }
+            jlog("grid.win.float", data: ["wid": Int(windowID), "floating": floating])
+            return .ok(floating ? "floated window \(windowID)" : "tiled window \(windowID)")
+
         default:
             return .error("unknown window action: \(cmd.action)")
         }

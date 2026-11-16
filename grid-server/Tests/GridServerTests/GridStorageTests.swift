@@ -152,6 +152,29 @@ final class GridStorageTests: XCTestCase {
         XCTAssertEqual(saved?.spaces["space-10"]?.currentLayoutId, "mono", "save should preserve layout ID")
     }
 
+    func testPruneStaleTestStateRemovesOnlyOldStateFiles() throws {
+        let fm = FileManager.default
+        let dir = (NSTemporaryDirectory() as NSString).appendingPathComponent("prune-\(UUID().uuidString)")
+        try fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(atPath: dir) }
+        let old = (dir as NSString).appendingPathComponent("state-old.json")
+        let fresh = (dir as NSString).appendingPathComponent("state-fresh.json")
+        let other = (dir as NSString).appendingPathComponent("thegrid-server.json")
+        for path in [old, fresh, other] {
+            XCTAssertTrue(fm.createFile(atPath: path, contents: Data("{}".utf8)))
+        }
+        let twoHoursAgo = Date().addingTimeInterval(-7200)
+        try fm.setAttributes([.modificationDate: twoHoursAgo], ofItemAtPath: old)
+        try fm.setAttributes([.modificationDate: twoHoursAgo], ofItemAtPath: other)
+
+        GridState.pruneStaleTestState(directory: dir, olderThan: 3600)
+
+        XCTAssertFalse(fm.fileExists(atPath: old))
+        XCTAssertTrue(fm.fileExists(atPath: fresh))
+        // Only state-*.json files are pruned, never the redirected test log.
+        XCTAssertTrue(fm.fileExists(atPath: other))
+    }
+
     func testProductionGridStateNeverTargetsTheRealStateFileUnderXCTest() {
         let underTest = GridState.resolveStatePath(stateHome: "/home/u/.local/state", xctestLoaded: true, temporaryDirectory: "/tmp/x")
         XCTAssertTrue(underTest.hasPrefix("/tmp/x/thegrid-tests/"))

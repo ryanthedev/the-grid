@@ -114,6 +114,50 @@ final class MCPServerTests: XCTestCase {
         }
     }
 
+    func testScreenshotOutputRefusesBadPathsBeforeCapturing() {
+        let server = makeServer([])
+        let dir = NSTemporaryDirectory()
+        let cases = [
+            ("shot.png", "absolute"),
+            (dir + "shot.gif", ".png"),
+            (dir + "shot", ".png"),
+            (dir + "no-such-dir-\(UUID().uuidString)/shot.png", "does not exist"),
+        ]
+        let folder = dir + "dir-\(UUID().uuidString).png"
+        try? FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(atPath: folder) }
+        let cases2 = cases + [(folder, "is a directory")]
+        let bad = server.callTool(name: "grid.screenshot", args: ["target": "full", "output": 5])
+        XCTAssertTrue(bad.isError)
+        XCTAssertTrue((bad.content.first?["text"] as? String ?? "").contains("must be a string"))
+        for (path, expected) in cases2 {
+            let result = server.callTool(name: "grid.screenshot", args: ["target": "full", "output": path])
+            let text = result.content.first?["text"] as? String ?? ""
+            XCTAssertTrue(result.isError, path)
+            XCTAssertTrue(text.contains(expected), "\(path): \(text)")
+        }
+    }
+
+    func testScreenshotOutputDestinationPicksFormatFromExtension() throws {
+        let dir = NSTemporaryDirectory()
+        XCTAssertEqual(try MCPServer.outputDestination(dir + "a.PNG").get().type, "public.png")
+        XCTAssertEqual(try MCPServer.outputDestination(dir + "a.jpeg").get().type, "public.jpeg")
+        XCTAssertEqual(try MCPServer.outputDestination(dir + "a.jpg").get().type, "public.jpeg")
+    }
+
+    func testScreenshotOutputIsAdvertised() {
+        XCTAssertTrue(mcpToolsByName["grid.screenshot"]!.props.contains { $0.name == "output" })
+    }
+
+    func testDownscaledEncodesRequestedFormat() throws {
+        // 1x1 PNG
+        let png = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")!
+        let jpeg = try XCTUnwrap(MCPServer.downscaled(png, maxEdge: 100_000, type: "public.jpeg"))
+        XCTAssertEqual(Array(jpeg.prefix(2)), [0xFF, 0xD8])
+        let again = try XCTUnwrap(MCPServer.downscaled(png, maxEdge: 100_000, type: "public.png"))
+        XCTAssertEqual(Array(again.prefix(4)), [0x89, 0x50, 0x4E, 0x47])
+    }
+
     func testSnapshotOutlineIsSentAsPlainText() {
         let server = makeServer([], result: ["windowId": 7, "count": 2, "outline": "[7:1] AXWindow\n  [7:2] AXButton \"OK\" press"])
         let result = server.callTool(name: "ui.snapshot", args: ["windowId": "7"])
