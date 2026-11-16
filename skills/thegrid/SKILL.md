@@ -28,7 +28,7 @@ Do not retry tool calls in a loop while the server is down.
 ## Snapshot, screenshot, or query
 
 - `ui.snapshot(windowId)` FIRST when you need to read a window or find a control. It returns the accessibility tree as text: exact labels and values, exact frames, no vision, no pixel math. It sees only that one window.
-- `grid.screenshot` when you need to SEE (visual verification, layout, canvas or image content, apps whose tree is thin). Returns an inline image plus a JSON geometry block. Target a window, cell, or region — a full-display capture shows everything the user has open, so take one only for layout checks or when asked.
+- `grid.screenshot` when you need to SEE (visual verification, layout, canvas or image content, apps whose tree is thin). Returns an inline image plus a JSON geometry block; pass `output="/abs/file.png"` to save it to disk instead and get no image (to hand the file to another model). Target a window, cell, or region — a full-display capture shows everything the user has open, so take one only for layout checks or when asked.
 - `grid.state.show` / `dump` / `grid.layout.current` when you need DATA (window IDs, frames, cell assignments).
 - A window/cell capture shows the window even when another window covers it. `coveredBy` in the geometry block names what is on top; a plain click there hits that app, not the one in your image.
 - A `hint` about downscaling means digits, IDs and small text in that image are not trustworthy (an agent misread a 16-digit ID this way). Read them with `ui.value` / `ui.snapshot`, or zoom with `target="region"`.
@@ -43,7 +43,7 @@ Do not retry tool calls in a loop while the server is down.
 A screenshot you look at puts the image in your own context. When the tree can't answer and the question has a typed answer (yes/no, one of a few labels, a score), hand the pixels to the Gemini Decisions API through the sdd MCP server instead, if it is installed. You get back a number, never the image.
 
 ```
-screencapture -x -o -l <windowId> /abs/scratch/shot.png      # that window by CGWindowID: no shadow, no sound
+grid.screenshot(target="window", id=<windowId>, waitStable=true, output="/abs/scratch/shot.png")   # file only, no image in your context
 dispatch(adapter="gemini", cwd="/abs/scratch", outputPath="/abs/scratch/answers.json", prompt=
   {"maxCostUsd": 0.05,
    "questions": {"gone":  {"type": "noul", "instructions": "Is the Save dialog gone?"},
@@ -58,7 +58,8 @@ wait(jobIds=[…])   → summary ends answers={"shot":{"gone":0.97,"state":{"cho
 - **Batch:** ask every question about a shot in one call. Measured on one window: 5.7 s and $0.00005, so use it at checkpoints, not after every keystroke.
 - **Question types:** `noul` returns P(yes); `choice` takes a list of labels in `criteria`; `score` takes a string rubric in `criteria`.
 - **Probabilities are not calibrated.** Act on a clear answer (above 0.9 or below 0.1); take a screenshot yourself when it lands in between.
-- **Other captures:** `screencapture -x -R x,y,w,h` for a region in screen points. The calling terminal needs Screen Recording permission; if the file is missing or blank, fall back to `grid.screenshot`.
+- **Why `output`:** the capture runs inside grid, so the calling terminal needs no Screen Recording permission, and settleMs / waitTitle / waitStable still apply. Other targets work too (`region`, `cell`, `full`). It writes full resolution by default (`.png` lossless, `.jpg` for smaller files); `quality="low"` downscales to 1568 px. The result is geometry plus `path` and `bytes`, no image.
+- **Fallback:** `screencapture -x -o -l <windowId> file.png` (or `-R x,y,w,h`) works without grid but needs Screen Recording permission on the terminal and has no waits.
 
 ## Coordinates: screenshot pixels → screen points
 
@@ -211,7 +212,7 @@ Rules that keep input reliable:
 
 **State & config:** `grid.state.show` [read-only], `grid.state.reset` (destructive), `grid.config.show` [read-only]
 
-**Screenshot:** `grid.screenshot([target], [id], [x], [y], [width], [height], [cursor], [display], [quality])` — target full/window/cell/region; see Coordinates above
+**Screenshot:** `grid.screenshot([target], [id], [x], [y], [width], [height], [cursor], [display], [quality], [output])` — target full/window/cell/region; see Coordinates above
 
 **Utility:** `grid.terminal` — toggle the terminal overlay
 
